@@ -1,50 +1,11 @@
-# Prerequisites
-*.d
-
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Linker files
-*.ilk
-
-# Debugger Files
-*.pdb
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-*.so.*
-
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
-*.exe
-*.out
-*.app
-
-# Build directories
+# --- Build / install trees ---
 build/
 Build/
 build-*/
-
-# CMake generated files
+install/
+log/
+out/
+Testing/
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
@@ -52,18 +13,51 @@ Makefile
 install_manifest.txt
 compile_commands.json
 
-# Temporary files
+# --- Python (colcon venv, see README.md step 3) ---
+.venv/
+__pycache__/
+*.pyc
+
+# --- Sample run output (Ogre logs, debug PNG readbacks) ---
+qar_sample_out/
+
+# --- Binaries and intermediates ---
+*.d
+*.slo
+*.lo
+*.o
+*.obj
+*.gch
+*.pch
+*.ilk
+*.so
+*.so.*
+*.dylib
+*.mod
+*.smod
+*.lai
+*.la
+*.a
+*.lib
+*.dll
+*.exe
+*.out
+*.app
+*.pdb
+*.exp
+*.dwo
+
+# --- Temporary files ---
 *.tmp
 *.log
 *.bak
 *.swp
 
-# vcpkg
+# --- vcpkg ---
 vcpkg_installed/
-
-# debug information files
-*.dwo
-
-# test output & cache
-Testing/
 .cache/
+
+# --- IDE / editor ---
+.vscode/
+.vs/
+CMakeUserPresets.json

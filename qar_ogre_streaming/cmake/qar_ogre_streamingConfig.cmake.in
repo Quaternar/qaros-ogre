@@ -1,0 +1,13 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# Ogre comes from the ROS 2 distro's rviz_ogre_vendor package and is a PUBLIC
+# dependency of qar_ogre_streaming (public headers forward-declare Ogre types),
+# so consumers must be able to resolve it too. Source a ROS 2 environment, or put
+# the distro root on CMAKE_PREFIX_PATH, before find_package(qar_ogre_streaming).
+find_dependency(rviz_ogre_vendor)
+
+include("${CMAKE_CURRENT_LIST_DIR}/qar_ogre_streamingTargets.cmake")
+
+check_required_components(qar_ogre_streaming)

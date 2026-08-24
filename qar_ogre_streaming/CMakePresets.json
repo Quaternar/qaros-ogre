@@ -1,0 +1,64 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "vs2019-x64",
+      "displayName": "VS 2019 x64 (multi-config, primary)",
+      "description": "Visual Studio 16 2019 generator, x64, MSVC v142 (matches the ROS 2 Humble Windows distro). Reliable from any shell; build RelWithDebInfo. Ogre is found via QAR_ROS2_INSTALL_ROOT / ROS2_INSTALL_ROOT / CMAKE_PREFIX_PATH.",
+      "generator": "Visual Studio 16 2019",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/vs2019-x64",
+      "cacheVariables": {
+        "QAR_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "ninja-msvc-x64",
+      "displayName": "Ninja + MSVC x64 RelWithDebInfo (fast; needs a VS dev shell)",
+      "description": "Single-config Ninja build. Must be configured from a shell with the MSVC x64 environment loaded (vcvars64 / Developer PowerShell), otherwise the compiler is not found. Prefer vs2019-x64 for reliability.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/ninja-msvc-x64",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "QAR_BUILD_TESTS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "vs2019-x64",
+      "displayName": "Build VS 2019 x64 RelWithDebInfo",
+      "configurePreset": "vs2019-x64",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "ninja-msvc-x64",
+      "displayName": "Build Ninja MSVC x64",
+      "configurePreset": "ninja-msvc-x64"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "vs2019-x64",
+      "displayName": "Test VS 2019 x64 RelWithDebInfo",
+      "configurePreset": "vs2019-x64",
+      "configuration": "RelWithDebInfo",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "ninja-msvc-x64",
+      "displayName": "Test Ninja MSVC x64",
+      "configurePreset": "ninja-msvc-x64",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

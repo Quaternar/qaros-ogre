@@ -1,0 +1,25 @@
+# Qar RViz2 OpenGL zero-copy texture-handoff spike (M7, Gate B)
+timestamp=2026-07-17T12:53:40
+ogre_render_system=OpenGL Rendering Subsystem
+on_render_thread=true
+width=1280
+height=720
+texture_id=4
+glIsTexture=1
+queried_dims=1280x720
+dims_match=1
+ogre_bytes=3686400
+raw_gl_bytes=3686400
+total_pixels=921600
+matching_pixels_direct=921600
+matching_pixels_flipped=897640
+match_fraction=1
+flipped=0
+roundtrip_match=1
+fence_created=1
+fence_wait=GL_CONDITION_SATISFIED
+fence_signaled=1
+opengl_frame_filled=1
+spike_log=ran=1 rs="OpenGL Rendering Subsystem" texture_id=4 glIsTexture=1 dims=1280x720 expected=1280x720 dims_match=1 roundtrip_match=1 match_fraction=1.0000 flipped=0 fence_created=1 fence=GL_CONDITION_SATISFIED fence_signaled=1 opengl_frame=1
+message=zero-copy handoff PROVEN (raw-GL readback of the extracted id matches Ogre)
+overall_pass=true

@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>qar_qar_adapter</name>
+  <version>0.1.0</version>
+  <description>
+    QarOS streaming C API adapter for qar_ogre_streaming. Implements the library's
+    render-sender seam against the real QarOS runtime: session lifecycle, peer
+    admission, app volumes, WGS84 geo-anchoring and per-frame OpenGL submission.
+    The QarOS runtime is loaded dynamically at run time, so this package builds
+    against the vendored header alone.
+  </description>
+  <maintainer email="venda.plavec@seznam.cz">Quaternar</maintainer>
+  <license>MIT</license>
+
+  <!-- Plain CMake, NOT ament_cmake — same rationale as qar_ogre_streaming. -->
+  <buildtool_depend>cmake</buildtool_depend>
+
+  <depend>qar_ogre_streaming</depend>
+
+  <export>
+    <build_type>cmake</build_type>
+  </export>
+</package>

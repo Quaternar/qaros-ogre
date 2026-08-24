@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>qar_ogre_streaming</name>
+  <version>0.1.0</version>
+  <description>
+    Reusable Ogre to QarOS stereo streaming library. Renders an existing Ogre
+    scene into per-eye offscreen targets and hands the resulting OpenGL textures
+    to a QarOS render sender. Deliberately free of any rviz, Qt, ament or rclcpp
+    dependency so it can be consumed from any Ogre application, not only RViz2.
+  </description>
+  <maintainer email="venda.plavec@seznam.cz">Quaternar</maintainer>
+  <license>MIT</license>
+
+  <!-- Plain CMake, NOT ament_cmake. Keeping this package ament-free is an
+       architectural constraint of the library (enforced by the
+       check_no_rviz_includes test), so colcon builds it with the `cmake` build
+       type: it is still ordered, built and installed like any other package, and
+       its install prefix still lands on the downstream CMAKE_PREFIX_PATH. -->
+  <buildtool_depend>cmake</buildtool_depend>
+
+  <depend>rviz_ogre_vendor</depend>
+
+  <export>
+    <build_type>cmake</build_type>
+  </export>
+</package>
