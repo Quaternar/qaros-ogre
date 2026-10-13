@@ -1,4 +1,4 @@
-// Copyright 2026 Quaternar
+// Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
 // The opt-in per-frame stage timing (timing_log.hpp): the CSV sink and writer thread, the

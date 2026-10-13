@@ -1,4 +1,4 @@
-# Copyright 2026 Quaternar
+# Copyright 2026 QuaternAR
 # SPDX-License-Identifier: MIT
 #
 # qar_ogre_adapter: the QarOS integration layer for Ogre applications - qar_ar_core,

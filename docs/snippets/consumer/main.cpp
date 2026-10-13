@@ -1,4 +1,4 @@
-// Copyright 2026 Quaternar
+// Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
 // Consumer program of the installed qar_ogre_adapter package. It prints the version of the package

@@ -1,4 +1,4 @@
-// Copyright 2026 Quaternar
+// Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 
 #ifndef QAR_QAR_ADAPTER__GEO_ANCHOR_HPP_

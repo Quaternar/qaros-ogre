@@ -1,4 +1,4 @@
-// Copyright 2026 Quaternar
+// Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
 // The `user_state` slots every QarOS gesture subscription of the adapter hands to the

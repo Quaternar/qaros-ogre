@@ -1,4 +1,4 @@
-// Copyright 2026 Quaternar
+// Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
 // Projection tests (symmetric FOV, asymmetric FOV, near/far plane behavior) plus

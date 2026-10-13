@@ -1,4 +1,4 @@
-// Copyright 2026 Quaternar
+// Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
 // Streams the Ogre sample scene to a real QarOS Visualizer. The program owns an Ogre::Root with a

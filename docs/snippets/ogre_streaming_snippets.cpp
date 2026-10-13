@@ -1,4 +1,4 @@
-// Copyright 2026 Quaternar
+// Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
 // Snippets of API.md for the module qar_ogre_streaming: the configuration of a stream and of the manager, the

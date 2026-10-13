@@ -1,4 +1,4 @@
-# Copyright 2026 Quaternar
+# Copyright 2026 QuaternAR
 # SPDX-License-Identifier: MIT
 #
 # qar_ogre_streaming — reusable Ogre<->Qar stereo streaming library.

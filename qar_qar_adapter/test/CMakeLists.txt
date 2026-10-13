@@ -1,4 +1,4 @@
-# Copyright 2026 Quaternar
+# Copyright 2026 QuaternAR
 # SPDX-License-Identifier: MIT
 #
 # Unit tests for qar_qar_adapter.

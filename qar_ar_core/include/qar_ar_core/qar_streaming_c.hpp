@@ -1,4 +1,4 @@
-// Copyright 2026 Quaternar
+// Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
 // THE one include of the vendored QarOS C header (third_party/qar/include/qar_streaming.h)

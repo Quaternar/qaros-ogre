@@ -1,4 +1,4 @@
-// Copyright 2026 Quaternar
+// Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
 // Pure parsing helpers for the diagnostics env vars (QAR_ADAPTER_FRAME_TRACE,

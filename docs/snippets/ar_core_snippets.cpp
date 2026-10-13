@@ -1,4 +1,4 @@
-// Copyright 2026 Quaternar
+// Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
 // Snippets of API.md for the module qar_ar_core: the seam of the panel path, the pointing ray, the room-to-ROS

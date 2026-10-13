@@ -1,4 +1,4 @@
-// Copyright 2026 Quaternar
+// Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 
 #ifndef QAR_OGRE_STREAMING__MOCK_QAR_FRAME_INFO_SOURCE_HPP_

@@ -1,4 +1,4 @@
-// Copyright 2026 Quaternar
+// Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
 // The program's ONE definition of the QarOS C API function tables (g_qar_*_api) and of

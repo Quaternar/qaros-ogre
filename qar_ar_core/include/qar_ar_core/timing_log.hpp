@@ -1,4 +1,4 @@
-// Copyright 2026 Quaternar
+// Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 
 #ifndef QAR_AR_CORE__TIMING_LOG_HPP_

@@ -1,4 +1,4 @@
-// Copyright 2026 Quaternar
+// Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
 // PRIVATE to qar_qar_adapter (not installed): the trace and error helpers that BOTH the

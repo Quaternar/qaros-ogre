@@ -1,4 +1,4 @@
-// Copyright 2026 Quaternar
+// Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
 // The one thing the GUI-panel and URL-panel factories need from whoever owns the QarOS

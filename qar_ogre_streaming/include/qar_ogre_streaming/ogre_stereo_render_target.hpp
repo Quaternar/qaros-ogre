@@ -1,4 +1,4 @@
-// Copyright 2026 Quaternar
+// Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 
 #ifndef QAR_OGRE_STREAMING__OGRE_STEREO_RENDER_TARGET_HPP_

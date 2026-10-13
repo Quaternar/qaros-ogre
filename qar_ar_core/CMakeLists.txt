@@ -1,4 +1,4 @@
-# Copyright 2026 Quaternar
+# Copyright 2026 QuaternAR
 # SPDX-License-Identifier: MIT
 #
 # qar_ar_core — the Qt-free core every QarOS integration layer shares: the GUI-panel

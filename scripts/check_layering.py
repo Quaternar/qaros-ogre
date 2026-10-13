@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2026 Quaternar
+# Copyright 2026 QuaternAR
 # SPDX-License-Identifier: MIT
 """Layering guard: enforce the dependency table of the QarOS integration code.
 

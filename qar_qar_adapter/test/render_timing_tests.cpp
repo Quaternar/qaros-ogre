@@ -1,4 +1,4 @@
-// Copyright 2026 Quaternar
+// Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
 // RenderTimingState: the 3D stream's stage timing (render3d.csv). Header-only and QarOS-free,

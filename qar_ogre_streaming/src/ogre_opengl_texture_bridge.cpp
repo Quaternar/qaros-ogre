@@ -1,4 +1,4 @@
-// Copyright 2026 Quaternar
+// Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 
 #include "qar_ogre_streaming/ogre_opengl_texture_bridge.hpp"

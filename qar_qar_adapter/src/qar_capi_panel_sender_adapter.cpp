@@ -1,4 +1,4 @@
-// Copyright 2026 Quaternar
+// Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 
 #include "qar_qar_adapter/qar_capi_panel_sender_adapter.hpp"

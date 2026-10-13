@@ -66,7 +66,7 @@ These conventions apply to every C++ file of this repository. Keep them when you
 **File header.** Every C++ source and header starts with these two lines, and the year and owner are the same in every file:
 
 ```text
-// Copyright 2026 Quaternar
+// Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 ```
 

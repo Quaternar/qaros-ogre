@@ -1,4 +1,4 @@
-// Copyright 2026 Quaternar
+// Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
 // OgreQarRenderScheduler tests. These exercise the batch structure WITHOUT a

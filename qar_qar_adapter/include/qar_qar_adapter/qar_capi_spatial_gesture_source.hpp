@@ -1,4 +1,4 @@
-// Copyright 2026 Quaternar
+// Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
 // The app-volume (spatial, 3D scene) gesture source: QarOS app-volume gesture events behind

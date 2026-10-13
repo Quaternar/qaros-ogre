@@ -1,4 +1,4 @@
-// Copyright 2026 Quaternar
+// Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
 // The Ogre-FREE half of spatial_pick_visual.hpp: where the feedback lines go.

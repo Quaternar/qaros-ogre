@@ -263,7 +263,7 @@ The stack runs on Windows 11, 64-bit, and is built with the Microsoft C++ toolse
 
 ## License
 
-This repository is licensed under the MIT license; the text is in [LICENSE](LICENSE), and every C++ source and header carries the identifier of the license and the copyright line of Quaternar.
+This repository is licensed under the MIT license; the text is in [LICENSE](LICENSE), and every C++ source and header carries the identifier of the license and the copyright line of QuaternAR.
 
 Third-party material in this repository:
 

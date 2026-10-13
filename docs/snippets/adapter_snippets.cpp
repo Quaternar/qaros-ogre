@@ -1,4 +1,4 @@
-// Copyright 2026 Quaternar
+// Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
 // Snippets of API.md for the module qar_qar_adapter: the session owner, the configuration and use of the render
