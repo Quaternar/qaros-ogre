@@ -1,0 +1,31 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 22, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "vs2019-x64",
+      "displayName": "Visual Studio 2019, x64",
+      "description": "MSVC v142, the toolset of the ROS 2 Humble Windows distribution. Locations come from the environment variables of docs/INSTALL.md.",
+      "generator": "Visual Studio 16 2019",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/vs2019-x64",
+      "cacheVariables": {
+        "QAR_BUILD_TESTS": "ON",
+        "QAR_ROS2_INSTALL_ROOT": "$env{ROS2_INSTALL_ROOT}",
+        "QAR_SDK_ROOT": "$env{QAR_SDK_ROOT}"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "vs2019-x64", "configurePreset": "vs2019-x64", "configuration": "RelWithDebInfo", "jobs": 8 }
+  ],
+  "testPresets": [
+    {
+      "name": "vs2019-x64",
+      "configurePreset": "vs2019-x64",
+      "configuration": "RelWithDebInfo",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    }
+  ]
+}
