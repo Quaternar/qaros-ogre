@@ -108,9 +108,9 @@ UDP 7446 is free
 
 ### The QarOS library crashes while it starts
 
-**Symptom.** The process ends with an access violation inside `qar_library_init`, and the call stack is in a `MSVCP140.dll` that lies next to the program. **Cause.** QarOS needs a Microsoft C++ runtime of version 14.40 or newer, and the process was using an older copy that lies next to the host program. The authors of qar_ogre_adapter observed this in qar_rviz_plugin, where the older copy is the one that the ROS 2 distribution ships beside `rviz2.exe`.
+**Symptom.** The process ends with an access violation inside `qar_library_init`, and the call stack is in a `MSVCP140.dll` that lies next to the program. **Cause.** QarOS needs a Microsoft C++ runtime of version 14.40 or newer, and the process was using an older copy that lies next to the host program. The authors of this stack observed this in qar_rviz_plugin, where the older copy is the one that the ROS 2 distribution ships beside `rviz2.exe`.
 **What the loader of this stack does.** The adapter loads `qar-streaming-c.dll` by its full path, with the flags `LOAD_LIBRARY_SEARCH_DEFAULT_DIRS` and `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR` that the loader of the vendored header sets. Windows then searches for the dependencies of the library in the folder of the library first, then in the folder of the host program, the folders that the program added itself and the system folder, and never in the current folder or in `PATH`. The runtime files in the SDK `bin` folder therefore come before an older copy in the folder of the host program, and that is why you deploy the SDK folder whole: a runtime file that is missing from it is taken from the folder of the host program. This is the order of the search and no guarantee: Windows uses a module of the same name that the process already holds, whichever folder it came from, so a runtime that the host program has already loaded stays in use.
-**Fix.** In qar_rviz_plugin the authors of qar_ogre_adapter got past the crash by replacing the runtime files next to `rviz2.exe` with the same files of version 14.4x from the system folder. If the crash remains, report it together with the versions of the `MSVCP140.dll` files on your machine.
+**Fix.** In qar_rviz_plugin the authors of this stack got past the crash by replacing the runtime files next to `rviz2.exe` with the same files of version 14.4x from the system folder. If the crash remains, report it together with the versions of the `MSVCP140.dll` files on your machine.
 
 ### The stream stutters when the source window is covered
 
@@ -249,7 +249,7 @@ The entries are about a stream that does not reach the Visualizer or does not lo
 
 ### The depth shows one flat colour
 
-**Symptom.** The Visualizer shows the depth as one saturated colour, or as nothing close to the viewer, while the colour image is right. **Cause.** The library writes metric depth unless told otherwise, and the Visualizer reads the window-space value and inverts it with the near and far distances. **Fix.** Set `QAR_DEPTH_ENCODING=ndc` before the program starts; the variable is read once for each process. [Settings the QarOS Visualizer needs](CONFIGURATION.md#settings-the-qaros-visualizer-needs) has the other settings of this kind.
+**Symptom.** The Visualizer shows the depth as one saturated colour, or as nothing close to the viewer, while the colour image is right. **Cause.** The library writes metric depth unless told otherwise, and with an SDK drop earlier than that of 2026-09-28 the Visualizer read the window-space value and inverted it itself. **Fix.** Set `QAR_DEPTH_ENCODING=ndc` before the program starts; the variable is read once for each process. [Settings the QarOS Visualizer needs](CONFIGURATION.md#settings-the-qaros-visualizer-needs) has the other settings of this kind.
 
 ### The scene is tipped on its side
 

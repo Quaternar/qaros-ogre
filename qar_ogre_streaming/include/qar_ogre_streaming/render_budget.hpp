@@ -22,13 +22,13 @@ struct RenderBudgetConfig
   /// 3-4 peers fit comfortably and up to 8 peers stay near the budget.
   double max_batch_milliseconds = 16.0;
 
-  /// @brief Cap on peers rendered per tick; peers under floor protection exceed it. 0 = unlimited.
+  /// @brief Cap on peers rendered per tick (0 = unlimited); floor-protected peers can exceed it.
   uint32_t max_streams_per_tick = 0;
 
   /// @brief Per-peer FPS floor: a DUE peer that has not rendered within
   /// 1/floor_fps seconds is ALWAYS admitted (never shed by the time budget or the
   /// stream cap), so the budget never holds a peer below the lower of its max_fps
-  /// and this rate. 0 disables floor protection.
+  /// and this rate, to within one render tick. 0 disables floor protection.
   uint32_t floor_fps = 30;
 
   /// @brief Estimated per-peer batch cost (ms) used for time-budget admission

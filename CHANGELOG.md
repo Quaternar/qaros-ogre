@@ -40,6 +40,6 @@ The first version of the repository. It adds the features that the [README](READ
 - A cancelled gesture subscription may leave its runtime subscription until the session is destroyed.
 - The SDK does not document what the runtime intersects a gesture with.
 - The page of a URL panel sees a fixed viewport that the SDK does not let you configure.
-- The SDK does not document the encoding of the depth values. The QarOS Visualizer expects the window-space value, so set the environment variable `QAR_DEPTH_ENCODING` to `ndc` when you stream to it; [Configuration](docs/CONFIGURATION.md) explains the setting.
+- The SDK does not document the encoding of the depth values. With an SDK drop earlier than that of 2026-09-28, the QarOS Visualizer expected the window-space value, so set the environment variable `QAR_DEPTH_ENCODING` to `ndc` when you stream to it; [Configuration](docs/CONFIGURATION.md) explains the setting.
 
 [SDK compatibility](docs/SDK_COMPATIBILITY.md#supported-qaros-sdk-drops) explains how to identify the drop you have.

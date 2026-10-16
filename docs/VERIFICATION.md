@@ -230,7 +230,7 @@ True
 
 One check runs the library against a real Visualizer: the live example in its default mode, which the authors of qar_ogre_adapter have not run. You start the example and you look at the Visualizer window; nothing in this repository clicks or moves a window. The command is the one of [Stream the sample scene to the Visualizer](GETTING_STARTED.md#stream-the-sample-scene-to-the-visualizer), which also explains the two settings that the Visualizer needs, the depth encoding and the world basis.
 
-A pass is a Visualizer window that opens by itself and shows the sample scene upright and in colour for the 60 seconds of the run. Near objects hide far ones, because the depth is the window-space value that the Visualizer reads. The example prints a line when the stream opens and a line when it closes, and it exits with 0 when the time is up.
+A pass is a Visualizer window that opens by itself and shows the sample scene upright and in colour for the 60 seconds of the run. Near objects hide far ones, because the depth is the window-space value that the Visualizer read with an SDK drop earlier than that of 2026-09-28. The example prints a line when the stream opens and a line when it closes, and it exits with 0 when the time is up.
 
 ### What the live sessions showed
 
@@ -251,7 +251,7 @@ The table lists what this repository provides, the automated suites that exercis
 | Feature | Automated suites (Level 0) | Covered by the checks of levels |
 |---|---|---|
 | Stereo rendering of the scene for each peer, with colour and depth | `StereoStreamConfig`, `StereoFrameAssembly`, `PoseConversion`, `Projection`, `OpenGlBridge`, `StereoStreamLifecycle` | 0; [1](#headless-checks-level-1); [2](#desktop-visualizer-checks-level-2) (not run for this release) |
-| Depth as the window-space value that the Visualizer reads | `RenderTargetSupport` | 0; [2](#desktop-visualizer-checks-level-2) (not run for this release) |
+| Depth as the window-space value that the Visualizer read with an SDK drop earlier than that of 2026-09-28 | `RenderTargetSupport` | 0; [2](#desktop-visualizer-checks-level-2) (not run for this release) |
 | World-fixed light rig for the scene of each peer | `SceneLightingMode`, `SceneLightingConfig`, `PeerHeadPosition` | 0 |
 | Render budget and scheduler for several peers | `RenderBudget`, `Scheduler`, `ManagerRenderTick`, `ManagerBookkeeping` | 0; [1](#headless-checks-level-1) |
 | Configuration from environment variables and the logging of the QarOS library | `EnvConfig`, `LogSeverityParse`, `LibraryLoggingResolve`, `ZenohLogging` | 0 |

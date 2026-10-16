@@ -429,7 +429,7 @@ public:
     /// have onboarded a headset yet. 5 s is comfortably both.
     uint32_t baseline_settle_ms = 5000;
 
-    /// @brief Hard ceiling on concurrently streamed peers (C8 designs for 8). Extra
+    /// @brief Hard ceiling on concurrently streamed peers (default 8). Extra
     /// peers are refused with a logged warning instead of quietly overloading the
     /// render tick — every peer costs four scene renders per frame (color and depth, two eyes).
     uint32_t max_peers = 8;

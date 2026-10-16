@@ -26,8 +26,8 @@ class QarSceneLighting;
 
 /// @brief Central batched render scheduler.
 ///
-/// Renders all active streams in ONE coherent batch per render tick, on the
-/// render thread, under FPS/time budgets. It never renders from a Qar callback
+/// Renders the due streams that the budget admits in ONE coherent batch per render tick,
+/// on the render thread, under FPS/time budgets. It never renders from a Qar callback
 /// thread — callbacks only enqueue via the IRenderThreadExecutor.
 ///
 /// The render_tick() sequence is:

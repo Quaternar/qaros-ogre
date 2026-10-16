@@ -210,7 +210,7 @@ Every peer costs four scene renders per frame, a colour render and a depth rende
 |---|---|---|---|
 | `StereoStreamConfig::max_fps` | one for each stream | 72 | the target rate of the stream; 0 would mean render on every tick, but the configuration refuses 0 |
 | `RenderBudgetConfig::max_batch_milliseconds` | the manager | 16.0 | the soft budget of one batch for all peers; 0 means unlimited |
-| `RenderBudgetConfig::max_streams_per_tick` | the manager | 0 | a cap on the streams rendered in one tick, which streams under floor protection exceed; 0 means unlimited |
+| `RenderBudgetConfig::max_streams_per_tick` | the manager | 0 | a cap on the streams rendered in one tick, which streams under floor protection can exceed; 0 means unlimited |
 | `RenderBudgetConfig::floor_fps` | the manager | 30 | a due stream that has not rendered within 1/30 s is always admitted; 0 switches the protection off |
 | `RenderBudgetConfig::default_stream_cost_ms` | the manager | 2.0 | the cost assumed for a stream that has never rendered; the measured cost replaces it after the first render |
 | `QarCApiSenderFactory::Config::max_peers` | the factory | 8 | the ceiling on concurrently streamed peers |
@@ -233,7 +233,7 @@ QarOS describes a view with a pose and a field of view, and the stream turns bot
 
 ## Depth encoding
 
-The GL3+ render system of Ogre 1.12 cannot expose a metric, sampleable hardware depth texture through its public API, so the library writes depth as colour: a single-channel 32-bit float texture, rendered by a second pass of the scene through the material scheme `qar_linear_depth`, whose shaders replace the material of every object. The produced and transmitted format is therefore always `QAR_PIXEL_FORMAT_R32_FLOAT`, whatever depth format the stream configuration asks for.
+The library does not sample the hardware depth buffer of Ogre 1.12; it writes depth as colour: a single-channel 32-bit float texture, rendered by a second pass of the scene through the material scheme `qar_linear_depth`, whose shaders replace the material of every object. The produced and transmitted format is therefore always `QAR_PIXEL_FORMAT_R32_FLOAT`, whatever depth format the stream configuration asks for.
 
 The texture holds one of two encodings, chosen by `QAR_DEPTH_ENCODING`:
 
@@ -244,7 +244,7 @@ The texture holds one of two encodings, chosen by `QAR_DEPTH_ENCODING`:
 
 The scale applies to the metric encoding only, must be greater than 0, and a malformed value keeps metres. Both variables are read once for each process, when the first depth target is created.
 
-The encoding matters because the QarOS Visualizer reads the depth texture as the raw window-space value and inverts it with the near and far distances. Metric data then shows as nothing up close and as one saturated colour for the rest, and neither `depth_scale` nor `rendered_near_far` changes that, so set `ndc` for the Visualizer. The SDK does not document what any other peer does with the depth values. [Depth encoding](QAROS_INTEGRATION_NOTES.md#depth-encoding) has the details.
+The encoding matters because, with an SDK drop earlier than that of 2026-09-28, the QarOS Visualizer read the depth texture as the raw window-space value and inverted it itself. Metric data then showed as nothing up close and as one saturated colour for the rest, and neither `depth_scale` nor `rendered_near_far` changed that, so set `ndc` for the Visualizer. The SDK does not document what any other peer does with the depth values. [Depth encoding](QAROS_INTEGRATION_NOTES.md#depth-encoding) has the details.
 
 Two properties of the window-space value follow from its curve. It is reciprocal in distance, so a far plane that is much wider than the content leaves little of the range for the near surfaces. And everything beyond the far plane is clipped away. The far distance is `Config::near_far` of the factory, 500 m by default, and the adapter reports it, with the near distance and the `depth_scale` of 1.0, with every frame it shows.
 

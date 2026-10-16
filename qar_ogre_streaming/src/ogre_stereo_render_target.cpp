@@ -65,7 +65,7 @@ const char * const kDepthVertexSrc =
 ///
 /// The default writes METRIC linear eye-space distance in metres. The QarOS
 /// Visualizer, however, expects the raw window-space z-buffer value in [0,1] and
-/// inverts it with near/far, so metric data renders wrongly there, and neither
+/// inverts it itself, so metric data renders wrongly there, and neither
 /// QarRenderFrameShow.depth_scale nor rendered_near_far compensates. See
 /// docs/ARCHITECTURE.md#depth-encoding.
 ///

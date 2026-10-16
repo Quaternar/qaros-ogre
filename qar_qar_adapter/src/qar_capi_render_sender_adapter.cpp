@@ -2679,10 +2679,10 @@ QarCApiSenderFactory::create_sender(const QarPeerId & peer_id)
 
   // ---------------------------------------------------------------------------
   // ASYNC creation. Creating a sender negotiates a transfer with the
-  // receiver and can take arbitrarily long — or never finish: an OpenGL sender
-  // against the Vulkan-only mixer parks in "waiting for receiver borrow signal"
-  // forever. Because create_sender() is driven from the
-  // panel's QTimer tick, the synchronous call would freeze the whole of RViz.
+  // receiver and, with SDK drops earlier than that of 2026-09-28, could take
+  // arbitrarily long - or never finish: an OpenGL sender against the Vulkan-only
+  // mixer parked in "waiting for receiver borrow signal" forever. Because create_sender()
+  // is driven from the panel's QTimer tick, the synchronous call would freeze the whole of RViz.
   //
   // So this function never waits. First call for a peer kicks off
   // qar_render_sender_create_async and returns null; later calls poll the result.
