@@ -15,8 +15,8 @@ namespace qar_ogre_streaming
 
 /// @brief Narrow adapter over one peer's Qar render sender.
 ///
-/// qar_ogre_streaming talks to Qar ONLY through this interface, which keeps the
-/// rendering library decoupled from the QarOS C API. Two implementations exist: a
+/// qar_ogre_streaming talks to Qar ONLY through this interface and the factory below,
+/// which keeps the rendering library decoupled from the QarOS C API. Two implementations exist: a
 /// recording test double (test_support) that records calls, and the real adapter
 /// of qar_qar_adapter (QarCApiRenderSenderAdapter) wrapping QarRenderSender +
 /// qar_render_sender_frame_opengl.

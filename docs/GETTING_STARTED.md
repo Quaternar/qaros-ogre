@@ -170,7 +170,7 @@ Without `--connect-only` the example brings up Ogre with a hidden window, connec
 
 Two environment variables decide whether the Visualizer shows the scene correctly. The Visualizer reads the depth texture as the window-space depth value, so set `QAR_DEPTH_ENCODING` to `ndc`; the default is metric distance, which the Visualizer shows as one flat colour. The scene is Z-up, like an RViz scene, while QarOS is Y-up, so set `QAR_POSE_WORLD` to `zup`, which rotates the head poses of QarOS into the Z-up world. Set both before you start the example: the library reads each of them once for each process, the first time that it needs it.
 
-You start the example yourself, and you look at the Visualizer window; nothing in this repository clicks or moves a window. The maintainers have not run this example in a session with a Visualizer: the libraries ran in the live sessions of qar_rviz_plugin, and [What the live sessions showed](VERIFICATION.md#what-the-live-sessions-showed) says what those sessions showed.
+You start the example yourself, and you look at the Visualizer window; nothing in this repository clicks or moves a window. The authors of qar_ogre_adapter have not run this example in a session with a Visualizer: the libraries ran in the live sessions of qar_rviz_plugin, and [What the live sessions showed](VERIFICATION.md#what-the-live-sessions-showed) says what those sessions showed.
 
 ```powershell
 $env:PATH = "$env:ROS2_INSTALL_ROOT\opt\rviz_ogre_vendor\bin;$env:PATH"
@@ -269,7 +269,7 @@ streaming.qar_sender_factory.reset();  // the manager holds the factory now
 manager->set_streaming_active(true);
 ```
 
-**7. Run the frame loop on the render thread.** Each pass does four things. It latches the OpenGL context that is current on the thread, because the factory creates a sender only after a context is known. It takes the peers that asked for a stream and opens a stream for each; the sender of a peer is created asynchronously, so the first attempts fail with a state error and the example asks again on the next pass, which keeps the loop running. It renders one batch for all streams that are due. And it closes the streams that QarOS reported closed.
+**7. Run the frame loop on the render thread.** Each pass does four things. It latches the OpenGL context that is current on the thread, because the factory creates a sender only after a context is known. It takes the peers that asked for a stream and opens a stream for each; the sender of a peer is created asynchronously, so the first attempts fail with a state error and the example asks again on the next pass, which keeps the loop running. It renders one batch of the streams that are due. And it closes the streams that QarOS reported closed.
 
 ```cpp
 const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
@@ -327,7 +327,7 @@ scene.shutdown();  // then Ogre.
 
 ## Headless checks and what needs the real runtime
 
-What you can check without QarOS is limited to three things: the headless sample, which runs the whole Ogre side with synthetic peers; the unit tests; and the layering guard. There is no stand-in for QarOS in this repository: the unit tests cover the parts of the adapter that need no session, and everything that talks to QarOS needs the real runtime: `--connect-only` checks the session, and the streaming run is the check of the frames, which the maintainers have not run with a Visualizer. [Testing](TESTING.md#what-the-automated-tests-do-not-cover) lists what the automated tests leave out.
+What you can check without QarOS is limited to three things: the headless sample, which runs the whole Ogre side with synthetic peers; the unit tests; and the layering guard. There is no stand-in for QarOS in this repository: the unit tests cover the parts of the adapter that need no session, and everything that talks to QarOS needs the real runtime: `--connect-only` checks the session, and the streaming run is the check of the frames, which the authors of qar_ogre_adapter have not run with a Visualizer. [Testing](TESTING.md#what-the-automated-tests-do-not-cover) lists what the automated tests leave out.
 
 ## Next steps
 

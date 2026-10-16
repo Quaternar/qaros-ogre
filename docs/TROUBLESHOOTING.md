@@ -92,7 +92,7 @@ Set-Content -Path $bundle -Value $pem -Encoding ascii
 ### Creating a QarOS session fails because UDP port 7446 is held
 
 **Symptom.** Creating the session fails with a QarOS error that names neither the port nor the program that holds it.
-**Cause.** QarOS uses UDP port 7446 for its discovery (zenoh scouting) and needs it free. ROS 2 participants on the same domain take UDP ports in steps of two upward from 7410, so after about nineteen participants, for example test publishers that were never stopped, one of them holds 7446. **Fix.** Find the holder and stop that program yourself. The command prints the processes that hold the port, or says that it is free.
+**Cause.** QarOS uses UDP port 7446 for its discovery (zenoh scouting) and needs it free. ROS 2 participants on domain 0, the default domain, take UDP ports in steps of two upward from 7410, so after about nineteen participants, for example test publishers that were never stopped, one of them holds 7446. On the domain with the number N the steps start at 7410 + 250 x N, so only domain 0 reaches 7446. **Fix.** Find the holder and stop that program yourself. The command prints the processes that hold the port, or says that it is free.
 
 ```powershell
 $holders = Get-NetUDPEndpoint -LocalPort 7446 -ErrorAction SilentlyContinue
@@ -108,9 +108,9 @@ UDP 7446 is free
 
 ### The QarOS library crashes while it starts
 
-**Symptom.** The process ends with an access violation inside `qar_library_init`, and the call stack is in a `MSVCP140.dll` that lies next to the program. **Cause.** QarOS needs a Microsoft C++ runtime of version 14.40 or newer, and the process was using an older copy that lies next to the host program. The maintainers observed this in qar_rviz_plugin, where the older copy is the one that the ROS 2 distribution ships beside `rviz2.exe`.
+**Symptom.** The process ends with an access violation inside `qar_library_init`, and the call stack is in a `MSVCP140.dll` that lies next to the program. **Cause.** QarOS needs a Microsoft C++ runtime of version 14.40 or newer, and the process was using an older copy that lies next to the host program. The authors of qar_ogre_adapter observed this in qar_rviz_plugin, where the older copy is the one that the ROS 2 distribution ships beside `rviz2.exe`.
 **What the loader of this stack does.** The adapter loads `qar-streaming-c.dll` by its full path, with the flags `LOAD_LIBRARY_SEARCH_DEFAULT_DIRS` and `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR` that the loader of the vendored header sets. Windows then searches for the dependencies of the library in the folder of the library first, then in the folder of the host program, the folders that the program added itself and the system folder, and never in the current folder or in `PATH`. The runtime files in the SDK `bin` folder therefore come before an older copy in the folder of the host program, and that is why you deploy the SDK folder whole: a runtime file that is missing from it is taken from the folder of the host program. This is the order of the search and no guarantee: Windows uses a module of the same name that the process already holds, whichever folder it came from, so a runtime that the host program has already loaded stays in use.
-**Fix.** In qar_rviz_plugin the maintainers got past the crash by replacing the runtime files next to `rviz2.exe` with the same files of version 14.4x from the system folder. If the crash remains, report it together with the versions of the `MSVCP140.dll` files on your machine.
+**Fix.** In qar_rviz_plugin the authors of qar_ogre_adapter got past the crash by replacing the runtime files next to `rviz2.exe` with the same files of version 14.4x from the system folder. If the crash remains, report it together with the versions of the `MSVCP140.dll` files on your machine.
 
 ### The stream stutters when the source window is covered
 
@@ -161,7 +161,7 @@ The libraries of this repository write to standard error. Every line starts with
 | `[qar-spatial]` | the app-volume gesture source | the subscription, and for each gesture event the points, the ray and the outcome |
 | `[qar-timing]` | the timing log | that a file cannot be created and that its rows are discarded |
 
-**The bootstrap.** The constructor of the factory stops at the first call that fails. A failed call of the QarOS API is printed with its name, `failed:` and the code, and `msg=` and the message of QarOS, and the same text is `last_error()`. With `QAR_ADAPTER_TRACE` set, every call is bracketed by two lines that carry the time since the previous line, so that the last line names the call that hangs.
+**The bootstrap.** The constructor of the factory stops at the first call that fails. A failed call of the QarOS API is printed with its name, `failed:` and the code, and `msg=` and the message of QarOS, and the same text is `last_error()`. With `QAR_ADAPTER_TRACE` set, every main call of the bootstrap is bracketed by two lines that carry the time since the previous line, so that the last line names the call that hangs.
 
 A hardware fault inside `qar_library_init` or `qar_runtime_create` is caught: the adapter prints the code, the address and the module that owns the address, and the error of the factory refers to that line, so that the host survives and the module of the fault is known. After such a fault the constructor returns with the library loaded, so the destructor of the factory still calls `qar_library_destroy` and `qar_library_unload`, and neither call is under the guard.
 
@@ -235,7 +235,7 @@ Send, in addition:
 
 ## QarOS stream problems
 
-The entries are about a stream that does not reach the Visualizer or does not look right. The log text of this repository is quoted as it is in the code. Where a line comes from QarOS, it is in italics, and the cause rests on what the maintainers observed in live sessions; [Known SDK limitations](QAROS_INTEGRATION_NOTES.md#known-sdk-limitations) lists the limits of the SDK.
+The entries are about a stream that does not reach the Visualizer or does not look right. The log text of this repository is quoted as it is in the code. Where a line comes from QarOS, it is in italics, and the cause rests on what the authors of qar_ogre_adapter observed in live sessions; [Known SDK limitations](QAROS_INTEGRATION_NOTES.md#known-sdk-limitations) lists the limits of the SDK.
 
 ### The Visualizer shows a black scene
 
@@ -285,7 +285,7 @@ The entries are about a stream that does not reach the Visualizer or does not lo
 
 ### Code 507 every ten seconds
 
-**Symptom.** The log of the Visualizer or of the mixer says *connection lost for stream* and *entering reconnecting state*, and then, every ten seconds, that a reconnect attempt failed with *Code: 507 Desc: BackendExhaustedRetriesToCreateStream*. **Cause.** A receiver waits for a stream whose sender was destroyed. No call of the C API withdraws a logical video stream, so the receiver keeps asking until its peer goes away; this is an observation of the maintainers, not a statement of the SDK, and it was not repeated on every drop. **Fix.** Nothing on the producer side stops the loop. Keep the sender of a panel alive for the session and destroy senders in the order that [Teardown and destroy order](QAROS_INTEGRATION_NOTES.md#teardown-and-destroy-order) gives.
+**Symptom.** The log of the Visualizer or of the mixer says *connection lost for stream* and *entering reconnecting state*, and then, every ten seconds, that a reconnect attempt failed with *Code: 507 Desc: BackendExhaustedRetriesToCreateStream*. **Cause.** A receiver waits for a stream whose sender was destroyed. No call of the C API withdraws a logical video stream, so the receiver keeps asking until its peer goes away; this is an observation of the authors of qar_ogre_adapter, not a statement of the SDK, and it was not repeated on every drop. **Fix.** Nothing on the producer side stops the loop. Keep the sender of a panel alive for the session and destroy senders in the order that [Teardown and destroy order](QAROS_INTEGRATION_NOTES.md#teardown-and-destroy-order) gives.
 
 ### The log says that a backend was rejected
 

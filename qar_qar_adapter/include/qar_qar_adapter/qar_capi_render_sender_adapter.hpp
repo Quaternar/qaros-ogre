@@ -431,7 +431,7 @@ public:
 
     /// @brief Hard ceiling on concurrently streamed peers (C8 designs for 8). Extra
     /// peers are refused with a logged warning instead of quietly overloading the
-    /// render tick — every peer costs two full scene renders per frame.
+    /// render tick — every peer costs four scene renders per frame (color and depth, two eyes).
     uint32_t max_peers = 8;
 
     /// @brief JSON object handed to the launcher via

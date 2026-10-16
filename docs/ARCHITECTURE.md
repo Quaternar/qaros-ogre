@@ -60,7 +60,7 @@ A seam is an abstract interface that one module defines and another implements, 
 
 ## 3D stream data flow
 
-The host calls `OgreQarStreamingManager::render_tick()` on its render thread. One call renders every stream that is due, in one batch:
+The host calls `OgreQarStreamingManager::render_tick()` on its render thread. One call renders, in one batch, the streams that are due and that the render budget admits:
 
 ```mermaid
 sequenceDiagram
@@ -70,7 +70,7 @@ sequenceDiagram
   participant A as QarCApiRenderSenderAdapter
   participant Q as QarOS
   H->>S: render_tick
-  S->>S: choose the streams that are due
+  S->>S: choose the due streams that fit the budget
   S->>H: lock_render, once
   S->>T: begin the frame of every chosen stream
   T->>A: begin_frame
@@ -175,7 +175,7 @@ All Ogre and OpenGL work happens on one thread, the render thread of the host, a
 | worker thread of the host, optional | the construction of `QarCApiSenderFactory`, which blocks for seconds | the host decides; the factory is not usable before `ready()` |
 | writer of the timing log | the formatting and writing of the CSV files | started only when the timing folder is set; hooks only append numbers to an in-memory buffer |
 
-Three details are worth knowing. The factory is shared between threads under one mutex that guards the peer queues, the invited and admitted lists and the adapter list, because the callback threads and the render thread both touch them. The pointing ray crosses from the render thread to the gesture thread through a one-value slot: the last writer wins and a reader gets a copy, so a reader never blocks a frame. And the sender is created asynchronously exactly so that the render thread never waits for it: a creation can take arbitrarily long, and a call that waited would stop every other stream.
+Three details are worth knowing. The factory is shared between threads under one mutex that guards the peer queues, the invited and admitted lists and the adapter list, because the callback threads and the render thread both touch them. The pointing ray crosses from the render thread to the gesture thread through a one-value slot: the last writer wins and a reader gets a copy, so a reader never blocks a frame. And the sender is created asynchronously exactly so that the render thread never waits for it: a creation could take arbitrarily long with an SDK drop earlier than that of 2026-09-28, and a call that waited would stop every other stream.
 
 ## Ownership and teardown
 
@@ -204,18 +204,18 @@ The header documents no order of teardown, so this order is a choice of this rep
 
 ## Render scheduling and budget
 
-Every peer costs two scene renders per frame, so the scheduler decides on every tick which streams render. The decision, made by `RenderBudget`, is pure arithmetic over the time that the scheduler reads once per tick from its `IClock`, so that it is tested with a fake clock.
+Every peer costs four scene renders per frame, a colour render and a depth render for each of its two eyes, so the scheduler decides on every tick which streams render. The decision, made by `RenderBudget`, is pure arithmetic over the time that the scheduler reads once per tick from its `IClock`, so that it is tested with a fake clock.
 
 | Setting | Where | Default | Meaning |
 |---|---|---|---|
 | `StereoStreamConfig::max_fps` | one for each stream | 72 | the target rate of the stream; 0 would mean render on every tick, but the configuration refuses 0 |
 | `RenderBudgetConfig::max_batch_milliseconds` | the manager | 16.0 | the soft budget of one batch for all peers; 0 means unlimited |
-| `RenderBudgetConfig::max_streams_per_tick` | the manager | 0 | a hard cap on the streams rendered in one tick; 0 means unlimited |
-| `RenderBudgetConfig::floor_fps` | the manager | 30 | a stream that has not rendered within 1/30 s is always admitted; 0 switches the protection off |
+| `RenderBudgetConfig::max_streams_per_tick` | the manager | 0 | a cap on the streams rendered in one tick, which streams under floor protection exceed; 0 means unlimited |
+| `RenderBudgetConfig::floor_fps` | the manager | 30 | a due stream that has not rendered within 1/30 s is always admitted; 0 switches the protection off |
 | `RenderBudgetConfig::default_stream_cost_ms` | the manager | 2.0 | the cost assumed for a stream that has never rendered; the measured cost replaces it after the first render |
 | `QarCApiSenderFactory::Config::max_peers` | the factory | 8 | the ceiling on concurrently streamed peers |
 
-A stream is due when the time has reached its *next due* time. Rendering advances that time by one frame interval, but never to a time earlier than now, so the rate is right on average even when the tick rate is not a multiple of the frame interval, and a stream that stalled does not burst to catch up. The due streams are ordered most overdue first, then by the order in which they appeared, and the scheduler admits them in two passes: a stream under floor protection is admitted unconditionally, and the others are admitted while the sum of the estimated costs stays within the batch budget and the cap. A due stream that does not fit is shed for this tick, counted as a skipped frame with the reason *budget shed*, and renders first on the next tick.
+A stream is due when the time has reached its *next due* time. Rendering advances that time by one frame interval, but never to a time earlier than now, so the rate is right on average even when the tick rate is not a multiple of the frame interval, and a stream that stalled does not burst to catch up. The due streams are ordered most overdue first, then by the order in which they appeared, and the scheduler admits them in two passes: a stream under floor protection is admitted unconditionally, and the others are admitted while the sum of the estimated costs stays within the batch budget and the cap. A due stream that does not fit is shed for this tick and counted as a skipped frame with the reason *budget shed*. Its due time does not advance, so it is still due on the next tick, when the same two passes decide again and can shed it again.
 
 The scheduler keeps a rolling window of the last 120 batches and 120 submit times of each stream, from which it derives the mean batch time and the achieved frame rate in the [diagnostics](#diagnostics).
 
@@ -233,7 +233,7 @@ QarOS describes a view with a pose and a field of view, and the stream turns bot
 
 ## Depth encoding
 
-Ogre 1.12 cannot expose a sampleable hardware depth texture through its public API, so the library writes depth as colour: a single-channel 32-bit float texture, rendered by a second pass of the scene through the material scheme `qar_linear_depth`, whose shaders replace the material of every object. The produced and transmitted format is therefore always `QAR_PIXEL_FORMAT_R32_FLOAT`, whatever depth format the stream configuration asks for.
+The GL3+ render system of Ogre 1.12 cannot expose a metric, sampleable hardware depth texture through its public API, so the library writes depth as colour: a single-channel 32-bit float texture, rendered by a second pass of the scene through the material scheme `qar_linear_depth`, whose shaders replace the material of every object. The produced and transmitted format is therefore always `QAR_PIXEL_FORMAT_R32_FLOAT`, whatever depth format the stream configuration asks for.
 
 The texture holds one of two encodings, chosen by `QAR_DEPTH_ENCODING`:
 
@@ -292,7 +292,7 @@ The totals of the four reasons always add up to `frames_skipped`, and `last_skip
 
 **The stage timing.** With `QAR_VIDEO_TIMING_DIR` set to a folder, the adapter writes the stages of the 3D stream into `render3d.csv`, `render3d_2.csv` for the second stream, and so on. A row is one of four kinds: a run of not-ready answers, a ready answer, a submit, or a begin-frame call that took more than 2 ms. All times are microseconds since the Unix epoch on the system clock, the one clock that processes share. A single writer thread formats and writes the files about once a second; the hooks only append numbers to a buffer in memory, which holds at most 65,536 rows for each file, and an extra row is counted as dropped, so that no disk can stall the render thread.
 
-**The log lines.** The adapter prints its own state to the standard error stream with the prefix `[qar-adapter]`, the panel adapter with `[qar-panel-adapter]`, the URL panel adapter with `[qar-url-panel-adapter]`, the panel input with `[qar-panel-input]`, the app-volume gestures with `[qar-spatial]` and the timing log with `[qar-timing]`. With `QAR_ADAPTER_TRACE` set, the bootstrap prints a flushed line with the elapsed time before and after each SDK call, so that the last line names the call that hangs or faults; the frames are traced for the first 150 and then one in 300, unless `QAR_ADAPTER_TRACE_ALL` is set. [Reading the logs](TROUBLESHOOTING.md#reading-the-logs) says what the lines mean.
+**The log lines.** The adapter prints its own state to the standard error stream with the prefix `[qar-adapter]`, the panel adapter with `[qar-panel-adapter]`, the URL panel adapter with `[qar-url-panel-adapter]`, the panel input with `[qar-panel-input]`, the app-volume gestures with `[qar-spatial]` and the timing log with `[qar-timing]`. With `QAR_ADAPTER_TRACE` set, the bootstrap prints a flushed line with the elapsed time before and after each main SDK call, so that the last line names the call that hangs or faults; the frames are traced for the first 150 and then one in 300, unless `QAR_ADAPTER_TRACE_ALL` is set. [Reading the logs](TROUBLESHOOTING.md#reading-the-logs) says what the lines mean.
 
 ## Background: Ogre 1.12 for QarOS engineers
 
@@ -362,7 +362,7 @@ The library obeys the environment variable `QAR_LOG_SEVERITY` in preference to t
 
 ### Asynchronous sender creation
 
-Creating a sender negotiates a transfer with the receiver, and that can take arbitrarily long or never finish. A synchronous call from a thread that also drives a window would freeze the host, so `create_sender` starts `qar_render_sender_create_async`, answers "not yet" while the QarOS thread works, and picks up the result on a later tick; a creation that is still pending after 5 seconds is logged once.
+Creating a sender negotiates a transfer with the receiver, and with an SDK drop earlier than that of 2026-09-28 that could take arbitrarily long or never finish. A synchronous call from a thread that also drives a window would freeze the host, so `create_sender` starts `qar_render_sender_create_async`, answers "not yet" while the QarOS thread works, and picks up the result on a later tick; a creation that is still pending after 5 seconds is logged once.
 
 ### The pick-feedback overlay is not used by the other repositories
 

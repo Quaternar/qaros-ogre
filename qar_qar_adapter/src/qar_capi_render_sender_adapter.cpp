@@ -3166,8 +3166,8 @@ bool QarCApiSenderFactory::admit_locked(const QarPeerId & peer_id, const char * 
     return false;
   }
 
-  // Every peer costs two full scene renders per frame; refuse loudly past the ceiling
-  // rather than quietly turning the render tick into a slideshow.
+  // Every peer costs four scene renders per frame (color and depth for each of two eyes), so
+  // refuse loudly past the ceiling rather than quietly turning the render tick into a slideshow.
   if (admitted_peers_.size() >= config_.max_peers) {
     std::fprintf(stderr,
       "[qar-adapter] *** peer %s refused: already streaming to %zu peers "
