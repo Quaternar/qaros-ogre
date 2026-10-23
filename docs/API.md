@@ -47,7 +47,7 @@ Every public header of the repository, by module. The sections below describe th
 | Header | What it declares |
 |---|---|
 | `qar_streaming_c.hpp` | the one include of the vendored QarOS header |
-| `panel_types.hpp` | `Status`, `Result`, `PanelDesc`, `PanelPlacement`, `PanelPixels`, the diagnostics records of a panel host and `PanelDiagnosticsSink` |
+| `panel_types.hpp` | `Status`, `Result`, `PanelDesc`, `PanelPlacement`, `PanelPixels`, `PanelNotReadyCause`, `not_ready_split_text`, the diagnostics records of a panel host and `PanelDiagnosticsSink` |
 | `qar_panel_sender.hpp` | the seam of a panel that streams pixels: `IQarPanelSenderAdapter`, `IQarPanelSenderFactory`, `PanelCloseReport` |
 | `qar_url_panel.hpp` | the seam of a panel whose content is a URL: `IQarUrlPanelAdapter`, `IQarUrlPanelFactory`, `UrlPanelDesc` |
 | `panel_input_source.hpp` | the pointer seam: `PanelPointerSample`, `IQarPanelInputSource`, `QueuedPanelInputSource`, the mapping from the QarOS enumerations |
@@ -64,7 +64,7 @@ Every public header of the repository, by module. The sections below describe th
 | `ogre_qar_streaming_manager.hpp` | `OgreQarStreamingManager`, `OgreQarStreamingConfig` |
 | `ogre_qar_render_scheduler.hpp` | `OgreQarRenderScheduler`: the batched render tick |
 | `render_budget.hpp` | `RenderBudgetConfig`, `RenderBudget`: pacing and shedding |
-| `ogre_qar_stereo_stream.hpp` | `OgreQarStereoStream`: one peer's stream and its batch phases; `compute_eye_render_params`, `assemble_separated_stereo_frame` |
+| `ogre_qar_stereo_stream.hpp` | `OgreQarStereoStream`: one peer's stream, its batch phases and the eye poses of its last frame; `compute_eye_render_params`, `assemble_separated_stereo_frame` |
 | `ogre_stereo_render_target.hpp` | `OgreStereoRenderTarget`: the colour and depth textures of one eye |
 | `ogre_opengl_texture_bridge.hpp` | `OgreOpenGlTextureBridge` (native texture id, frame marshalling) and `GlFenceHook` |
 | `gl_interop.hpp` | the OpenGL entry points of the texture hand-off: fences and read-back |
@@ -92,6 +92,9 @@ Four more headers belong to the header-only target `qar_ogre_adapter::qar_ogre_s
 | `qar_capi_panel_sender_adapter.hpp` | `panels` | `QarCApiPanelSenderAdapter`, `QarCApiPanelSenderFactory` |
 | `qar_capi_panel_input_source.hpp` | `panels` | `QarCApiPanelInputSource`, `PanelInputStats` |
 | `qar_capi_url_panel_adapter.hpp` | `url` | `QarCApiUrlPanelAdapter`, `QarCApiUrlPanelFactory` |
+| `frame_stall_probe.hpp` | `render` | `FrameStallDetector`, `StallReport`, `mean_rgba8`, `format_stall_line`, and the words of the lines that a sender prints when it starts |
+| `panel_state_log.hpp` | `panels`, `url` | the words of the lines about the state of a panel: `PanelRuntimeRecord`, `RuntimeRecordLog`, `runtime_record_line`, `reconnecting_line`, `url_panel_state_line` |
+| `log_time.hpp` | `render`, `panels`, `url` | `wall_clock_hms_ms`, `hms_ms_of`, `thread_number` and `LogOnce` |
 | `qar_capi_spatial_gesture_source.hpp` | `gestures` | `QarCApiSpatialGestureSource`, `SpatialGestureStats` |
 
 The vendored `third_party/qar/include/qar_streaming.h` is the QarOS C header; [The vendored header](SDK_COMPATIBILITY.md#the-vendored-header) says how it is used.
@@ -135,11 +138,15 @@ if (sender->try_begin_frame(ready) && ready) {
 sender->close();                                        // the one teardown, in a fixed order
 ```
 
+An adapter can also hide and show its panel without closing it. `set_state(state)` changes the state of the QarOS panel with `qar_gui_panels_set_state` to `QAR_GUI_PANEL_STATE_VISIBLE`, `QAR_GUI_PANEL_STATE_MINIMIZED` or `QAR_GUI_PANEL_STATE_HIDDEN`, and the panel, its video sender and its subscriptions stay. It returns false, with the reason in `last_error()`, when the state did not change, and `supports_state()` tells whether the adapter can change a state at all. Both answer false by default, so that an implementation without panel states keeps compiling and its caller falls back to a close. Each change that succeeds prints a line, which [Reading the logs](TROUBLESHOOTING.md#the-logs-of-this-repository) describes.
+
+When `try_begin_frame` reports `out_ready == false`, `not_ready_cause()` says why, until the next call. The answer is a `PanelNotReadyCause`: `NoDestination` when the runtime answered success and no frame cycle, `NoActiveTransfers` when it answered status 604 and no receiver is attached to the stream, and `Reconnecting` when it answered status 603 and a receiver that lost the stream connects again; the default is `NoDestination`. The first time a sender that has shown frames hears 603, one line says so, with the number of frames that it has shown.
+
 `close()` is the one teardown, in a fixed order: it cancels the input subscriptions, closes the QarOS panel unless the operator already closed it in AR, and destroys the video sender. The returned `PanelCloseReport` says what each step did, and a second call returns an empty report and touches nothing.
 
-The URL seam has the same shape without frames: `IQarUrlPanelFactory::create_url_panel` takes a `UrlPanelDesc` and returns an `IQarUrlPanelAdapter` with `navigate`, `set_placement`, `set_state` and `close`. QarOS renders the page in its own browser, so nothing is streamed, and the pose goes to QarOS unchanged, as a panel-space pose.
+The URL seam has the same shape without frames: `IQarUrlPanelFactory::create_url_panel` takes a `UrlPanelDesc` and returns an `IQarUrlPanelAdapter` with `navigate`, `set_placement`, `set_state` and `close`. QarOS renders the page in its own browser, so nothing is streamed, and the pose goes to QarOS unchanged, as a panel-space pose. `UrlPanelDesc::visible_to_peers` lists the peers that see the panel, and an empty list means every peer; the adapter passes the list to QarOS only when it is not empty. The adapter prints a line for each change of the state of the panel.
 
-`panel_types.hpp` also defines the records that a panel host reports its state in, `PanelStreamDiagnostics` for one panel and `PanelDiagnosticsSnapshot` for all of them, and the sink `PanelDiagnosticsSink`, whose `on_message` must not block.
+`panel_types.hpp` also defines the records that a panel host reports its state in, `PanelStreamDiagnostics` for one panel and `PanelDiagnosticsSnapshot` for all of them, and the sink `PanelDiagnosticsSink`, whose `on_message` must not block. A record says whether the panel is hidden in AR (`ar_hidden`, with the counters `visibility_changes` and `visibility_failures` and the reason of the last failure), whether it is parked (`parked`), how the streak of not-ready ticks divides by cause (`not_ready_streak_no_destination`, `not_ready_streak_no_transfers` and `not_ready_streak_reconnecting`, which `not_ready_split_text` writes as three numbers separated by slashes), and the brightness of the frame most recently measured (`luminance_all`, `luminance_top`, `luminance_rest` and `alpha_mean`, each from 0 to 255 and negative before the first measure). The snapshot counts the hidden panels (`hidden_panels`), the parked panels (`parked_panels`) and the parks and the revivals of the session.
 
 ### Pointer samples
 
@@ -306,6 +313,8 @@ if (!valid.ok()) {
 }
 ```
 
+`OgreQarStereoStream::last_eye_poses(left, right)` gives the eye poses of the last frame that the stream accepted, as the sender reported them, which is the app content space for a sender that is bound to an app volume, in the convention of QarOS and not converted to Ogre space. Unlike the head position of the frame that is being rendered it stays readable after the frame is done, a frame that the sender declined does not replace it, and it returns false before the first accepted frame.
+
 `create_stream` returns `AlreadyExists` for a peer that has a stream, `InvalidArgument` for an invalid configuration and `InvalidState` when the sender factory returns null; `destroy_stream` returns `NotFound` for an unknown peer. A new stream is not active: `set_active(true)` on the stream, and `set_streaming_active(true)` on the manager, come before `render_tick` renders anything. `render_tick` runs on the render thread and returns `RenderThreadRequired` anywhere else, without touching Ogre. `diagnostics_snapshot` returns a copy of all counters, and `SkipReason` says why a tick produced no frame: `SenderNotReady`, `SenderError`, `TargetInitFailed` or `BudgetShed`. In the code, `manager` is the manager and `peer` is the id of a peer that QarOS asked a stream for.
 
 ```cpp
@@ -418,7 +427,7 @@ config.app_volume_name = "Fleet map";
 config.app_volume_width_m = 20.0f;                               // the box of the scene, in metres
 config.app_volume_length_m = 20.0f;
 config.app_volume_height_m = 10.0f;
-config.app_volume_center_y_m = 5.0f;                             // the centre of the box above the floor
+config.app_volume_center_y_m = 5.0f;                             // the centre of the box above room y = 0
 config.log_severity = QAR_LOG_SEVERITY_WARN;
 config.enable_console_logging = false;
 ```
@@ -454,7 +463,7 @@ const std::string anchor_error = factory->set_geo_anchor_wgs84(47.3769, 8.5417, 
 std::printf("invite: %s, geo anchor: %s\n", refused.c_str(), anchor_error.c_str());   // empty: it worked
 ```
 
-A peer gets a stream only if the `PeerAdmission` policy of the `Config` admits it: `kInvitedOnly` (the default), `kAny`, `kInvitedOrNamed` or `kInvitedOrNew`; the own peer is never admitted, and `max_peers` peers at most. A stream needs the QarOS textures to be written: `make_gl_copy_image_hook()` returns the blit that copies the rendered textures into them, and null on a platform without WGL, and without a hook the adapter skips the copy and QarOS shows a black scene. `GlSubmitMode` is `kRenderIntoQarTextures`, the default and the only mode that works against the SDK, or `kSupplyOwnTextureIds`.
+A peer gets a stream only if the `PeerAdmission` policy of the `Config` admits it: `kInvitedOnly` (the default), `kAny`, `kInvitedOrNamed` or `kInvitedOrNew`; the own peer is never admitted, and `max_peers` peers at most. A stream needs the QarOS textures to be written: `make_gl_copy_image_hook()` returns the blit that copies the rendered textures into them, and null on a platform without WGL, and without a hook the adapter skips the copy and QarOS shows a black scene. `GlSubmitMode` is `kRenderIntoQarTextures`, the default and the only mode that works against the SDK, or `kSupplyOwnTextureIds`. The hook can also read the mean colour of the left colour texture of a frame back from the GPU, `mean_left_colour(frame, rgb)`, each channel from 0 to 255; it reads the whole texture, so it is for a line about a single frame and never for every frame, and the default cannot read textures back and reports false. The adapter uses it once, for the first frame that follows a stall of two seconds or more, and prints the colour in the line about that frame. A sender binds its own OpenGL context on the device context that it was created on, and a sender with a missing handle binds nothing: nothing stands in for it, neither the handles of the factory nor the context of Ogre, which is current on the render thread and must never be bound on a second one.
 
 `geodetic_to_ecef_enu` converts a latitude, a longitude and a height above the WGS84 ellipsoid into an ECEF origin and the East, North and Up axes, and returns false for a fix that is not a number or out of range. `geo_fix_moved` tells whether two fixes are far enough apart to anchor again, and returns true when a fix is unusable.
 
@@ -462,7 +471,7 @@ A peer gets a stream only if the `PeerAdmission` policy of the `Config` admits i
 
 All three need only `qar_ar_core` and `capi`: no Ogre and no Qt. The two panel factories take an `IQarSessionOwner`, which must outlive them. A panel factory returns null from `create_panel_sender` or `create_url_panel` when the owner is not ready, and `last_error()` says so.
 
-**`panels`.** `QarCApiPanelSenderFactory` creates a video sender of the session, takes its stream id, and adds a QarOS panel whose content is that stream. When it was given a `QarCApiPanelInputSource`, every panel that it creates subscribes to its gestures at once, and `close()` cancels the subscription first. A panel without input is better than no panel: a failed subscription is logged and the panel still streams. The source drains pointer samples, and the keys of the panels that the operator closed in AR, on the thread of the host. It has one reader for each panel (`qar_gui_panels_subscribe_all_gesture_events`), because separate readers have no order between them. An open gesture that stays silent for `set_lifecycle_timeout` seconds, 0.75 by default, is cancelled with a synthetic sample. In the code, `owner` is an `IQarSessionOwner`.
+**`panels`.** `QarCApiPanelSenderFactory` creates a video sender of the session, takes its stream id, and adds a QarOS panel whose content is that stream. When it was given a `QarCApiPanelInputSource`, every panel that it creates subscribes to its gestures at once, and `close()` cancels the subscription first. A panel without input is better than no panel: a failed subscription is logged and the panel still streams. The source drains pointer samples, and the keys of the panels that the operator closed in AR, on the thread of the host. It has one reader for each panel (`qar_gui_panels_subscribe_all_gesture_events`), because separate readers have no order between them. An open gesture that stays silent for `set_lifecycle_timeout` seconds, 0.75 by default, is cancelled with a synthetic sample. The source also follows the record that the runtime keeps of each panel: from the creation of the panel, each change of its state, of the stream that is its content or of its size is read in the callback, queued, and printed by the next `drain`, with `match` or `MISMATCH` against the stream that the sender was built with. In the code, `owner` is an `IQarSessionOwner`.
 
 ```cpp
 // One input source serves all panels; the factory hands it to every panel that it creates.

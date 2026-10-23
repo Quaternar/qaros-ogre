@@ -154,9 +154,9 @@ The libraries of this repository write to standard error. Every line starts with
 
 | Prefix | Written by | What the lines say |
 |---|---|---|
-| `[qar-adapter]` | the session factory and the render sender | the bootstrap and its failures, the setting of the library log, the peers that are admitted or refused, the creation of senders, the OpenGL contexts, the copy into the QarOS textures, and the first hand data |
-| `[qar-panel-adapter]` | the panel sender | the creation of a panel, its subscription to AR input and its retirement, and failures that start with `***` |
-| `[qar-url-panel-adapter]` | the URL panel adapter | a failed call |
+| `[qar-adapter]` | the session factory and the render sender | the bootstrap and its failures, the setting of the library log, the peers that are admitted or refused, the creation of senders and the first frame and the first bind of each, the OpenGL contexts, the copy into the QarOS textures, the first frame after a stall with its mean colour, and the first hand data |
+| `[qar-panel-adapter]` | the panel sender | the creation of a panel, its subscription to AR input and its retirement, each change of its state, the record that the runtime keeps of it, a transfer that reconnects, its first frame, and failures that start with `***` |
+| `[qar-url-panel-adapter]` | the URL panel adapter | each change of the state of a panel, with its identifier, and a failed call |
 | `[qar-panel-input]` | the panel input source | one line for each gesture event of a panel, with its position in pixels and the resulting u and v, or the word SKIPPED with the reason |
 | `[qar-spatial]` | the app-volume gesture source | the subscription, and for each gesture event the points, the ray and the outcome |
 | `[qar-timing]` | the timing log | that a file cannot be created and that its rows are discarded |

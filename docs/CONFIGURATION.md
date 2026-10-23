@@ -112,10 +112,10 @@ These are the structs that a host fills in code. Every default below is the valu
 | `create_app_volume` | `bool` | `true` | Creates the one app volume at connect, which every render stream is keyed to. Turning it off does not give a working stream: QarOS rejects a stream without an app volume. |
 | `app_volume_name` | `std::string` | `RViz Scene` | Display name of the volume. |
 | `app_volume_pick_gestures` | `bool` | `true` | Logs the gesture configuration of the volume, read back from the runtime, at connect. The volume always keeps the gesture configuration that the runtime sets by itself. |
-| `app_volume_width_m` | `float` | `40.0` | Width of the box that holds the scene, in metres. Nothing clips the content to the box. |
-| `app_volume_length_m` | `float` | `40.0` | Length of the box, in metres. |
-| `app_volume_height_m` | `float` | `40.0` | Height of the box, in metres. |
-| `app_volume_center_y_m` | `float` | `1.0` | Height of the centre of the box above the floor, in metres. |
+| `app_volume_width_m` | `float` | `10.0` | Width of the box that holds the scene, in metres. The header of QarOS says that nothing clips the content to the box, but the desktop Visualizer draws only the part of the scene inside it, so a large scene needs a large box or a small `app_volume_scale`. |
+| `app_volume_length_m` | `float` | `10.0` | Length of the box, in metres. |
+| `app_volume_height_m` | `float` | `10.0` | Height of the box, in metres. |
+| `app_volume_center_y_m` | `float` | `1.0` | Height of the centre of the box above the origin of room space, y = 0, in metres. The header of QarOS does not say whether that is the floor or the height of the eyes. |
 | `app_volume_scale` | `float` | `1.0` | Metres in the room for each metre of the scene. |
 | `log_folder_path` | `std::string` | empty | The folder of the log files of the QarOS library. Empty selects the folder `quaternar` below `TEMP`, or below `TMP` when `TEMP` is not set. |
 | `log_severity` | `QarLogSeverity` | `QAR_LOG_SEVERITY_TRACE` | The severity of the QarOS library log. The default is trace because QuaternAR asks for full trace-level logs with every bug report; a trace log is large, so a host in normal operation sets `QAR_LOG_SEVERITY_WARN` or a quieter level, as the examples of this repository do. The factory also exports it as `QAR_LOG_SEVERITY`. |

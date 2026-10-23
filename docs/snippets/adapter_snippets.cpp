@@ -53,7 +53,7 @@ void snippet_factory_config(const std::string & sdk_bin)
   config.app_volume_width_m = 20.0f;                               // the box of the scene, in metres
   config.app_volume_length_m = 20.0f;
   config.app_volume_height_m = 10.0f;
-  config.app_volume_center_y_m = 5.0f;                             // the centre of the box above the floor
+  config.app_volume_center_y_m = 5.0f;                             // the centre of the box above room y = 0
   config.log_severity = QAR_LOG_SEVERITY_WARN;
   config.enable_console_logging = false;
   // [qar-snippet-end:factory_config]

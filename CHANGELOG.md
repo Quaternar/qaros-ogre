@@ -14,7 +14,8 @@ The first version of the repository. It adds the features that the [README](READ
 - the module `qar_ogre_streaming`: an Ogre stereo stream for every peer with per-eye colour and depth render textures, a batched scheduler with a render budget, a lighting rig and two depth encodings;
 - the module `qar_qar_adapter` in the five components `capi`, `render`, `panels`, `url` and `gestures`;
 - geo anchoring of the app volume from a WGS84 fix or an ECEF frame;
-- diagnostics: skip reasons, a per-frame trace and stage timings as CSV files;
+- diagnostics: skip reasons, a per-frame trace and stage timings as CSV files, the state of every panel and the start of every stream as lines with the time of day;
+- hiding and showing of a panel without closing it, the cause of a panel that has no destination to write into, and the list of the peers that see a URL panel;
 - the headless sample `qar_ogre_standalone_streaming_sample` and the live example `qar_ogre_live_stream_example`;
 - the QarOS C header of the verified SDK drop, vendored in `third_party/qar` with the MIT licence of the public QarOS repository and a README that names the origin of both.
 
@@ -35,7 +36,7 @@ The first version of the repository. It adds the features that the [README](READ
 
 [QarOS integration notes](docs/QAROS_INTEGRATION_NOTES.md#known-sdk-limitations) lists what the QarOS SDK does not document or does not do, with the evidence for each item. These limits affect what you can build on this repository:
 
-- The live example has not been run in a session with a Visualizer; the libraries ran in the live sessions of qar_rviz_plugin, and no live session has run the code of this release.
+- The live example has not been run in a session with a Visualizer; the libraries ran in the live checks of qar_rviz_plugin on the desktop Visualizer, with a build that differs from this release only in comments and the text of one tool tip, and no session with a headset has run this release.
 - No call of the SDK retires a logical video stream: a receiver that is attached to a destroyed sender keeps retrying until its peer goes away.
 - A cancelled gesture subscription may leave its runtime subscription until the session is destroyed.
 - The SDK does not document what the runtime intersects a gesture with.

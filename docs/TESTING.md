@@ -96,6 +96,9 @@ The unit tests are three GoogleTest executables, one for each module that has te
 | `qar_ogre_streaming_tests` | `SceneLightingMode`, `SceneLightingConfig`, `PeerHeadPosition`, `PickVisual`, `PickVisualHandoff` | the parsing and validation of the lighting rig, the position of a peer head, and the geometry of the spatial-pick visuals |
 | `qar_qar_adapter_tests` | `EnvConfig`, `LogSeverityParse`, `LibraryLoggingResolve`, `ZenohLogging` | the parse rules of the environment values and the precedence between the settings of the QarOS library log |
 | `qar_qar_adapter_tests` | `GeoAnchor`, `GeoFixMoved`, `RenderTiming` | the conversion of a geodetic fix to ECEF and the local east, north and up axes, the threshold for re-anchoring, and the stage-timing CSV of the 3D stream |
+| `qar_qar_adapter_tests` | `FrameStall`, `SenderStartLines` | a gap of two seconds between two frames is a stall and is reported once, with the mean colour of the first frame after it, and the words of the lines that a sender prints when it starts |
+| `qar_qar_adapter_tests` | `PanelStateLog`, `RuntimeRecord`, `RuntimeRecordLog`, `PanelLines`, `LogTime`, `LogOnce`, `ThreadNumber` | the line of a change of the state of a panel, the record that the runtime keeps of a panel (a stream that is ours reads match and another one MISMATCH, a change of state, stream or size is a change and nothing else is, the numbering, and the bounded queue), the stamp of a line, and a guard that lets exactly one of many threads through |
+| `qar_qar_adapter_tests` | `RenderConfigDefaults`, `GlSenderContextHandles`, `CopyHookDefaults` | the default app volume is a cube of ten metres whose centre is one metre up; a sender binds its own context on the device context that it was created on and a missing handle binds nothing; a hook without read-back reports no colour |
 
 ## Test doubles
 
@@ -109,7 +112,7 @@ The tests replace the collaborators of the library with small stand-ins that run
 | `RecordingRenderLock` | the render lock of the host: it records locking, so a test can assert that a batch takes the lock exactly once |
 | `ImmediateRenderThreadExecutor` | the render-thread executor of the host: it runs posted work at once and reports that the caller is the render thread |
 
-There is no stand-in for the QarOS SDK or for its C API. The tests that exercise the adapter cover its pure units only. The code that calls the C API has no automated test: the check `--connect-only` of the live example runs its bootstrap against the real runtime, and the rest of it was exercised only in the live sessions of qar_rviz_plugin, with builds that were made before the last changes of the code.
+There is no stand-in for the QarOS SDK or for its C API. The tests that exercise the adapter cover its pure units only. The code that calls the C API has no automated test: the check `--connect-only` of the live example runs its bootstrap against the real runtime, and the rest of it was exercised only in the live checks of qar_rviz_plugin on the desktop Visualizer, with a build that differs from this release only in comments and the text of one tool tip.
 
 ## What the automated tests do not cover
 
