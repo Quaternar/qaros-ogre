@@ -181,6 +181,19 @@ bool OgreQarStereoStream::begin_frame_phase()
   }
   pending_info_ = info;
   pending_wants_render_ = true;
+  last_left_eye_pose_ = info.left_eye.pose;
+  last_right_eye_pose_ = info.right_eye.pose;
+  has_eye_poses_ = true;
+  return true;
+}
+
+bool OgreQarStereoStream::last_eye_poses(QarPose & left, QarPose & right) const
+{
+  if (!has_eye_poses_) {
+    return false;
+  }
+  left = last_left_eye_pose_;
+  right = last_right_eye_pose_;
   return true;
 }
 

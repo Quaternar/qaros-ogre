@@ -321,6 +321,96 @@ TEST(StereoStreamLifecycle, RenderAndSubmitEarlyOuts)
   EXPECT_FALSE(s.targets_ready());
 }
 
+// --- The eye poses of the last frame the stream accepted ---------------------
+
+namespace
+{
+qos::QarFrameInfo make_wanted_frame(float x, float y, float z)
+{
+  qos::QarFrameInfo info{};
+  info.should_render = true;
+  info.left_eye.pose.orientation = QarQuaternion{0.0f, 0.2f, 0.0f, 0.98f};
+  info.left_eye.pose.position = QarVector3{x - 0.03f, y, z};
+  info.right_eye.pose.orientation = QarQuaternion{0.0f, 0.3f, 0.0f, 0.95f};
+  info.right_eye.pose.position = QarVector3{x + 0.03f, y, z};
+  return info;
+}
+}  // namespace
+
+TEST(StereoStreamEyePoses, LastEyePosesEmptyBeforeFirstFrame)
+{
+  auto sender = make_sender();
+  qos::OgreQarStereoStream s(qos::test::fake_scene_manager(), make_stream_config(21), sender);
+  s.set_active(true);
+
+  // The marker values prove that a false answer leaves both arguments alone.
+  QarPose left{};
+  QarPose right{};
+  left.position = QarVector3{7.0f, 7.0f, 7.0f};
+  right.position = QarVector3{8.0f, 8.0f, 8.0f};
+  EXPECT_FALSE(s.last_eye_poses(left, right));
+  EXPECT_FLOAT_EQ(left.position.x, 7.0f);
+  EXPECT_FLOAT_EQ(right.position.x, 8.0f);
+
+  // A frame the sender declines is not a begun frame: there is still nothing to report.
+  qos::QarFrameInfo declined = make_wanted_frame(1.0f, 2.0f, 3.0f);
+  declined.should_render = false;
+  sender->set_next_frame_info(declined);
+  EXPECT_FALSE(s.begin_frame_phase());
+  EXPECT_FALSE(s.last_eye_poses(left, right));
+
+  // Neither is a sender that fails.
+  sender->set_next_frame_info(make_wanted_frame(1.0f, 2.0f, 3.0f));
+  sender->set_begin_frame_result(false);
+  EXPECT_FALSE(s.begin_frame_phase());
+  EXPECT_FALSE(s.last_eye_poses(left, right));
+  EXPECT_FLOAT_EQ(left.position.x, 7.0f);
+  EXPECT_FLOAT_EQ(right.position.x, 8.0f);
+}
+
+TEST(StereoStreamEyePoses, LastEyePosesFollowTheBegunFrame)
+{
+  auto sender = make_sender();
+  qos::OgreQarStereoStream s(qos::test::fake_scene_manager(), make_stream_config(22), sender);
+  s.set_active(true);
+
+  const qos::QarFrameInfo first = make_wanted_frame(0.5f, 1.6f, -2.0f);
+  sender->set_next_frame_info(first);
+  ASSERT_TRUE(s.begin_frame_phase());
+
+  QarPose left{};
+  QarPose right{};
+  ASSERT_TRUE(s.last_eye_poses(left, right));
+  EXPECT_FLOAT_EQ(left.position.x, 0.47f);
+  EXPECT_FLOAT_EQ(left.position.y, 1.6f);
+  EXPECT_FLOAT_EQ(left.position.z, -2.0f);
+  EXPECT_FLOAT_EQ(left.orientation.y, 0.2f);
+  EXPECT_FLOAT_EQ(right.position.x, 0.53f);
+  EXPECT_FLOAT_EQ(right.orientation.y, 0.3f);
+  // The poses are the sender's, unconverted: the Qar convention, not Ogre world space.
+  EXPECT_FLOAT_EQ(left.position.z, first.left_eye.pose.position.z);
+
+  // A newer accepted frame replaces them.
+  sender->set_next_frame_info(make_wanted_frame(-1.0f, 1.5f, 4.0f));
+  ASSERT_TRUE(s.begin_frame_phase());
+  ASSERT_TRUE(s.last_eye_poses(left, right));
+  EXPECT_FLOAT_EQ(left.position.x, -1.03f);
+  EXPECT_FLOAT_EQ(right.position.x, -0.97f);
+  EXPECT_FLOAT_EQ(right.position.z, 4.0f);
+
+  // A frame the sender then declines leaves the last accepted poses in place, although
+  // nothing is pending any more: current_head_position() has no fresh pose to give, this does.
+  qos::QarFrameInfo declined = make_wanted_frame(9.0f, 9.0f, 9.0f);
+  declined.should_render = false;
+  sender->set_next_frame_info(declined);
+  ASSERT_FALSE(s.begin_frame_phase());
+  qos::Vec3 head{};
+  EXPECT_FALSE(s.current_head_position(head));
+  ASSERT_TRUE(s.last_eye_poses(left, right));
+  EXPECT_FLOAT_EQ(left.position.x, -1.03f);
+  EXPECT_FLOAT_EQ(right.position.x, -0.97f);
+}
+
 // --- Recording sender records per-eye metadata from the animated source ------
 
 TEST(SenderFrameSource, RecordsPerEyeMetadataMatchingSource)

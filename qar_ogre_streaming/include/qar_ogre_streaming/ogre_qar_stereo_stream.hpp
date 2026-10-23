@@ -183,6 +183,14 @@ public:
   ///         i.e. there is no fresh pose to place anything from. Pure; no Ogre.
   bool current_head_position(Vec3 & out) const;
 
+  /// @brief Eye poses of the most recent frame begin_frame_phase() accepted, as the sender
+  /// reported them (app content space for a sender bound to an app volume), in the Qar
+  /// convention and not converted to Ogre space. Unlike @ref current_head_position it stays
+  /// readable after the frame is done; a frame the sender declined does not replace it. Like
+  /// the rest of the stream it is not locked: read it where the stream is driven.
+  /// @return false (leaving both untouched) before the first accepted frame.
+  bool last_eye_poses(QarPose & left, QarPose & right) const;
+
   /// @brief Account one frame shed by the render budget (due but not rendered this
   /// tick to stay within the per-tick budget). Diagnostics-only.
   void note_budget_skip() { note_skip(SkipReason::BudgetShed, ""); }
@@ -241,6 +249,11 @@ private:
   // --- Per-tick batch state (carried across the batch phases) --------------
   QarFrameInfo pending_info_{};
   bool pending_wants_render_ = false;
+
+  // The eye poses of the last accepted frame; they outlive the batch. See last_eye_poses().
+  QarPose last_left_eye_pose_{};
+  QarPose last_right_eye_pose_{};
+  bool has_eye_poses_ = false;
 
   // GL fence (opaque GLsync) covering the last rendered frame's draw commands.
   // Owned here; replaced (previous deleted) each fence_phase; see set_pending_fence.
