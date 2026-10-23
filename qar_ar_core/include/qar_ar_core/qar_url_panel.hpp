@@ -19,6 +19,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "qar_ar_core/qar_streaming_c.hpp"
 
@@ -54,6 +55,8 @@ struct UrlPanelDesc
   std::string url;           ///< What the panel's browser loads. Copied by QarOS at add time.
   std::string display_name;  ///< Shown by QarOS as the panel's title. Not an identifier.
   UrlPanelPlacement placement;
+  /// The peers that see the panel (`QarGuiPanelInit::visible_to_peers`). Empty = every peer.
+  std::vector<QarPeerId> visible_to_peers;
 };
 
 /// @brief Narrow adapter over ONE QarOS URL panel.

@@ -114,6 +114,20 @@ struct PanelPixels
   std::uint32_t stride_bytes = 0;
 };
 
+/// @brief Why a panel sender reported no destination to write into when it was asked (a tick on
+/// which `try_begin_frame` gave `out_ready == false`).
+enum class PanelNotReadyCause
+{
+  /// The runtime answered with success and no frame cycle: nothing is reserved yet.
+  NoDestination,
+  /// The runtime answered MEDIA_STREAMING_NO_ACTIVE_TRANSFERS (604): no receiver is attached to
+  /// the stream.
+  NoActiveTransfers,
+  /// The runtime answered STREAM_IS_RECONNECTING (603): a receiver was attached, lost the stream
+  /// and is connecting again.
+  Reconnecting
+};
+
 /// @brief Rolling accounting for one panel stream.
 struct PanelStreamDiagnostics
 {
@@ -184,6 +198,40 @@ struct PanelStreamDiagnostics
   bool ar_panel_closed = false;
 
   /// @}
+
+  /// @name AR visibility
+  ///
+  /// A panel can be hidden in AR without being closed (IQarPanelSenderAdapter::set_state):
+  /// the QarOS panel, its video sender and its subscriptions stay, capture is paused and input
+  /// is dropped until the panel is shown again. See qar_qt_streaming's
+  /// QtPanelStream::request_ar_visible.
+  /// @{
+
+  /// True while the panel is hidden in AR.
+  bool ar_hidden = false;
+  /// Ticks that sat out because the panel was hidden.
+  std::uint64_t frames_skipped_hidden = 0;
+  /// Hide and show requests the QarOS side carried out.
+  std::uint64_t visibility_changes = 0;
+  /// Hide and show requests it refused, or could not carry out (no adapter support).
+  std::uint64_t visibility_failures = 0;
+  /// Why the most recent request failed; kept until the next one succeeds.
+  std::string last_visibility_error;
+
+  /// @}
+
+  /// @name Park state
+  ///
+  /// In qar_qt_streaming's PanelCloseMode::Park a Qt-side close does not close anything: the
+  /// panel is hidden in AR (see above) and its QarOS panel, video sender and subscriptions are
+  /// kept until the session ends. The source window may be gone; showing a window on the stream
+  /// again revives it.
+  /// @{
+
+  /// True from the Qt-side close that parked the stream until a window is shown on it again.
+  bool parked = false;
+
+  /// @}
   std::uint64_t frames_captured = 0;
   std::uint64_t frames_submitted = 0;
   /// Ticks where the captured pixels were byte-identical to the previous frame,
@@ -216,6 +264,12 @@ struct PanelStreamDiagnostics
   /// nothing is attached to this panel's video stream — which is a STATE, not an
   /// error (see qar_panel_sender.hpp), and this is where it is visible.
   std::uint64_t not_ready_streak = 0;
+  /// @ref not_ready_streak by cause (see PanelNotReadyCause): the three add up to it and are
+  /// reset with it. Which of them grows says whether nothing is reserved (the first), nothing is
+  /// attached (the second) or the receiver lost the stream (the third).
+  std::uint64_t not_ready_streak_no_destination = 0;
+  std::uint64_t not_ready_streak_no_transfers = 0;
+  std::uint64_t not_ready_streak_reconnecting = 0;
 
   /// @brief Identity of the logical video stream QarOS knows this panel's
   /// content by — see IQarPanelSenderAdapter::stream_id_text. Empty until a
@@ -259,6 +313,29 @@ struct PanelStreamDiagnostics
   double last_capture_ms = 0.0;
   double avg_capture_ms = 0.0;
 
+  /// @name Brightness of the frame most recently measured
+  ///
+  /// What a panel SENDS, in one number each: a panel that shows black in AR while its frames
+  /// carry content is a receiver problem, one whose frames are black is a capture problem. The
+  /// stream measures the frame it has just submitted at most once a second, from a sparse
+  /// sample of its pixels (qar_qt_streaming's frame_luminance.hpp). Luminance and alpha run from
+  /// 0 to 255; a negative value means nothing has been measured yet.
+  /// @{
+
+  /// Mean luminance over every sampled row.
+  double luminance_all = -1.0;
+  /// ... over the sampled rows in the top 15 % of the frame (a title or tab strip, say), and
+  /// over the sampled rows below them (the page): a frame whose top is bright and whose rest is
+  /// black has lost its page.
+  double luminance_top = -1.0;
+  double luminance_rest = -1.0;
+  /// Mean alpha over every sampled pixel. A frame that is transparent shows nothing in AR.
+  double alpha_mean = -1.0;
+  /// The @ref frames_submitted value of the frame these were measured on; 0 before any.
+  std::uint64_t luminance_frame = 0;
+
+  /// @}
+
   /// Pointer samples the INPUT SOURCE produced for this panel, counted the
   /// moment they are drained and before anything can discard them. This is the
   /// number that separates "the runtime is sending us nothing" from "events
@@ -278,6 +355,19 @@ struct PanelStreamDiagnostics
 
   std::string last_error;
 };
+
+/// @brief The not-ready streak of a panel by cause, as the heartbeat prints it:
+/// `<no destination>/<604>/<603>`, for example `6/0/0`.
+inline std::string
+not_ready_split_text(const PanelStreamDiagnostics & panel)
+{
+  const auto text = [](std::uint64_t n) {
+      return std::to_string(static_cast<unsigned long long>(n));
+    };
+  return text(panel.not_ready_streak_no_destination) + "/" +
+         text(panel.not_ready_streak_no_transfers) + "/" +
+         text(panel.not_ready_streak_reconnecting);
+}
 
 /// @brief Whole-manager snapshot (plain value type, copyable without a lock).
 struct PanelDiagnosticsSnapshot
@@ -311,6 +401,25 @@ struct PanelDiagnosticsSnapshot
   /// Times a panel was NOT created because the tombstone cap was already
   /// reached (see qar_qt_streaming's QtPanelStreamingConfig::max_tombstoned_panels).
   std::uint64_t tombstone_cap_refusals = 0;
+
+  /// @}
+
+  /// Panels hidden in AR (PanelStreamDiagnostics::ar_hidden): capture paused, nothing closed.
+  /// A hidden panel still counts in @ref live_panels or @ref tombstoned_panels.
+  std::uint32_t hidden_panels = 0;
+
+  /// @name Park accounting (qar_qt_streaming's PanelCloseMode::Park)
+  /// @{
+
+  /// Panels parked by a Qt-side close (PanelStreamDiagnostics::parked). A parked panel is not a
+  /// notice, so it counts in @ref live_panels, and in @ref hidden_panels once QarOS has accepted
+  /// the hide.
+  std::uint32_t parked_panels = 0;
+  /// Qt-side closes that parked a stream, over the whole session: a rate, where
+  /// @ref parked_panels is a level.
+  std::uint64_t parks = 0;
+  /// Parked streams that a window was shown on again.
+  std::uint64_t park_revivals = 0;
 
   /// @}
 

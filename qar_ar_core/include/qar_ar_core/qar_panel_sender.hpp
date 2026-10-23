@@ -89,12 +89,28 @@ public:
   /// @return false only on a real error (the reason lands in @ref last_error).
   virtual bool try_begin_frame(bool & out_ready) = 0;
 
+  /// @brief Why the most recent @ref try_begin_frame reported `out_ready == false`. Only
+  /// meaningful right after such a call. The default, for an implementation that cannot tell,
+  /// is PanelNotReadyCause::NoDestination.
+  virtual PanelNotReadyCause not_ready_cause() const { return PanelNotReadyCause::NoDestination; }
+
   /// @brief Copy @p pixels into the reserved frame and show it.
   /// Only legal directly after a `try_begin_frame` that set `out_ready`.
   virtual bool submit_frame(const PanelPixels & pixels) = 0;
 
   /// @brief Push a new pose and/or physical size to the live panel.
   virtual bool set_placement(const PanelPlacement & placement) = 0;
+
+  /// @brief Show, minimise or hide the QarOS panel (`qar_gui_panels_set_state`), keeping the
+  /// panel, its video sender and its subscriptions.
+  ///
+  /// The default refuses, so an implementation without panel state keeps compiling and the
+  /// caller falls back to closing the panel. See @ref supports_state.
+  /// @return false when the state was not changed.
+  virtual bool set_state(QarGuiPanelState state) { (void)state; return false; }
+
+  /// @brief True when @ref set_state can change the state of the panel. The default is false.
+  virtual bool supports_state() const { return false; }
 
   /// @brief Tear the panel down: retire its input subscriptions, close the QarOS
   /// panel, destroy the video sender. Idempotent.
