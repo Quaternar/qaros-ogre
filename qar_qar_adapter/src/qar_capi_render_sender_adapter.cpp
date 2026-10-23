@@ -5,6 +5,7 @@
 
 #include "qar_qar_adapter/env_config.hpp"
 #include "qar_qar_adapter/geo_anchor.hpp"
+#include "qar_qar_adapter/log_time.hpp"
 #include "qar_qar_adapter/render_timing.hpp"
 #include "qar_ar_core/timing_log.hpp"
 
@@ -1035,6 +1036,7 @@ QarCApiRenderSenderAdapter::QarCApiRenderSenderAdapter(
   // the env var on its own.
   prime_enabled_(qar_qar_adapter::parse_bool_env(std::getenv("QAR_ADAPTER_PRIME"), true))
 {
+  peer_label_ = qar_ogre_streaming::peer_id_to_hex(peer_id).substr(0, 8);
   {
     // Per-stream stage timing (QAR_VIDEO_TIMING_DIR). The first stream is render3d.csv, a
     // second (another peer, or a rebuilt stream) render3d_2.csv, and so on.
@@ -1196,6 +1198,13 @@ bool QarCApiRenderSenderAdapter::begin_frame(qar_ogre_streaming::QarFrameInfo & 
   // why this must happen here and not on the gesture thread. Only needs left_pose,
   // so it runs regardless of whether `info` is about to be destroyed or kept alive.
   publish_pointing_ray(left_pose);
+
+  // Does this frame follow a stall of the frames shown? Answered here, where both eye
+  // positions are in hand; the line itself is printed once the frame has been shown.
+  stall_detector_.frame_ready(
+    std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(),
+    StallPoint{left_pose.position.x, left_pose.position.y, left_pose.position.z},
+    StallPoint{right_pose.position.x, right_pose.position.y, right_pose.position.z});
 
   out_info.frame_index = frame_index_++;
   out_info.predicted_display_time = QarTimePoint{out_info.frame_index, 0};
@@ -1425,6 +1434,18 @@ bool QarCApiRenderSenderAdapter::submit_opengl_stereo_frame(
 
   if (frame_trace_) { frame_trace_->note_show_done(show_ok); }
 
+  if (show_ok && first_show_noted_.first()) {
+    note_first_show(gl);
+  }
+
+  if (show_ok) {
+    // After the frame is out, so a read-back cannot delay it. The detector is told afterwards:
+    // the stall is measured up to the frame that was shown, and ends with it.
+    probe_after_stall(frame);
+    stall_detector_.frame_shown(
+      std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
+  }
+
   if (show_ok && prime_enabled_) {
     // The frame is out; immediately start the wait for the next one so it runs
     // during the gap before the next tick instead of costing that tick. Skipped
@@ -1433,6 +1454,43 @@ bool QarCApiRenderSenderAdapter::submit_opengl_stereo_frame(
     prime_next_frame();
   }
   return show_ok;
+}
+
+void QarCApiRenderSenderAdapter::note_first_show(const QarVideoFrameOpenGl & gl)
+{
+  // The texture ids as the frame was shown with them: in render-into mode the runtime's own
+  // destination textures, which is what the receiving side reads.
+  SenderTextureIds ids;
+  const std::size_t count = gl.textures_count;
+  ids.colour[0] = count > 0 ? gl.textures[0].texture : 0u;
+  ids.colour[1] = count > 1 ? gl.textures[1].texture : 0u;
+  ids.depth[0] = count > 2 ? gl.textures[2].texture : 0u;
+  ids.depth[1] = count > 3 ? gl.textures[3].texture : 0u;
+  if (count > 0) {
+    ids.width = gl.textures[0].size.width;
+    ids.height = gl.textures[0].size.height;
+  }
+  std::fprintf(
+    stderr, "[qar-adapter] %s %s\n", wall_clock_hms_ms().c_str(),
+    format_first_show_line(peer_label_, thread_number(), ids).c_str());
+  std::fflush(stderr);
+}
+
+void QarCApiRenderSenderAdapter::probe_after_stall(
+  const qar_ogre_streaming::QarOpenGlStereoFrame & frame)
+{
+  StallReport report;
+  if (!stall_detector_.take(report)) {
+    return;  // the usual frame: nothing to read back, nothing to say
+  }
+  // The one read-back of the colour of the first frame after a stall; the hook owns the GL
+  // calls. A stream without a hook (or one that cannot read textures back) says so in the line.
+  float rgb[3] = {0.0f, 0.0f, 0.0f};
+  const bool have_colour = copy_hook_ && copy_hook_->mean_left_colour(frame, rgb);
+  std::fprintf(
+    stderr, "[qar-adapter] %s %s\n", wall_clock_hms_ms().c_str(),
+    format_stall_line(report, have_colour, rgb).c_str());
+  std::fflush(stderr);
 }
 
 void QarCApiRenderSenderAdapter::prime_next_frame()
@@ -1641,16 +1699,61 @@ public:
       probe_float_texture("SRC left-COLOR (control, red channel 0..1)",
         src.left_color.texture_id, src.left_color.size.width, src.left_color.size.height);
 
+      // The same read on the colour QAR holds after the blit. A scene that is lit in the
+      // control above and dark here was lost on the way into QAR's texture; one that is lit in
+      // both reached it, so a black picture is made after the copy.
+      probe_float_texture("DST left-COLOR (QAR, post-blit, red channel 0..1)",
+        dst.textures[0].texture, dst.textures[0].size.width, dst.textures[0].size.height,
+        dst.textures[0].size.array_layers);
+
       // The depth question, answered directly: what floats are actually in the
       // left-depth texture on each side of the copy?
       if (src.has_depth && dst.textures_count > 2) {
         probe_float_texture("SRC left-depth (ours, pre-blit)",
           src.left_depth.texture_id, src.left_depth.size.width, src.left_depth.size.height);
         probe_float_texture("DST left-depth (QAR, post-blit)",
-          dst.textures[2].texture, dst.textures[2].size.width, dst.textures[2].size.height);
+          dst.textures[2].texture, dst.textures[2].size.width, dst.textures[2].size.height,
+          dst.textures[2].size.array_layers);
       }
     }
     return all_ok;
+  }
+
+  /// The mean colour of our left colour texture, read back through the same glGetTexImage the
+  /// periodic probes use (one read of the whole texture as 8-bit RGBA). The binding of the
+  /// texture unit that is active is put back as it was, so Ogre's idea of what is bound stays
+  /// true.
+  bool mean_left_colour(
+    const qar_ogre_streaming::QarOpenGlStereoFrame & src, float (& rgb)[3]) override
+  {
+    rgb[0] = rgb[1] = rgb[2] = 0.0f;
+    if (!resolve() || get_tex_image_ == nullptr || bind_texture_ == nullptr ||
+      get_error_ == nullptr)
+    {
+      return false;
+    }
+    const unsigned int tex = src.left_color.texture_id;
+    const unsigned int w = src.left_color.size.width;
+    const unsigned int h = src.left_color.size.height;
+    if (tex == 0u || w == 0u || h == 0u) { return false; }
+
+    // Only a plain 2D texture: an array or multisample texture would not fit the one image
+    // buffer below, and our own render target is a plain 2D texture.
+    const unsigned int target = detect_target(tex);
+    if (target != kTexture2D) { return false; }
+    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(w) * h * 4u, 0u);
+    int previous = 0;
+    if (get_integerv_ != nullptr) {
+      get_integerv_(kTextureBinding2D, &previous);
+    }
+    for (int guard = 0; guard < 32 && get_error_() != 0u; ++guard) {}
+    bind_texture_(target, tex);
+    get_tex_image_(target, 0, kRgba, kUnsignedByte, pixels.data());
+    const unsigned int err = get_error_();
+    bind_texture_(target, static_cast<unsigned int>(previous));
+    for (int guard = 0; guard < 32 && get_error_() != 0u; ++guard) {}
+    if (err != 0u) { return false; }
+    return mean_rgba8(pixels.data(), w, h, kColourReadStep, rgb);
   }
 
 private:
@@ -1674,20 +1777,30 @@ private:
   static constexpr unsigned int kTextureSamples = 0x9106;
   static constexpr unsigned int kRed = 0x1903;    // GL_RED
   static constexpr unsigned int kFloat = 0x1406;  // GL_FLOAT
+  static constexpr unsigned int kRgba = 0x1908;           // GL_RGBA
+  static constexpr unsigned int kUnsignedByte = 0x1401;   // GL_UNSIGNED_BYTE
+  static constexpr unsigned int kTextureBinding2D = 0x8069;  // GL_TEXTURE_BINDING_2D
+  /// Every 4th pixel in x and y is averaged: the read-back is the cost, not the sum.
+  static constexpr std::uint32_t kColourReadStep = 4;
 
   /// Read a texture's actual float contents back and report min/max/mean plus a few
   /// samples: the decisive depth diagnostic ("did our depth RTT get real metric values,
   /// or did the transport lose them?"). Six probes at most, the first at the first copied
   /// frame and then every probe_every_ frames, whatever the trace setting; it stalls the pipeline.
+  /// @p layers is the layer count of an array texture: glGetTexImage returns every layer, so the
+  /// buffer holds them all and only the first is looked at.
   void probe_float_texture(
-    const char * label, unsigned int tex, unsigned int w, unsigned int h)
+    const char * label, unsigned int tex, unsigned int w, unsigned int h,
+    unsigned int layers = 1u)
   {
     if (get_tex_image_ == nullptr || bind_texture_ == nullptr || get_error_ == nullptr) {
       return;
     }
     if (tex == 0u || w == 0u || h == 0u) { return; }
     const unsigned int target = detect_target(tex);
-    std::vector<float> px(static_cast<std::size_t>(w) * static_cast<std::size_t>(h), 0.0f);
+    std::vector<float> px(
+      static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * (layers > 1u ? layers : 1u),
+      0.0f);
 
     for (int guard = 0; guard < 32 && get_error_() != 0u; ++guard) {}
     bind_texture_(target, tex);
@@ -1702,6 +1815,7 @@ private:
       std::fflush(stderr);
       return;
     }
+    px.resize(static_cast<std::size_t>(w) * static_cast<std::size_t>(h));
 
     float mn = px[0], mx = px[0];
     double sum = 0.0;
@@ -2608,16 +2722,26 @@ bool QarCApiSenderFactory::gl_make_current_cb(void * user_state)
 #ifdef _WIN32
   auto * state = static_cast<GlSenderContext *>(user_state);
   const WglApi & w = wgl();
-  if (state == nullptr || state->factory == nullptr || w.MakeCurrent == nullptr) {
+  if (state == nullptr || w.MakeCurrent == nullptr) {
     return false;
   }
-  QarCApiSenderFactory * self = state->factory;
-  // This sender's OWN context. Falling back to Ogre's would put it current on a
-  // second thread, which WGL forbids — better to fail loudly than to corrupt it.
-  HGLRC ctx = static_cast<HGLRC>(
-    state->context != nullptr ? state->context : self->gl_render_context_);
-  if (ctx == nullptr || self->gl_device_context_ == nullptr) { return false; }
-  if (w.MakeCurrent(static_cast<HDC>(self->gl_device_context_), ctx) != FALSE) {
+  // This sender's OWN context on the device context it was created on, both stored in the
+  // sender's state when it was created. The factory's latched handles are not read: the render
+  // thread rewrites them every tick and this runs on the runtime's graphics thread. Falling
+  // back to Ogre's context would put it current on a second thread, which WGL forbids, so a
+  // sender without its own pair binds nothing.
+  void * hdc = nullptr;
+  void * ctx = nullptr;
+  if (!state->own_handles(hdc, ctx)) { return false; }
+  if (w.MakeCurrent(static_cast<HDC>(hdc), static_cast<HGLRC>(ctx)) != FALSE) {
+    // Once per sender: which thread of the runtime binds which context. A short write on that
+    // thread, the same as the failure line below.
+    if (state->bound.first()) {
+      std::fprintf(
+        stderr, "[qar-adapter] %s %s\n", wall_clock_hms_ms().c_str(),
+        format_sdk_bound_line(state->peer, ctx, hdc, thread_number()).c_str());
+      std::fflush(stderr);
+    }
     return true;
   }
   // Loud, because the multi-peer failure mode looks exactly like this: a context is
@@ -2626,8 +2750,7 @@ bool QarCApiSenderFactory::gl_make_current_cb(void * user_state)
   std::fprintf(stderr,
     "[qar-adapter] *** wglMakeCurrent FAILED (err=%lu) HDC=%p HGLRC=%p — is this "
     "context current on another thread?\n",
-    static_cast<unsigned long>(GetLastError()), self->gl_device_context_,
-    static_cast<void *>(ctx));
+    static_cast<unsigned long>(GetLastError()), hdc, ctx);
   std::fflush(stderr);
   return false;
 #else
@@ -2718,6 +2841,16 @@ QarCApiSenderFactory::create_sender(const QarPeerId & peer_id)
       return nullptr;
     }
     trace_msg("create_sender: <- qar_render_sender_create_async (ready)");
+    // Which thread of the runtime delivered the sender, and how long after the request. The
+    // callback only recorded its thread; the line is printed here, on the render thread.
+    std::fprintf(
+      stderr, "[qar-adapter] %s %s\n", wall_clock_hms_ms().c_str(),
+      format_created_line(
+        qar_ogre_streaming::peer_id_to_hex(peer_id).substr(0, 8),
+        p->callback_thread.load(std::memory_order_acquire),
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - p->started).count())
+      .c_str());
+    std::fflush(stderr);
     auto adapter = std::make_shared<QarCApiRenderSenderAdapter>(
       stream, config_.near_far, config_.submit_mode, config_.copy_hook, config_.depth_scale,
       pointing_ray_slot_, peer_id, config_.log_folder_path);
@@ -2761,6 +2894,10 @@ QarCApiSenderFactory::create_sender(const QarPeerId & peer_id)
     // still sees the same textures.
     auto sender_ctx = std::make_unique<GlSenderContext>();
     sender_ctx->factory = this;
+    // The device context the new context is created on (create_shared_gl_context() reads the
+    // same member on this thread): kept with it, because the runtime's thread binds the pair.
+    sender_ctx->hdc = gl_device_context_;
+    sender_ctx->peer = qar_ogre_streaming::peer_id_to_hex(peer_id).substr(0, 8);
     sender_ctx->context = create_shared_gl_context();
     if (sender_ctx->context == nullptr) {
       std::fprintf(stderr,
@@ -2878,6 +3015,13 @@ QarCApiSenderFactory::create_sender(const QarPeerId & peer_id)
     std::fflush(stderr);
     return nullptr;
   }
+  // The request is in: say which thread made it. The runtime answers on a thread of its own, and
+  // the line printed when it does names that one (see the poll above).
+  std::fprintf(
+    stderr, "[qar-adapter] %s %s\n", wall_clock_hms_ms().c_str(),
+    format_create_async_line(
+      qar_ogre_streaming::peer_id_to_hex(peer_id).substr(0, 8), thread_number()).c_str());
+  std::fflush(stderr);
   pending_senders_.push_back(std::move(pending));
   return nullptr;  // not an error: poll again next tick
 }
@@ -2897,6 +3041,8 @@ void QarCApiSenderFactory::sender_created_trampoline(
   p.stream = stream;
   p.failed.store(qar_result_is_error(status) || stream == nullptr,
     std::memory_order_relaxed);
+  // Only the number is kept: the render tick prints it, a callback of the runtime does no I/O.
+  p.callback_thread.store(thread_number(), std::memory_order_relaxed);
   p.done.store(true, std::memory_order_release);
 }
 

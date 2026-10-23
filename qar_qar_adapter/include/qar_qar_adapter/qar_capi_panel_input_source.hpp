@@ -36,6 +36,7 @@
 #include "qar_ar_core/qar_streaming_c.hpp"
 #include "qar_ar_core/panel_input_source.hpp"
 #include "qar_ar_core/pointing_ray.hpp"
+#include "qar_qar_adapter/panel_state_log.hpp"
 #include "qar_qar_adapter/qar_capi_input_slots.hpp"
 
 namespace qar_qar_adapter
@@ -169,6 +170,9 @@ public:
   ///                          its right and bottom edges is transparent slack
   ///                          the widget never paints, and dividing by it would
   ///                          pull every click a pixel towards the top-left.
+  /// @param our_stream_id     The stream the adapter built this panel's sender with,
+  ///                          canonical UUID text; empty if it has none. The runtime's record
+  ///                          of the panel is compared with it (see @ref drain).
   /// @return false and records @ref last_error if the runtime refused. Every
   ///         panel reports gestures now, website panels included — "nothing
   ///         branches on content type on the publish path".
@@ -176,7 +180,8 @@ public:
     const std::string & panel_key,
     const QarGuiPanelId & id,
     std::uint32_t content_width,
-    std::uint32_t content_height);
+    std::uint32_t content_height,
+    const std::string & our_stream_id = std::string());
 
   /// @brief Retire @p panel_key's subscriptions. Idempotent, and by the time it
   /// returns no callback for that panel is running or ever will be again.
@@ -189,7 +194,10 @@ public:
 
   /// @brief Append everything received since the previous call, oldest first.
   ///
-  /// Also the place the lifecycle timeout fires: see @ref set_lifecycle_timeout.
+  /// Also the place the lifecycle timeout fires (see @ref set_lifecycle_timeout) and where the
+  /// lines about the runtime's own record of each panel are printed: one for every change of its
+  /// state, of the stream its content is or of its size, with the stream compared to the one the
+  /// adapter built the panel's sender with.
   void drain(std::vector<qar_ar_core::PanelPointerSample> & out) override;
 
   /// @brief Append the key of every panel the operator has CLOSED IN AR.
@@ -334,6 +342,9 @@ private:
   /// Qt-thread half of the trace: print and forget whatever @ref offer recorded.
   void flush_event_trace();
 
+  /// Qt-thread half of the record lines: print and forget whatever @ref on_panel_update queued.
+  void flush_runtime_records();
+
   void retire(PanelSubscription & subscription);
 
   QarSession * session_ = nullptr;
@@ -353,6 +364,10 @@ private:
   /// Recorded by @ref offer, drained by @ref flush_event_trace. Bounded, so a
   /// manager that stopped ticking cannot turn the trace into a leak.
   std::vector<ReceivedEventLog> pending_log_;
+
+  /// The runtime's records of the panels: queued by @ref on_panel_update, printed by
+  /// @ref flush_runtime_records. Bounded like @ref pending_log_. Guarded by `mutex_`.
+  RuntimeRecordLog record_log_;
 
   /// Open lifecycles, keyed on (peer, gesture id, kind) because a gesture id
   /// alone is ambiguous across peers. Guarded by `mutex_`. Instant kinds (tap,

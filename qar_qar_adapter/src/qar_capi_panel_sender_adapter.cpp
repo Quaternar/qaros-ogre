@@ -3,6 +3,8 @@
 
 #include "qar_qar_adapter/qar_capi_panel_sender_adapter.hpp"
 
+#include "qar_qar_adapter/panel_state_log.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -130,6 +132,23 @@ std::string
 panel_id_text(const QarGuiPanelId & id)
 {
   return qar_id_uuid(id.data);
+}
+
+/// The name of a panel state as the log prints it.
+std::string
+panel_state_text(QarGuiPanelState state)
+{
+  switch (state) {
+    case QAR_GUI_PANEL_STATE_VISIBLE:
+      return "VISIBLE";
+    case QAR_GUI_PANEL_STATE_MINIMIZED:
+      return "MINIMIZED";
+    case QAR_GUI_PANEL_STATE_HIDDEN:
+      return "HIDDEN";
+    case QAR_GUI_PANEL_STATE_CLOSED:
+      return "CLOSED";
+  }
+  return "state " + std::to_string(static_cast<int>(state));
 }
 
 /// Build the single-texture, single-view CPU layout one GUI panel needs.
@@ -267,7 +286,7 @@ QarCApiPanelSenderAdapter::bootstrap()
       desc_.content_width != 0 ? desc_.content_width : desc_.buffer_width;
     const std::uint32_t content_h =
       desc_.content_height != 0 ? desc_.content_height : desc_.buffer_height;
-    if (!input_->subscribe_panel(desc_.key, panel_id_, content_w, content_h)) {
+    if (!input_->subscribe_panel(desc_.key, panel_id_, content_w, content_h, stream_id_text_)) {
       std::fprintf(stderr,
         "[qar-panel-adapter] %s panel '%s' streams but takes no AR input: %s\n",
         local_time_hms_ms().c_str(), desc_.key.c_str(), input_->last_error().c_str());
@@ -292,6 +311,7 @@ bool
 QarCApiPanelSenderAdapter::try_begin_frame(bool & out_ready)
 {
   out_ready = false;
+  not_ready_cause_ = qar_ar_core::PanelNotReadyCause::NoDestination;
   if (!ready_ || sender_ == nullptr) {
     if (last_error_.empty()) { last_error_ = "panel sender is not ready"; }
     return false;
@@ -313,9 +333,22 @@ QarCApiPanelSenderAdapter::try_begin_frame(bool & out_ready)
     // reserve a destination on. STREAM_IS_RECONNECTING (603) is the same shape
     // — transient, retried by polling, nothing the caller can fix. Both are
     // therefore reported the documented way: success, out_ready == false.
-    if (qar_result_has_code(r, QAR_STATUS_MEDIA_STREAMING_NO_ACTIVE_TRANSFERS) ||
-      qar_result_has_code(r, QAR_STATUS_MEDIA_STREAMING_STREAM_IS_RECONNECTING))
-    {
+    const bool no_transfers =
+      qar_result_has_code(r, QAR_STATUS_MEDIA_STREAMING_NO_ACTIVE_TRANSFERS);
+    const bool reconnecting =
+      qar_result_has_code(r, QAR_STATUS_MEDIA_STREAMING_STREAM_IS_RECONNECTING);
+    if (no_transfers || reconnecting) {
+      // Both are reported as not ready, and the caller counts them apart: nothing attached to
+      // the stream yet is a different fault from a receiver that lost a stream it had.
+      not_ready_cause_ = reconnecting ? qar_ar_core::PanelNotReadyCause::Reconnecting
+                                      : qar_ar_core::PanelNotReadyCause::NoActiveTransfers;
+      if (reconnecting && frames_shown_ > 0 && reconnect_noted_.first()) {
+        std::fprintf(
+          stderr, "%s\n",
+          reconnecting_line(local_time_hms_ms(), desc_.key, stream_id_text_, frames_shown_)
+          .c_str());
+        std::fflush(stderr);
+      }
       frame_reserved_ = false;
       out_ready = false;
       return true;
@@ -393,6 +426,14 @@ QarCApiPanelSenderAdapter::submit_frame(const qar_ar_core::PanelPixels & pixels)
     last_error_ = panel_result_error("qar_video_sender_show_frame", shown);
     return false;
   }
+  ++frames_shown_;
+  if (first_show_noted_.first()) {
+    // The thread that shows frames, to be read next to the threads of the 3D stream's lines.
+    std::fprintf(
+      stderr, "%s\n",
+      first_panel_frame_line(local_time_hms_ms(), desc_.key, thread_number()).c_str());
+    std::fflush(stderr);
+  }
   last_error_.clear();
   return true;
 }
@@ -419,6 +460,31 @@ QarCApiPanelSenderAdapter::set_placement(const qar_ar_core::PanelPlacement & pla
 
   desc_.placement = placement;
   last_error_.clear();
+  return true;
+}
+
+bool
+QarCApiPanelSenderAdapter::set_state(QarGuiPanelState state)
+{
+  if (!has_panel_ || closed_ || session_ == nullptr) {
+    last_error_ = "no live panel to change";
+    return false;
+  }
+
+  const QarResult r = qar_gui_panels_set_state(session_, &panel_id_, state);
+  if (qar_result_is_error(r)) {
+    last_error_ = panel_result_error("qar_gui_panels_set_state", r);
+    return false;
+  }
+  last_error_.clear();
+
+  // The same shape as the creation line, so the change can be lined up against the host's own
+  // log and against the runtime's trace. The input source reads a panel update as an AR-side
+  // close only for the state CLOSED, so the HIDDEN or VISIBLE set here is not taken for one.
+  std::fprintf(
+    stderr, "[qar-panel-adapter] %s panel '%s' state -> %s\n", local_time_hms_ms().c_str(),
+    desc_.key.c_str(), panel_state_text(state).c_str());
+  std::fflush(stderr);
   return true;
 }
 

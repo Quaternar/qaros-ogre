@@ -109,6 +109,7 @@ LOADER = 'qar_qar_adapter/src/qar_capi_loader.cpp'
 ADAPTER_COMPONENT = {
     'qar_capi_loader.cpp': 'capi', 'qar_capi_input_slots.hpp': 'capi', 'qar_capi_input_slots.cpp': 'capi',
     'qar_capi_session_owner.hpp': 'capi',
+    'log_time.hpp': 'capi', 'panel_state_log.hpp': 'capi', 'frame_stall_probe.hpp': 'capi',
     'qar_capi_render_sender_adapter.hpp': 'render', 'qar_capi_render_sender_adapter.cpp': 'render',
     'render_timing.hpp': 'render', 'env_config.hpp': 'render', 'env_config.cpp': 'render',
     'geo_anchor.hpp': 'render', 'geo_anchor.cpp': 'render',

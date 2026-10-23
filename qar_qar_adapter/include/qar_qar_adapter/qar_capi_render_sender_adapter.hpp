@@ -36,6 +36,8 @@
 
 #include "qar_ogre_streaming/qar_render_sender_adapter.hpp"
 #include "qar_ogre_streaming/types.hpp"
+#include "qar_qar_adapter/frame_stall_probe.hpp"
+#include "qar_qar_adapter/log_time.hpp"
 #include "qar_qar_adapter/qar_capi_session_owner.hpp"
 
 namespace qar_qar_adapter
@@ -95,6 +97,19 @@ public:
   virtual bool copy_frame_into(
     const qar_ogre_streaming::QarOpenGlStereoFrame & ogre_src,
     const QarVideoFrameOpenGl & qar_dst) = 0;
+
+  /// @brief The mean colour of the left colour texture of @p ogre_src, each channel 0 to 255,
+  /// read back from the GPU. It reads the whole texture, so it is for a diagnostic line about a
+  /// single frame and never for every frame. Same thread and GL context as @ref copy_frame_into.
+  /// The default cannot read textures back and reports false.
+  /// @return true if @p rgb holds the mean colour.
+  virtual bool mean_left_colour(
+    const qar_ogre_streaming::QarOpenGlStereoFrame & ogre_src, float (& rgb)[3])
+  {
+    (void)ogre_src;
+    rgb[0] = rgb[1] = rgb[2] = 0.0f;
+    return false;
+  }
 };
 
 /// @brief The default render-into copy hook: an FBO blit (glBlitFramebuffer) from
@@ -196,6 +211,16 @@ private:
   /// the next tick's poll finds it already ready and each frame costs one tick.
   void prime_next_frame();
 
+  /// @brief After a frame has been shown: if it is the first one after a stall, read its
+  /// colour back once and print the one line about it (see frame_stall_probe.hpp). Costs
+  /// nothing on any other frame.
+  void probe_after_stall(const qar_ogre_streaming::QarOpenGlStereoFrame & frame);
+
+  /// @brief After the first frame has been shown: print the one line with the thread that
+  /// showed it and the texture ids of the frame it was shown with. @p gl is the frame as
+  /// the runtime filled it (its ids are the runtime's in render-into mode).
+  void note_first_show(const QarVideoFrameOpenGl & gl);
+
   QarRenderSender * stream_ = nullptr;
   QarNearFar near_far_{};
   float depth_scale_ = 1.0f;  ///< reported per show_frame; see Config::depth_scale
@@ -223,6 +248,12 @@ private:
   /// How many begin_frame() calls in a row have found the wait still pending. A
   /// handful is normal pacing; thousands is the producer wedged.
   std::uint64_t consecutive_pending_ = 0;
+  /// Finds the first frame after a stall of the frames shown; see probe_after_stall().
+  FrameStallDetector stall_detector_;
+  /// The first eight hex digits of the peer id, the name the log lines of this stream carry.
+  std::string peer_label_;
+  /// Lets the first frame shown print the line with its thread and texture ids, once.
+  LogOnce first_show_noted_;
 
   // --- Diagnostics live switches + per-frame trace (QAR_ADAPTER_*) -----------
   bool prime_enabled_ = true;   ///< QAR_ADAPTER_PRIME; guards the prime_next_frame() call.
@@ -482,15 +513,19 @@ public:
     /// content renders into. Nothing clips the content to it, but gestures and
     /// layout are derived from the volume.
     ///
-    /// 40 m because real sensor data is large: an Ouster OS1 frame is 1024x32 =
-    /// 32768 points spanning ~120 m, and the volume covers (extent / app_scale)
-    /// app meters: a 2 m box would cover only the nearest 20 m of a 1:10 scene.
-    float app_volume_width_m = 40.0f;
-    float app_volume_length_m = 40.0f;
-    float app_volume_height_m = 40.0f;
+    /// 10 m per axis: the box spans 5 m on each side of its centre, and the centre is the app
+    /// origin (the app pose is the identity), which is where an RViz scene has its ground; see
+    /// @ref app_volume_center_y_m. The volume covers (extent / app_scale) app meters, so a
+    /// scene that reaches further needs a larger box or a smaller app_scale. Real sensor data
+    /// is large - an Ouster OS1 frame is 1024x32 = 32768 points spanning ~120 m.
+    float app_volume_width_m = 10.0f;
+    float app_volume_length_m = 10.0f;
+    float app_volume_height_m = 10.0f;
 
-    /// @brief Height of the box CENTRE above the room floor, in meters. The volume
-    /// pose is the cuboid centre, so 0 would bury half the box in the floor.
+    /// @brief Height of the box CENTRE above the origin of room space (y = 0), in
+    /// meters; the QAR C API header does not say whether y = 0 is the floor or the
+    /// height of the eyes. The volume pose is the cuboid centre, so at 0 the lower
+    /// half of the box lies below y = 0.
     float app_volume_center_y_m = 1.0f;
 
     /// @brief Room-meters per app-meter (`QarAppVolumeInit.app_scale`). 1.0 renders
@@ -799,11 +834,33 @@ private:
   /// the same context, the second either fails to bind or steals the binding from the
   /// first — the same failure again, in multi-peer form. They still share Ogre's object
   /// namespace with each other, so every peer sees the same textures.
+  ///
+  /// Public so that a test can pin which handles a sender binds. The runtime's graphics
+  /// thread reads this struct while the render thread goes on latching the factory's own
+  /// handles every tick, so everything the binding needs is stored here, once, when the
+  /// sender is created, and nothing is read from the factory.
+public:
   struct GlSenderContext
   {
     QarCApiSenderFactory * factory = nullptr;
     void * context = nullptr;  ///< HGLRC sharing Ogre's object namespace.
+    void * hdc = nullptr;      ///< HDC that context was created on.
+    std::string peer;          ///< Short peer id, named by the line of the first bind.
+    LogOnce bound;             ///< Lets the first successful bind print its line, once.
+
+    /// The pair the runtime's thread makes current: this sender's own context and the device
+    /// context it was created on. @return false, with whatever is set returned, when either
+    /// is missing; there is no fall back to the factory's handles or to Ogre's context, which
+    /// is current on the render thread and must never be bound on a second one.
+    bool own_handles(void *& out_hdc, void *& out_context) const
+    {
+      out_hdc = hdc;
+      out_context = context;
+      return hdc != nullptr && context != nullptr;
+    }
   };
+
+private:
   /// Owned per-sender GL state; outlives the QAR streams (the producer destroys the
   /// manager, and therefore every sender, before releasing this factory).
   std::vector<std::unique_ptr<GlSenderContext>> gl_sender_contexts_;
@@ -847,6 +904,9 @@ private:
     /// Written by the QAR callback thread, read by the render tick — hence atomics.
     std::atomic<bool> done{false};
     std::atomic<bool> failed{false};
+    /// The number of the thread that ran the callback (thread_number()), published before
+    /// `done`; the render tick prints it, the callback itself prints nothing.
+    std::atomic<unsigned long long> callback_thread{0};
     QarRenderSender * stream = nullptr;   ///< valid only once `done` is true
     std::chrono::steady_clock::time_point started{};
     bool warned = false;                  ///< "still pending" logged once

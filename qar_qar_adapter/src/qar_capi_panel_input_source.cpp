@@ -131,7 +131,7 @@ QarCApiPanelInputSource::~QarCApiPanelInputSource()
 bool
 QarCApiPanelInputSource::subscribe_panel(
   const std::string & panel_key, const QarGuiPanelId & id, std::uint32_t content_width,
-  std::uint32_t content_height)
+  std::uint32_t content_height, const std::string & our_stream_id)
 {
   if (session_ == nullptr) {
     last_error_ = "no QarSession (is QAR streaming started?)";
@@ -200,11 +200,21 @@ QarCApiPanelInputSource::subscribe_panel(
     retire(subscription);
     return false;
   }
+  // The record log knows the panel before the first update can arrive, so that the first record
+  // of the runtime is not lost.
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    record_log_.begin(panel_key, our_stream_id);
+  }
   r = qar_gui_panels_subscribe_panel_updates(
     session_, &id, &QarCApiPanelInputSource::on_panel_update, subscription.state_slot,
     subscription.state_token);
   if (qar_result_is_error(r)) {
     last_error_ = input_result_error("qar_gui_panels_subscribe_panel_updates", r);
+    {
+      const std::lock_guard<std::mutex> lock(mutex_);
+      record_log_.end(panel_key);
+    }
     retire(subscription);
     return false;
   }
@@ -232,6 +242,8 @@ QarCApiPanelInputSource::unsubscribe_panel(const std::string & panel_key)
     }
     subscription = it->second;
     panels_.erase(it);
+    // Records that the runtime still publishes for the retiring subscription are ignored.
+    record_log_.end(panel_key);
   }
   // Anything still held down on that panel must be let go before the
   // subscription that would have ended it goes away: a widget left mid-press
@@ -250,6 +262,9 @@ QarCApiPanelInputSource::unsubscribe_all()
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     taken.swap(panels_);
+    for (const auto & entry : taken) {
+      record_log_.end(entry.first);
+    }
   }
   cancel_lifecycles_for_panel(std::string());
   for (auto & entry : taken) {
@@ -299,6 +314,29 @@ QarCApiPanelInputSource::on_panel_update(QarGuiPanel * handle, void * user_state
   }
   QarGuiPanelState state = QAR_GUI_PANEL_STATE_VISIBLE;
   const QarResult r = qar_gui_panel_get_state(handle, &state);
+
+  // What the runtime says about the panel, whatever its state: read here, because the handle is
+  // valid only during this call, and queued for the render thread to print. Three getters and a
+  // push under the lock the closed-panel path below takes as well; no I/O, no Qt.
+  PanelRuntimeRecord record;
+  record.state_known = !qar_result_is_error(r);
+  record.state = state;
+  QarStreamId stream = qar_stream_id_default();
+  record.stream_known = !qar_result_is_error(qar_gui_panel_get_content_stream_id(handle, &stream));
+  if (record.stream_known) {
+    std::memcpy(record.stream_id, stream.data, sizeof(record.stream_id));
+  }
+  QarGuiPanelSize size{};
+  record.size_known = !qar_result_is_error(qar_gui_panel_get_size(handle, &size));
+  if (record.size_known) {
+    record.width_meters = size.width_meters;
+    record.height_meters = size.height_meters;
+  }
+  {
+    const std::lock_guard<std::mutex> record_lock(self->mutex_);
+    self->record_log_.note(slot->panel_key, record, std::chrono::system_clock::now());
+  }
+
   if (qar_result_is_error(r) || state != QAR_GUI_PANEL_STATE_CLOSED) {
     // Every other state is a panel that is still there: minimized and hidden
     // are the operator putting it away, not finishing with it, and we keep
@@ -628,6 +666,23 @@ QarCApiPanelInputSource::flush_event_trace()
 }
 
 void
+QarCApiPanelInputSource::flush_runtime_records()
+{
+  std::vector<std::string> lines;
+  {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    lines = record_log_.take_lines();
+  }
+  if (lines.empty()) {
+    return;
+  }
+  for (const std::string & line : lines) {
+    std::fprintf(stderr, "%s\n", line.c_str());
+  }
+  std::fflush(stderr);
+}
+
+void
 QarCApiPanelInputSource::drain(std::vector<qar_ar_core::PanelPointerSample> & out)
 {
   queue_.drain(out);
@@ -635,6 +690,7 @@ QarCApiPanelInputSource::drain(std::vector<qar_ar_core::PanelPointerSample> & ou
   // Qt thread: safe to do I/O. Printing here rather than in the callback is the
   // whole point of pending_log_.
   flush_event_trace();
+  flush_runtime_records();
 
   // The liveness backstop. A hover that ENDS says so (HOVER has a real
   // lifecycle since the 2026-09-21 SDK), so this is not the ordinary way a

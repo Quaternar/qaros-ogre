@@ -15,6 +15,11 @@ add_executable(qar_qar_adapter_tests
   env_config_tests.cpp
   # The 3D stream's stage timing (render3d.csv): header-only and QarOS-free.
   render_timing_tests.cpp
+  # The log line of a panel state change, the line for the first 3D frame after a stall, and the
+  # defaults of the factory configuration: pure values, no QarOS session.
+  panel_state_log_tests.cpp
+  frame_stall_probe_tests.cpp
+  render_config_tests.cpp
 )
 
 # The `render` component's pure units. Linking the static library pulls in only the

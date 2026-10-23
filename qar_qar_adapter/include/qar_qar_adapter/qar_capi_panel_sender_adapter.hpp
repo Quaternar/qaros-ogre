@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "qar_ar_core/qar_streaming_c.hpp"
+#include "qar_qar_adapter/log_time.hpp"
 #include "qar_qar_adapter/qar_capi_panel_input_source.hpp"
 #include "qar_ar_core/qar_panel_sender.hpp"
 #include "qar_qar_adapter/qar_capi_session_owner.hpp"
@@ -69,8 +70,22 @@ public:
   const QarGuiPanelId & panel_id() const { return panel_id_; }
 
   bool try_begin_frame(bool & out_ready) override;
+
+  /// @brief Which of the three answers the last @ref try_begin_frame gave when it reported no
+  /// destination: success without a reserved cycle, no active transfers (604) or a transfer that
+  /// is reconnecting (603). The first time a sender that has shown frames hears 603, one line
+  /// says so, with the number of frames shown.
+  qar_ar_core::PanelNotReadyCause not_ready_cause() const override { return not_ready_cause_; }
+
   bool submit_frame(const qar_ar_core::PanelPixels & pixels) override;
   bool set_placement(const qar_ar_core::PanelPlacement & placement) override;
+
+  /// @brief One `qar_gui_panels_set_state` on this panel: hide, show or minimise it while the
+  /// panel, the video sender and the subscriptions all stay. Refused (false, @ref last_error
+  /// says why) when there is no live panel, or when the runtime returns an error. Each change
+  /// that succeeds is printed to stderr in the style of the creation line.
+  bool set_state(QarGuiPanelState state) override;
+  bool supports_state() const override { return true; }
 
   /// @brief The one teardown, in the one safe order — see
   /// IQarPanelSenderAdapter::close for the contract, and the body for the lines it
@@ -118,6 +133,13 @@ private:
   bool ready_ = false;
   bool frame_reserved_ = false;
   std::string last_error_;
+  /// The answer of the last try_begin_frame when it reported no destination.
+  qar_ar_core::PanelNotReadyCause not_ready_cause_ = qar_ar_core::PanelNotReadyCause::NoDestination;
+  /// Frames this sender has shown (a show_frame that succeeded).
+  std::uint64_t frames_shown_ = 0;
+  /// Lets the first frame shown print its line, and the first 603 after a frame print its line.
+  LogOnce first_show_noted_;
+  LogOnce reconnect_noted_;
 };
 
 /// @brief Mints QarCApiPanelSenderAdapters against a live QarCApiSenderFactory.
