@@ -1,0 +1,45 @@
+# Copyright 2026 QuaternAR
+# SPDX-License-Identifier: MIT
+#
+# qar_ogre_adapter package configuration.
+#   find_package(qar_ogre_adapter 0.1.0 CONFIG REQUIRED COMPONENTS <component>...)
+# Components and targets: qar_ar_core qar_ogre_streaming capi render panels url gestures
+# -> qar_ogre_adapter::<component>. Ogre (rviz_ogre_vendor from the ROS 2 Humble distribution)
+# is a dependency of qar_ogre_streaming and render only; it is searched on CMAKE_PREFIX_PATH and
+# in $ENV{ROS2_INSTALL_ROOT}. Without COMPONENTS all components are requested.
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+set(_qar_ogre_adapter_all qar_ar_core qar_ogre_streaming capi render panels url gestures)
+if(NOT qar_ogre_adapter_FIND_COMPONENTS)
+  set(qar_ogre_adapter_FIND_COMPONENTS ${_qar_ogre_adapter_all})
+endif()
+foreach(_c IN LISTS qar_ogre_adapter_FIND_COMPONENTS)
+  if(NOT _c IN_LIST _qar_ogre_adapter_all)
+    set(qar_ogre_adapter_FOUND FALSE)
+    set(qar_ogre_adapter_NOT_FOUND_MESSAGE
+      "unknown component '${_c}' (components: ${_qar_ogre_adapter_all})")
+    return()
+  endif()
+endforeach()
+
+set(_qar_needs_ogre FALSE)
+foreach(_c IN ITEMS qar_ogre_streaming render)
+  if(_c IN_LIST qar_ogre_adapter_FIND_COMPONENTS)
+    set(_qar_needs_ogre TRUE)
+  endif()
+endforeach()
+if(_qar_needs_ogre)
+  file(TO_CMAKE_PATH "$ENV{ROS2_INSTALL_ROOT}" _qar_ros2_hint)
+  find_dependency(rviz_ogre_vendor HINTS "${_qar_ros2_hint}")
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/qar_ogre_adapterTargets.cmake")
+
+foreach(_c IN LISTS _qar_ogre_adapter_all)
+  if(TARGET qar_ogre_adapter::${_c})
+    set(qar_ogre_adapter_${_c}_FOUND TRUE)
+  endif()
+endforeach()
+check_required_components(qar_ogre_adapter)

@@ -1,0 +1,5 @@
+* text=auto eol=lf
+third_party/** -text
+*.png binary
+*.jpg binary
+*.zip binary
