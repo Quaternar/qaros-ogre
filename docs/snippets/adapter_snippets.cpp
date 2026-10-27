@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "qar_ar_core/common_name.hpp"
 #include "qar_ar_core/panel_input_source.hpp"
 #include "qar_ar_core/panel_types.hpp"
 #include "qar_ar_core/qar_streaming_c.hpp"
@@ -22,6 +23,7 @@
 #include "qar_qar_adapter/qar_capi_session_owner.hpp"
 #include "qar_qar_adapter/qar_capi_spatial_gesture_source.hpp"
 #include "qar_qar_adapter/qar_capi_url_panel_adapter.hpp"
+#include "qar_qar_adapter/qar_session_owner.hpp"
 
 // [qar-snippet:session_owner]
 // A host that streams panels without a 3D scene opens its own QarOS session and answers the two questions of
@@ -39,40 +41,37 @@ private:
 };
 // [qar-snippet-end:session_owner]
 
-void snippet_factory_config(const std::string & sdk_bin)
+void snippet_factory_config(
+  const std::shared_ptr<qar_qar_adapter::QarSessionOwner> & owner, const std::string & host)
 {
   // [qar-snippet:factory_config]
   qar_qar_adapter::QarCApiSenderFactory::Config config;
-  config.runtime_binaries_folder_path = sdk_bin;                   // the bin folder of the SDK
   config.copy_hook = qar_qar_adapter::make_gl_copy_image_hook();   // without it QarOS shows a black scene
   config.near_far = QarNearFar{0.1f, 200.0f};                      // reported with every frame
-  config.admission = qar_qar_adapter::PeerAdmission::kInvitedOnly;
   config.max_peers = 4;                                            // a fifth peer is refused with a warning
-  config.invite_peers = "hololens:HOLOLENS-A2B3,quest";            // invited as soon as the session is up
+  config.name_scope = qar_ar_core::make_name_scope("fleet-map", "", host);   // names the app volume
   config.app_volume_name = "Fleet map";
   config.app_volume_width_m = 20.0f;                               // the box of the scene, in metres
   config.app_volume_length_m = 20.0f;
   config.app_volume_height_m = 10.0f;
   config.app_volume_center_y_m = 5.0f;                             // the centre of the box above room y = 0
-  config.log_severity = QAR_LOG_SEVERITY_WARN;
-  config.enable_console_logging = false;
   // [qar-snippet-end:factory_config]
-  const auto factory = std::make_shared<qar_qar_adapter::QarCApiSenderFactory>(config);
+  const auto factory = std::make_shared<qar_qar_adapter::QarCApiSenderFactory>(owner, config);
   std::printf("ready: %d\n", factory->ready() ? 1 : 0);
 }
 
-void snippet_factory_use(qar_qar_adapter::QarCApiSenderFactory * factory)
+void snippet_factory_use(
+  qar_qar_adapter::QarSessionOwner * owner, qar_qar_adapter::QarCApiSenderFactory * factory)
 {
   // [qar-snippet:factory_use]
-  if (!factory->ready()) {
-    std::printf("QarOS: %s\n", factory->last_error().c_str());   // the bootstrap failed: nothing else works
+  if (!factory->attach()) {
+    std::printf("QarOS: %s\n", factory->last_error().c_str());   // no session, or no app volume: nothing else works
     return;
   }
 
-  // Invite one more device into the running session; its peer id joins the allow-list.
-  QarPeerId invited{};
-  const std::string refused = factory->invite_additional_peer(
-    qar_qar_adapter::PeerKind::kHoloLens, "HOLOLENS-C4D5", invited);
+  // Ask the Hub of this PC to start the app on one more device. An empty text means that the request
+  // started; the answer arrives later as an event of the owner.
+  const std::string refused = owner->invite_device(qar_qar_adapter::DeviceKind::kHoloLens, "HOLOLENS-C4D5");
 
   // Georeference the app volume: latitude, longitude, and the height above the WGS84 ellipsoid.
   const std::string anchor_error = factory->set_geo_anchor_wgs84(47.3769, 8.5417, 408.0);

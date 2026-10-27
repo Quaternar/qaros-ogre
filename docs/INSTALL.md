@@ -15,11 +15,11 @@ foreach ($folder in $env:QAR_DEPS_ROOT, $env:QAR_VENV, "$env:QAR_ROOT\src", $env
 }
 ```
 ```text
-C:\qar\deps  1.84 GiB
+C:\qar\deps  1.82 GiB
 C:\qar\venv  0.24 GiB
-C:\qar\src  1.17 GiB
-C:\qar\install  0.02 GiB
-C:\QarOS\install  0.26 GiB
+C:\qar\src  0.90 GiB
+C:\qar\install  0.03 GiB
+C:\Program Files\Quaternar\QAROS  0.64 GiB
 ```
 
 The sizes were measured after the three repositories of the stack had been built on the machine; your folders are smaller when you build fewer of them.
@@ -42,7 +42,7 @@ Microsoft Windows 11 Pro, version 10.0.26200, 64-bit: True
 | Desktop session | An interactive desktop on the local console of the machine. Remote Desktop and services are not covered. | The QarOS Visualizer opens OpenGL windows, and the documented runs were made from the local console. |
 | Graphics | A GPU with a current OpenGL driver; the reference machine has an NVIDIA GPU. This stack states no minimum GPU or driver version. | Ogre renders with OpenGL, and QarOS encodes the frames on the GPU. |
 | Administrator rights | Only for the installers of the toolchain. The scripts of this stack and the commands of this documentation run in a normal, non-elevated PowerShell. | The scripts write below the folders you pass them. |
-| Paths | A short root folder: this documentation uses `C:\qar` and `C:\QarOS`. | Windows limits a path to 260 characters unless long paths are enabled, and a deep clone path overflows that limit. |
+| Paths | A short root folder: this documentation uses `C:\qar`. | Windows limits a path to 260 characters unless long paths are enabled, and a deep clone path overflows that limit. |
 
 Check the two Windows settings that matter for the layout. The first value is the long-path policy: `0` means long paths are off, which is the Windows default. This stack does not change it and does not need it, because the layout above is short.
 
@@ -221,8 +221,7 @@ C:\qar\deps\ros2_humble\ros2-windows    ROS2_INSTALL_ROOT: the ROS 2 Humble dist
 C:\qar\venv                             QAR_VENV: the Python virtual environment
 C:\qar\src\<repository>                 the clones of the repositories
 C:\qar\install                          QAR_PREFIX: the install prefix of the repositories
-C:\QarOS                                the QarOS SDK (outside the layout root)
-C:\QarOS\install                        QAR_SDK_ROOT: the unpacked SDK drop
+C:\Program Files\Quaternar\QAROS   QAR_SDK_ROOT: the install folder of QAROS (made by its setup program, outside the layout root)
 ```
 
 | Variable | Meaning | Value in this documentation |
@@ -233,7 +232,7 @@ C:\QarOS\install                        QAR_SDK_ROOT: the unpacked SDK drop
 | `QAR_QT_ROOT` | The Qt 5.15.2 folder. The block below sets it for qar_qt_streaming and qar_rviz_plugin, which build against Qt; this repository installs no Qt, and its build does not read the variable. | `C:\qar\deps\Qt\5.15.2\msvc2019_64` |
 | `QAR_VENV` | The Python 3.10 virtual environment, the folder that holds `Scripts\python.exe`. | `C:\qar\venv` |
 | `QAR_PREFIX` | The install prefix: the repositories of this stack install into it, and the others find them there. | `C:\qar\install` |
-| `QAR_SDK_ROOT` | The QarOS SDK install tree, the folder that holds `bin` and `include`. | `C:\QarOS\install` |
+| `QAR_SDK_ROOT` | The install folder of QAROS, the folder that holds `bin` and `include`; set it to the `InstallFolder` that the registry names, because CMake uses it only to check that the library exists. | `C:\Program Files\Quaternar\QAROS` |
 
 The outputs shown in this documentation were recorded in another folder layout on a machine of the same kind; the folder names in them were replaced by the names of the layout above.
 
@@ -251,16 +250,16 @@ $layout = [ordered]@{
     QAR_QT_ROOT       = 'C:\qar\deps\Qt\5.15.2\msvc2019_64'
     QAR_VENV          = 'C:\qar\venv'
     QAR_PREFIX        = 'C:\qar\install'
-    QAR_SDK_ROOT      = 'C:\QarOS\install'
+    QAR_SDK_ROOT      = 'C:\Program Files\Quaternar\QAROS'
 }
 foreach ($name in $layout.Keys) {
     [Environment]::SetEnvironmentVariable($name, $layout[$name], 'User')
     Set-Item -Path "Env:$name" -Value $layout[$name]
 }
-New-Item -ItemType Directory -Force -Path $layout.QAR_ROOT, $layout.QAR_DEPS_ROOT, $layout.QAR_PREFIX, (Split-Path $layout.QAR_SDK_ROOT) | Out-Null
+New-Item -ItemType Directory -Force -Path $layout.QAR_ROOT, $layout.QAR_DEPS_ROOT, $layout.QAR_PREFIX | Out-Null
 ```
 
-> Success: the block prints nothing and ends without an error. Afterwards the seven variables are set for your Windows user and in the current window, and these folders exist: `C:\qar`, `C:\qar\deps`, `C:\qar\install` and `C:\QarOS`. The check below lists the variables.
+> Success: the block prints nothing and ends without an error. Afterwards the seven variables are set for your Windows user and in the current window, and these folders exist: `C:\qar`, `C:\qar\deps` and `C:\qar\install`. The folder of QAROS is made by its setup program, not by this block. The check below lists the variables.
 >
 > This command changes your machine, so no output is shown here.
 
@@ -280,60 +279,47 @@ ROS2_INSTALL_ROOT  C:\qar\deps\ros2_humble\ros2-windows
 QAR_QT_ROOT        C:\qar\deps\Qt\5.15.2\msvc2019_64
 QAR_VENV           C:\qar\venv
 QAR_PREFIX         C:\qar\install
-QAR_SDK_ROOT       C:\QarOS\install
+QAR_SDK_ROOT       C:\Program Files\Quaternar\QAROS
 ```
 
 Every command of this documentation that clones, builds or runs something uses only these variables, and a shell that has them needs nothing else.
 
 ## The QarOS SDK
 
-The QarOS SDK is QuaternAR's proprietary runtime and is not part of this stack. You obtain a drop of it from QuaternAR as a zip file, unpack it next to the layout, and point the stack at the unpacked folder. The SDK drop dates that this stack was verified against are in [SDK compatibility](SDK_COMPATIBILITY.md); this section only installs a drop.
+QAROS is QuaternAR's proprietary runtime and is not part of this stack. You obtain its setup program from QuaternAR and install it once on the PC, for all users. The setup program records the installed version and the install folder in the registry value `Version` and the registry value `InstallFolder` of the key `HKLM\SOFTWARE\Quaternar\QAROS`. The QAROS version that this stack was verified against is in [SDK compatibility](SDK_COMPATIBILITY.md).
 
-1. Save the zip file you received from QuaternAR as `C:\QarOS\qaros_sdk.zip`.
-2. Unpack it into its parent folder. The archive holds one top-level folder, `install`, with `bin`, `include` and a licence list; unpacking it into `C:\QarOS` therefore yields `C:\QarOS\install`, which is the value of `QAR_SDK_ROOT`.
+You do not copy any part of QAROS into a layout folder or into a repository. A program that uses QAROS loads the installed library `bin\qar-streaming-c.dll` from the install folder, and the runtime finds its launcher and its other programs next to that library.
 
-```powershell
-$sdkParent = Split-Path $env:QAR_SDK_ROOT
-Expand-Archive -LiteralPath (Join-Path $sdkParent 'qaros_sdk.zip') -DestinationPath $sdkParent -Force
-Get-ChildItem -LiteralPath $env:QAR_SDK_ROOT -Name
-```
-```text
-bin
-include
-third_party_licenses.md
-```
-
-3. Remove the download mark from the unpacked programs. Windows marks files that came from the internet, and a process start from a marked SDK program can fail with Windows error 1223.
+The first command reads the version and the install folder from the registry, checks that the folder holds the C library, the runtime launcher and the Visualizer, and prints the SHA256 of the C header `include\qar_streaming.h` of the installation. [Identifying the QAROS version](SDK_COMPATIBILITY.md#identifying-the-qaros-version) explains what to compare the hash with. The command changes nothing.
 
 ```powershell
-Get-ChildItem -LiteralPath $env:QAR_SDK_ROOT -Recurse -Include *.exe, *.dll | Unblock-File
-```
-
-4. Check that the folder holds what the stack needs: the C library, the runtime launcher and the Visualizer that QarOS starts itself, and the C header. The folder holds the program `qar-stereokit-gui.exe` as well, after which the crash reports of the Visualizer are named. The last line is the SHA256 of the header; [Identifying an SDK drop](SDK_COMPATIBILITY.md#identifying-an-sdk-drop) explains what to compare it with.
-
-```powershell
+$qaros = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Quaternar\QAROS'
+'Version        {0}' -f $qaros.Version
+'InstallFolder  {0}' -f $qaros.InstallFolder
 foreach ($file in 'bin\qar-streaming-c.dll', 'bin\qar-runtime-launcher.exe', 'bin\qar-streaming-viz.exe', 'include\qar_streaming.h') {
-    '{0,-30} {1}' -f $file, (Test-Path -LiteralPath (Join-Path $env:QAR_SDK_ROOT $file))
+    '{0,-30} {1}' -f $file, (Test-Path -LiteralPath (Join-Path $qaros.InstallFolder $file))
 }
-(Get-FileHash -LiteralPath (Join-Path $env:QAR_SDK_ROOT 'include\qar_streaming.h') -Algorithm SHA256).Hash
+(Get-FileHash -LiteralPath (Join-Path $qaros.InstallFolder 'include\qar_streaming.h') -Algorithm SHA256).Hash
 ```
 ```text
+Version        0.9.0-dev.3008+65dc9aeb
+InstallFolder  C:\Program Files\Quaternar\QAROS
 bin\qar-streaming-c.dll        True
 bin\qar-runtime-launcher.exe   True
 bin\qar-streaming-viz.exe      True
 include\qar_streaming.h        True
-5223B56251F3085B376A8BDE5ECEFCF661D6E8F8B800F6AA46414ADC1F4DB6EA
+55E6E3F48D940CA29331F0528FE475C1B7230FB19A59C31D5525C6E90B097F6C
 ```
 
-### How the stack finds the SDK
+### How the stack finds QAROS
 
-Deploy the `bin` folder of the SDK whole and unmodified; do not copy single files out of it into an application folder, and never copy the SDK into a repository. The C header documents this rule, and it matters here because QarOS starts its own launcher and Visualizer from that folder.
+A program calls `qar_library_load` with no path. The C header documents the order in which that call looks for the library and takes the first hit: a library that is already loaded in the process; `qar-streaming-c.dll` beside the module that calls it; the folder that the environment variable `QAROS_RUNTIME_DIR` names; the install folder of the installed QAROS; a folder on `PATH`. A library found beside the program is loaded before the installed one, which is why a program must not ship its own copy. Each candidate is loaded with its dependencies taken from its own folder and from `System32` only.
 
-Nothing in this stack links against the SDK. The library `qar-streaming-c.dll` is loaded at run time from the folder an application passes in; the C API takes the library file `bin\qar-streaming-c.dll` in one call and the folder `bin` in the runtime initialisation. An empty folder starts no launcher, and peer invitations then never complete.
+The runtime initialisation leaves the field `runtime_binaries_folder_path` empty: the runtime then uses the folder that the loaded library came from, which is the `bin` folder of the installation and holds the launcher.
 
-At configure time, CMake reads `QAR_SDK_ROOT` only to check that the DLL exists below it; when the variable is not set or the DLL is missing, it prints a warning and continues. A build and the whole test suite therefore work without an SDK; only the programs that connect to QarOS need it at run time.
+Nothing in this stack links against QAROS. At configure time, CMake reads `QAR_SDK_ROOT` only to check that `bin\qar-streaming-c.dll` exists below it; when the variable is not set or the DLL is missing, it prints a warning and continues. A build and the whole test suite therefore work without QAROS; only the programs that connect to QAROS need the installation at run time.
 
-At run time an application passes the folder in the `runtime_binaries_folder_path` field of the QarOS session factory configuration.
+How a program joins the QAROS Hub is described by QuaternAR: [Onboarding and sessions](https://docs.quaternar.com/docs/next/developer-guide/onboarding-and-sessions/) and [Source applications](https://docs.quaternar.com/docs/next/operator-guide/source-applications/). A program that runs on the PC of the Hub joins as a local source app, and the Hub asks its operator once to allow it; a Hub on another PC needs a pairing code.
 
 ## Python environment
 
@@ -438,7 +424,7 @@ Preset CMake variables:
 
   QAR_BUILD_TESTS="ON"
   QAR_ROS2_INSTALL_ROOT="C:\qar\deps\ros2_humble\ros2-windows"
-  QAR_SDK_ROOT="C:\QarOS\install"
+  QAR_SDK_ROOT="C:\Program Files\Quaternar\QAROS"
 
 ...
 -- The CXX compiler identification is MSVC 19.29.30151.0
@@ -446,10 +432,10 @@ Preset CMake variables:
 -- ROS 2 distribution: C:/qar/deps/ros2_humble/ros2-windows
 -- Found rviz_ogre_vendor: 11.2.25 (C:/qar/deps/ros2_humble/ros2-windows/share/rviz_ogre_vendor/cmake)
 ...
--- qar_qar_adapter: QarOS SDK backend, DYNAMIC loading of C:\QarOS\install/bin/qar-streaming-c.dll (no import lib linked)
+-- qar_qar_adapter: QarOS SDK backend, DYNAMIC loading of C:\Program Files\Quaternar\QAROS/bin/qar-streaming-c.dll (no import lib linked)
 ...
--- Configuring done (7.7s)
--- Generating done (0.1s)
+-- Configuring done (10.4s)
+-- Generating done (0.2s)
 -- Build files have been written to: C:/qar/src/qar_ogre_adapter/build/vs2019-x64
 ```
 
@@ -459,8 +445,9 @@ Build it. The build writes into the build folder of the repository only.
 cmake --build --preset vs2019-x64
 ```
 ```text
-...
   qar_ar_core.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\qar_ar_core\RelWithDebInfo\qar_ar_core.lib
+...
+  qar_qar_adapter_session.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\qar_qar_adapter\RelWithDebInfo\qar_qar_adapter_session.lib
 ...
   qar_ogre_streaming.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\qar_ogre_streaming\RelWithDebInfo\qar_ogre_streaming.lib
 ...
@@ -469,7 +456,6 @@ cmake --build --preset vs2019-x64
   qar_ogre_standalone_streaming_sample.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\examples\ogre_standalone_streaming_sample\RelWithDebInfo\qar_ogre_standalone_streaming_sample.exe
 ...
   qar_ogre_live_stream_example.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\examples\qaros_live_stream\RelWithDebInfo\qar_ogre_live_stream_example.exe
-...
 ```
 
 Run the tests of the repository. The tests need no QarOS SDK and open no window; [Testing](TESTING.md) explains what they cover.
@@ -480,17 +466,16 @@ ctest --preset vs2019-x64
 ```text
 Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
         Start   1: check_layering_qar_ar_core
-  1/331 Test   #1: check_layering_qar_ar_core ................................................................   Passed    0.08 sec
+  1/610 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.11 sec
         Start   2: check_layering_qar_ogre_streaming
-  2/331 Test   #2: check_layering_qar_ogre_streaming .........................................................   Passed    0.09 sec
+  2/610 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.10 sec
         Start   3: check_layering_qar_qar_adapter
-  3/331 Test   #3: check_layering_qar_qar_adapter ............................................................   Passed    0.10 sec
+  3/610 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.21 sec
         Start   4: check_layering_examples
-  4/331 Test   #4: check_layering_examples ...................................................................   Passed    0.05 sec
 ...
-100% tests passed, 0 tests failed out of 331
+100% tests passed, 0 tests failed out of 610
 
-Total Test time (real) =   2.65 sec
+Total Test time (real) = 117.66 sec
 ```
 
 Install it into the prefix. The install puts the libraries of the three modules `qar_ar_core`, `qar_ogre_streaming` and `qar_qar_adapter` and the vendored QarOS C header below `$env:QAR_PREFIX`, together with the CMake package that the other repositories of this stack find there.
@@ -502,6 +487,7 @@ cmake --install build\vs2019-x64 --config RelWithDebInfo --prefix $env:QAR_PREFI
 -- Installing: C:\qar\install/lib/qar_ar_core.lib
 -- Installing: C:\qar\install/lib/qar_ogre_streaming.lib
 -- Installing: C:\qar\install/lib/qar_qar_adapter_capi.lib
+-- Installing: C:\qar\install/lib/qar_qar_adapter_session.lib
 -- Installing: C:\qar\install/lib/qar_qar_adapter_render.lib
 -- Installing: C:\qar\install/lib/qar_qar_adapter_panels.lib
 -- Installing: C:\qar\install/lib/qar_qar_adapter_url.lib
@@ -534,10 +520,9 @@ Configure the project against the install prefix, build it, and run it.
 cmake -S docs\snippets\consumer -B build\consumer -G "Visual Studio 16 2019" -A x64 "-DCMAKE_PREFIX_PATH=$env:QAR_PREFIX"
 ```
 ```text
-...
 -- Found rviz_ogre_vendor: 11.2.25 (C:/qar/deps/ros2_humble/ros2-windows/share/rviz_ogre_vendor/cmake)
 ...
--- Configuring done (1.7s)
+-- Configuring done (2.1s)
 -- Generating done (0.0s)
 -- Build files have been written to: C:/qar/src/qar_ogre_adapter/build/consumer
 ```
@@ -546,9 +531,7 @@ cmake -S docs\snippets\consumer -B build\consumer -G "Visual Studio 16 2019" -A 
 cmake --build build\consumer --config RelWithDebInfo
 ```
 ```text
-...
-  qar_ogre_adapter_consumer.vcxproj -> C:\qar\src\qar_ogre_adapter\build\consumer\RelWithDebInfo\qar_ogre_adapter_consumer.exe
-...
+  main.cpp
 ```
 
 ```powershell
@@ -573,12 +556,12 @@ The installation changes your machine in a few places. This section lists every 
 | The toolchain: Visual Studio 2019 Build Tools, CMake, Git, PowerShell 7, Python 3.10 | the installers of [Toolchain](#toolchain) | the Windows installation and `C:\Program Files` | Uninstall each program in Windows Settings, or with `winget uninstall` and the package id used to install it. |
 | Seven environment variables of your user | the block of [Directory layout and environment variables](#directory-layout-and-environment-variables) | the user environment of Windows | The second block below removes them. |
 | The layout folders: the dependencies, the virtual environment, the clones, the install prefix | the steps of this document | `C:\qar` | Delete the folder; the second block below does it. The ROS 2 distribution and the downloads are inside it. |
-| The QarOS SDK | [The QarOS SDK](#the-qaros-sdk) | the folder that `QAR_SDK_ROOT` names, `C:\QarOS\install` in this documentation, and the zip file in its parent folder `C:\QarOS` | No block below removes it; the paragraph below the table says how to remove it. |
+| The QarOS SDK | [The QarOS SDK](#the-qaros-sdk) | the installed QAROS, whose folder `QAR_SDK_ROOT` names when you set it | No block below removes it; the paragraph below the table says how to remove it. |
 | The results of the headless sample | `scripts\run_ogre_sample.ps1` | the folder `qar_ogre_sample` in `%TEMP%`, or the folder that you gave as `-OutDir` | Delete the folder. |
 | The Windows graphics preference of the live example | the optional command of [Before you start](GETTING_STARTED.md#before-you-start) | a registry value below HKCU:\Software\Microsoft\DirectX\UserGpuPreferences, named with the full path of the program file of `qar_ogre_live_stream_example` | Delete that registry value, or remove the program in Windows Settings under System, Display, Graphics. |
 | The logs of the QarOS library | QarOS, when an application connects to it | the folder `quaternar` in `%TEMP%` | Delete the folder. It can grow to gigabytes when trace logging is on. |
 
-The QarOS SDK is a product of QuaternAR that you may use for other work, so no block of this document deletes it. If you unpacked it only for this stack, delete the folder that `QAR_SDK_ROOT` names yourself, before you run the blocks below, because they remove the variable. Never delete the parent of that folder with a command that takes it from the variable: with a layout of your own, the parent can be a whole drive or a system folder. In the layout of this documentation the parent `C:\QarOS` holds the zip file `C:\QarOS\qaros_sdk.zip` next to the folder `C:\QarOS\install`; delete `C:\QarOS` by hand when nothing else is in it.
+QAROS is a product of QuaternAR that you may use for other work, so no block of this document removes or uninstalls it. Uninstall it with its own uninstaller from the install folder when you have no use for it, and remove the variable `QAR_SDK_ROOT` with the blocks below.
 
 Close every program that uses the layout first, and go back to your home folder, so that the window does not stand in a folder that the blocks remove:
 

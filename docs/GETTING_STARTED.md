@@ -6,9 +6,9 @@ Two programs of this repository, both built together with the libraries. They re
 
 | Program | What it does | Needs | Opens a window |
 |---|---|---|---|
-| `qar_ogre_standalone_streaming_sample` | the headless sample: renders the scene for synthetic peers that live in the same process and writes their stereo images | Ogre only, no QarOS SDK | no |
-| `qar_ogre_live_stream_example` with `--connect-only` | opens a QarOS session, prints the app volume that it created and exits | the QarOS SDK | no |
-| `qar_ogre_live_stream_example` | invites a QarOS Visualizer and streams the scene to it | the QarOS SDK, a local desktop session | the Visualizer does |
+| `qar_ogre_standalone_streaming_sample` | the headless sample: renders the scene for synthetic peers that live in the same process and writes their stereo images | Ogre only, no QAROS | no |
+| `qar_ogre_live_stream_example` with `--connect-only` | joins the QAROS Hub, prints the runtime, the mode, its peer, the app volume and the targets, and exits | the installed QAROS | no |
+| `qar_ogre_live_stream_example` | joins the QAROS Hub and streams the scene to the first target that comes up | the installed QAROS, a local desktop session | the Visualizer does |
 
 The last section of this document shows, from the source of the example, how to use the library from your own Ogre application.
 
@@ -136,47 +136,42 @@ overall_pass=true
 
 ## Check the connection to QarOS without a window
 
-The example is built next to the sample: `build\vs2019-x64\examples\qaros_live_stream\RelWithDebInfo\qar_ogre_live_stream_example.exe`. Its option `--sdk-bin` is required and names the `bin` folder of the QarOS SDK, the folder from which QarOS starts its own launcher and Visualizer. With `--connect-only` the example opens a QarOS session through the session factory of the `render` component, checks it and exits; it starts no Ogre, opens no window and invites nobody.
+The example is built next to the sample: `build\vs2019-x64\examples\qaros_live_stream\RelWithDebInfo\qar_ogre_live_stream_example.exe`. It needs no path to QAROS: the library `qar-streaming-c.dll` is loaded from the installed QAROS. The option `--local`, the default, joins the QAROS Hub of this PC as a source app: QAROS asks once to allow the program, so click Allow in the QAROS window, and it asks again after each rebuild of the program. The option `--hub HOST:PORT --code CODE` pairs with the Hub of another PC instead; the code works once, and the pairing is stored for the next start. With `--connect-only` the example joins, checks the session and exits; it starts no Ogre and opens no window.
 
-Run it. The first command line sets `PATH` as above, so that the program starts.
+Run it. The first command line sets `PATH` as above, so that the program starts. The command starts the Hub of the installed QAROS when it is not running, so it is not run for this document and no output is shown.
 
 ```powershell
 $env:PATH = "$env:ROS2_INSTALL_ROOT\opt\rviz_ogre_vendor\bin;$env:PATH"
-& .\build\vs2019-x64\examples\qaros_live_stream\RelWithDebInfo\qar_ogre_live_stream_example.exe --sdk-bin "$env:QAR_SDK_ROOT\bin" --connect-only
-```
-```text
-[qar-adapter] library logging: severity=warn console=off folder=C:\Users\<user>\AppData\Local\Temp\quaternar
-[qar-adapter] zenoh logging: off (QAR_ZENOH_LOG not set)
-example: connected to QarOS: ready=1 app_volume=051e412fabf14bc6ac4815c694793fec
+& .\build\vs2019-x64\examples\qaros_live_stream\RelWithDebInfo\qar_ogre_live_stream_example.exe --local --connect-only
 ```
 
-The session factory starts the QarOS runtime: it loads `qar-streaming-c.dll` from the folder, initialises the library, creates a session, joins it and creates one app volume. `ready` means that this bootstrap succeeded. The factory prints lines that start with `[qar-adapter]` about its own state, and QarOS writes its library log into the folder `quaternar` below your `TEMP` folder. When the program ends, the factory destroys the session, the runtime and the library again.
+The example makes a session owner, `QarSessionOwner`, which loads the library, creates the runtime and joins the Hub on a thread of its own, and a session factory, `QarCApiSenderFactory`, which borrows the open session. The example polls the owner until the session runs, attaches the factory, which makes one app volume, and then prints what it found. The state of the session is the state of the owner. The owner prints lines that start with `QAROS:` and with `[qar-adapter]` about its own state, and QarOS writes its library log into the folder `quaternar` below your `TEMP` folder. When the program ends, the factory lets go of the app volume and the owner destroys the session, the runtime and the library again.
 
-On success the example prints one line with the identifier of the app volume, 32 hexadecimal digits, and exits with 0. The line has this form:
+On success the example prints the line with the identifier of the app volume, 32 hexadecimal digits, then the runtime, the mode, the peer of the program and the targets, and exits with 0. The line of the volume has this form:
 
 ```text
 example: connected to QarOS: ready=1 app_volume=
 ```
 
-On a failure it prints a line that has this form, with the reason that the factory reports, and exits with 1. The reason for a folder that does not hold `qar-streaming-c.dll` starts with `qar_library_load failed for` and names the file that was tried.
+When the session does not run, the example prints a line that has this form, with the state of the owner as a number, and exits with 1. When the attach fails, it prints the reason of the factory instead, and when the Hub of another PC does not know the program it asks for `--hub HOST:PORT --code CODE`.
 
 ```text
-example: QarOS connect failed: %s
+example: QAROS connect failed
 ```
 
 ## Stream the sample scene to the Visualizer
 
-Without `--connect-only` the example brings up Ogre with a hidden window, connects as above, and invites a QarOS Visualizer into the session. QarOS starts the Visualizer itself, from the SDK folder that you passed, and the Visualizer opens its own window. The example then renders the scene for the Visualizer for the number of seconds that `--seconds` gives, 60 by default, and prints a line when the stream of the Visualizer opens and when it closes. When QarOS reports the stream of a peer closed, for example because the peer left, the example drops that stream.
+Without `--connect-only` the example brings up Ogre with a hidden window, joins and attaches as above, and waits for a target, a headset or a Visualizer receiver, to come up in the Hub. A fresh Visualizer has no receiver: add one with its "Add receiver" button, and the Hub lists a target. The example makes one stream for the first target that comes up, renders the scene for it for the number of seconds that `--seconds` gives, 60 by default, and prints a line when the stream opens and when it closes. When QarOS reports the stream of a peer closed, for example because the peer left, the example drops that stream.
 
-Two environment variables decide whether the Visualizer shows the scene correctly. With an SDK drop earlier than that of 2026-09-28, the Visualizer read the depth texture as the window-space depth value, so set `QAR_DEPTH_ENCODING` to `ndc`; the default is metric distance, which that Visualizer showed as one flat colour. The scene is Z-up, like an RViz scene, while QarOS is Y-up, so set `QAR_POSE_WORLD` to `zup`, which rotates the head poses of QarOS into the Z-up world. Set both before you start the example: the library reads each of them once for each process, the first time that it needs it.
+Two environment variables decide whether the Visualizer shows the scene correctly. With a QAROS runtime earlier than the verified version, the Visualizer read the depth texture as the window-space depth value, so set `QAR_DEPTH_ENCODING` to `ndc`; the default is metric distance, which that Visualizer showed as one flat colour. The scene is Z-up, like an RViz scene, while QarOS is Y-up, so set `QAR_POSE_WORLD` to `zup`, which rotates the head poses of QarOS into the Z-up world. Set both before you start the example: the library reads each of them once for each process, the first time that it needs it.
 
-You start the example yourself, and you look at the Visualizer window; nothing in this repository clicks or moves a window. The authors of qar_ogre_adapter have not run this example in a session with a Visualizer: the libraries ran in the live sessions of qar_rviz_plugin, and [What the live sessions showed](VERIFICATION.md#what-the-live-sessions-showed) says what those sessions showed.
+You start the example yourself, and you look at the Visualizer window; nothing in this repository clicks or moves a window. The authors of qar_ogre_adapter did not run this example in a session with a Visualizer: the libraries ran in the live sessions of qar_rviz_plugin, and [What the live sessions showed](VERIFICATION.md#what-the-live-sessions-showed) says what those sessions showed.
 
 ```powershell
 $env:PATH = "$env:ROS2_INSTALL_ROOT\opt\rviz_ogre_vendor\bin;$env:PATH"
 $env:QAR_DEPTH_ENCODING = 'ndc'
 $env:QAR_POSE_WORLD = 'zup'
-& .\build\vs2019-x64\examples\qaros_live_stream\RelWithDebInfo\qar_ogre_live_stream_example.exe --sdk-bin "$env:QAR_SDK_ROOT\bin" --seconds 60
+& .\build\vs2019-x64\examples\qaros_live_stream\RelWithDebInfo\qar_ogre_live_stream_example.exe --local --seconds 60
 ```
 
 The example stops by itself when the time is up and then shuts down in the order that the last section describes. The line that it prints when a stream opens has this form, with the peer identifier in hexadecimal:
@@ -195,7 +190,7 @@ example: stream closed for peer %s
 
 The example is a short program, and every step below is a region of its source, `examples/qaros_live_stream/main.cpp`, which is compiled with the repository. Your application replaces only the Ogre scene: the example takes its scene from the sample.
 
-**1. Link the render component.** The target `qar_ogre_adapter::render` pulls in `qar_ogre_streaming`, `qar_ar_core`, the component `capi` and Ogre. The component `capi` carries the compile definition `QAR_ENABLE_DYNAMIC_LOADING` as a usage requirement, because the program's one loader of the SDK library lives in it. A consumer of the installed package asks for the components with `find_package`; [API](API.md#linking-the-package) shows the command.
+**1. Link the render component.** The target `qar_ogre_adapter::render` pulls in `qar_ogre_streaming`, `qar_ar_core`, the component `capi` and Ogre. The component `capi` carries the compile definition `QAR_ENABLE_DYNAMIC_LOADING` as a usage requirement, because the program's one loader of the QAROS library lives in it. A consumer of the installed package asks for the components with `find_package`; [API](API.md#linking-the-package) shows the command.
 
 ```cmake
 target_link_libraries(qar_ogre_live_stream_example PRIVATE qar_ogre_adapter::render)
@@ -205,6 +200,7 @@ target_link_libraries(qar_ogre_live_stream_example PRIVATE qar_ogre_adapter::ren
 
 ```cpp
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
@@ -213,10 +209,13 @@ target_link_libraries(qar_ogre_live_stream_example PRIVATE qar_ogre_adapter::ren
 #include <thread>
 #include <vector>
 
+#include "qar_ar_core/common_name.hpp"
 #include "qar_ar_core/qar_streaming_c.hpp"
 #include "qar_ogre_streaming/ogre_qar_stereo_stream.hpp"
 #include "qar_ogre_streaming/ogre_qar_streaming_manager.hpp"
+#include "qar_qar_adapter/env_config.hpp"
 #include "qar_qar_adapter/qar_capi_render_sender_adapter.hpp"
+#include "qar_qar_adapter/qar_session_owner.hpp"
 #include "../ogre_standalone_streaming_sample/src/sample_scene.hpp"
 ```
 
@@ -232,24 +231,59 @@ struct MainThreadExecutor : qos::IRenderThreadExecutor
 };
 ```
 
-**4. Configure and open the session.** `QarCApiSenderFactory` is the sender factory of QarOS: constructing it runs the whole bootstrap and blocks until it is done, so a GUI application constructs it on a worker thread. The configuration names the SDK folder, the copy hook that is required in render-into mode, and the log settings of the QarOS library. The copy hook copies the textures that Ogre rendered into the textures that QarOS hands out; without it, QarOS shows a black scene.
+**4. Make the session owner and the factory.** `QarSessionOwner` joins the QAROS Hub: it loads the library, creates the runtime and joins as a local app or with a pairing code on a thread of its own, so constructing it does not wait for the Hub. Its configuration names the program, the display name that the Hub shows in its approval prompt, the mode and the log settings of the QarOS library. `QarCApiSenderFactory` is the sender factory of QarOS: it borrows the session of the owner, so it is made from the owner, and its configuration holds the copy hook that is required in render-into mode and the name scope that makes the names of the app volume stable. The copy hook copies the textures that Ogre rendered into the textures that QarOS hands out; without it, QarOS shows a black scene.
+
+```cpp
+const std::string host = host_name();
+qqa::SessionOwnerConfig owner_config;
+owner_config.program_tag = kProgramTag;
+owner_config.display_name = std::string("Ogre live stream example on ") + host;
+owner_config.mode = (!hub_text.empty() || forget) ? qqa::HubMode::kRemote : qqa::HubMode::kLocal;
+owner_config.remote = hub;
+owner_config.log_severity = QAR_LOG_SEVERITY_WARN;
+owner_config.enable_console_logging = false;
+auto owner = std::make_shared<qqa::QarSessionOwner>(owner_config);  // starts its own thread
+```
 
 ```cpp
 qqa::QarCApiSenderFactory::Config config;
-config.runtime_binaries_folder_path = sdk_bin;      // QarOS starts its launcher and Visualizer from here
-config.copy_hook = qqa::make_gl_copy_image_hook();  // copies our textures into the ones QarOS hands out
-config.log_severity = QAR_LOG_SEVERITY_WARN;
-config.enable_console_logging = false;
+config.copy_hook = qqa::make_gl_copy_image_hook();  // copies our textures into those of QAROS
+config.max_peers = 1;                               // one stream: the first target that comes up
+config.name_scope = qar_ar_core::make_name_scope(kProgramTag, "", host);
 ```
 
-**5. Check the connection.** A failure of the bootstrap is not thrown: `ready()` says whether it worked and `last_error()` says what failed. The app volume is the box that every stream is keyed to; QarOS rejects a stream without one.
+**5. Join and attach.** The owner starts with `connect()`, and `poll()` hands out its events. A console program may wait for the session with `wait_for_session`; a GUI program polls on every tick instead and never waits. The state `kNeedsCode` asks for a pairing code, which `submit_code()` takes. A failure is not thrown: the state of the owner tells whether the session runs, and `last_error()` of the factory says what failed in `attach()`. The app volume is the box that every stream is keyed to; QarOS rejects a stream without one.
 
 ```cpp
-auto factory = std::make_shared<qqa::QarCApiSenderFactory>(config);
+if (owner_config.mode == qqa::HubMode::kLocal) {
+  std::printf("example: joining the QAROS Hub of this PC; click Allow if QAROS asks\n");
+} else {
+  std::printf("example: joining the QAROS Hub at %s:%u\n", hub.host.c_str(),
+    static_cast<unsigned>(hub.port));
+}
+auto factory = std::make_shared<qqa::QarCApiSenderFactory>(owner, config);
+owner->connect();
+std::vector<qqa::SessionEvent> seen;
+// The approval prompt waits 120 s by default; the wait here is a little longer.
+qqa::SessionState state = qqa::wait_for_session(*owner, std::chrono::seconds(150), &seen);
+if (state == qqa::SessionState::kNeedsCode && !code.empty()) {
+  owner->submit_code(code, hub);
+  code.assign(code.size(), '\0');  // the code works once; do not keep it around
+  state = qqa::wait_for_session(*owner, std::chrono::seconds(60), &seen);
+}
+print_events(seen);
+if (state == qqa::SessionState::kNeedsCode) {
+  std::printf("example: not paired with that Hub; run with --hub HOST:PORT --code CODE\n");
+  return 1;
+}
+if (state != qqa::SessionState::kRunning) {
+  std::printf("example: QAROS connect failed (state %d)\n", static_cast<int>(state));
+  return 1;
+}
 QarAppVolumeId volume{};
-if (!factory->ready() || !factory->app_volume(volume)) {
-  std::printf("example: QarOS connect failed: %s\n",
-    factory->ready() ? "no app volume (see the lines above)" : factory->last_error().c_str());
+if (!factory->attach() || !factory->app_volume(volume)) {
+  std::printf("example: QAROS connect failed: %s\n",
+    factory->attached() ? "no app volume (see the lines above)" : factory->last_error().c_str());
   return 1;
 }
 std::printf("example: connected to QarOS: ready=1 app_volume=");
@@ -274,6 +308,9 @@ manager->set_streaming_active(true);
 ```cpp
 const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
 while (std::chrono::steady_clock::now() < deadline) {
+  std::vector<qqa::SessionEvent> events;  // the owner's news: a lost Hub, a target that went
+  owner->poll(events);
+  print_events(events);
   factory->capture_gl_context();  // latch the GL context that is current on this thread
   std::vector<QarPeerId> requested;
   factory->poll_new_peer_requests(requested);
@@ -303,7 +340,7 @@ while (std::chrono::steady_clock::now() < deadline) {
 }
 ```
 
-**8. Close streams that QarOS closed.** `poll_closed_peers()` lists the peers whose stream QarOS reported closed. Destroy the stream, then tell the factory to forget the peer; that frees its place under the limit on concurrent peers, so a client that comes back is admitted again.
+**8. Close streams that QarOS closed.** `poll_closed_peers()` lists the peers whose stream QarOS reported closed. Destroy the stream, then tell the factory to forget the peer; that frees its place under the limit on concurrent peers, so a target that comes back gets a stream again.
 
 ```cpp
 std::vector<QarPeerId> closed;
@@ -315,19 +352,21 @@ for (const QarPeerId & id : closed) {
 }
 ```
 
-**9. Shut down in this order.** The manager and its streams go first, because their senders belong to the QarOS session; then the factory, which destroys the session, the runtime and the library; then Ogre.
+**9. Shut down in this order.** The manager and its streams go first, because their senders belong to the QarOS session; then the factory lets go of the app volume with `detach()`; then the owner, which destroys the session, the runtime and the library; then Ogre.
 
 ```cpp
-manager.reset();   // the streams and their senders go first,
-factory.reset();   // then the QarOS session, runtime and library,
-scene.shutdown();  // then Ogre.
+manager.reset();    // the streams and their senders go first,
+factory->detach();  // then the factory lets go of the app volume,
+factory.reset();
+owner.reset();      // then the QAROS session, runtime and library,
+scene.shutdown();   // then Ogre.
 ```
 
 **Environment settings.** The conversion of head poses and the depth encoding are read from the environment, not from the configuration: `QAR_DEPTH_ENCODING=ndc` for the Visualizer, and `QAR_POSE_WORLD=zup` for content that is Z-up. [Configuration](CONFIGURATION.md) lists every variable that the library reads.
 
 ## Headless checks and what needs the real runtime
 
-What you can check without QarOS is limited to three things: the headless sample, which runs the whole Ogre side with synthetic peers; the unit tests; and the layering guard. There is no stand-in for QarOS in this repository: the unit tests cover the parts of the adapter that need no session, and everything that talks to QarOS needs the real runtime: `--connect-only` checks the session, and the streaming run is the check of the frames, which the authors of qar_ogre_adapter have not run with a Visualizer. [Testing](TESTING.md#what-the-automated-tests-do-not-cover) lists what the automated tests leave out.
+What you can check without QarOS is limited to three things: the headless sample, which runs the whole Ogre side with synthetic peers; the unit tests; and the layering guard. There is no stand-in for QarOS in this repository: the unit tests cover the parts of the adapter that need no session, and everything that talks to QarOS needs the real runtime: `--connect-only` checks the session, and the streaming run is the check of the frames, which the authors of qar_ogre_adapter did not run with a Visualizer. [Testing](TESTING.md#what-the-automated-tests-do-not-cover) lists what the automated tests leave out.
 
 ## Next steps
 

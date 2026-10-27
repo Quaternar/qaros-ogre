@@ -19,6 +19,7 @@
 #include "qar_ogre_streaming/render_thread_executor.hpp"
 #include "qar_qar_adapter/qar_capi_render_sender_adapter.hpp"
 #include "qar_qar_adapter/qar_capi_session_owner.hpp"
+#include "qar_qar_adapter/qar_session_owner.hpp"
 
 // ar_core_snippets.cpp
 void snippet_panel_seam(qar_ar_core::IQarPanelSenderFactory * factory, const std::uint8_t * pixels);
@@ -38,8 +39,10 @@ void snippet_pose_conversion(const QarPose & pose, const QarFov & fov);
 void snippet_scene_lighting(Ogre::SceneManager * scene, qar_ogre_streaming::OgreQarStreamingConfig & config);
 
 // adapter_snippets.cpp
-void snippet_factory_config(const std::string & sdk_bin);
-void snippet_factory_use(qar_qar_adapter::QarCApiSenderFactory * factory);
+void snippet_factory_config(
+  const std::shared_ptr<qar_qar_adapter::QarSessionOwner> & owner, const std::string & host);
+void snippet_factory_use(
+  qar_qar_adapter::QarSessionOwner * owner, qar_qar_adapter::QarCApiSenderFactory * factory);
 void snippet_panels(qar_qar_adapter::IQarSessionOwner * owner);
 void snippet_url_panels(qar_qar_adapter::IQarSessionOwner * owner);
 void snippet_gestures(qar_qar_adapter::QarCApiSenderFactory * factory);
@@ -51,7 +54,7 @@ static const QarPose kPose{};
 static const QarFov kFov{};
 static const QarVector3 kEye{};
 static const QarDeviceHandsWithJoints kHands{};
-static const std::string kSdkBin;
+static const std::string kHost;
 static qar_ogre_streaming::OgreQarStreamingConfig kConfig;
 
 int main(int argc, char** argv) {
@@ -68,8 +71,8 @@ int main(int argc, char** argv) {
     snippet_pose_conversion(kPose, kFov);
     snippet_scene_lighting(nullptr, kConfig);
 
-    snippet_factory_config(kSdkBin);
-    snippet_factory_use(nullptr);
+    snippet_factory_config(nullptr, kHost);
+    snippet_factory_use(nullptr, nullptr);
     snippet_panels(nullptr);
     snippet_url_panels(nullptr);
     snippet_gestures(nullptr);
