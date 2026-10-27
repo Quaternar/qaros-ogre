@@ -3,7 +3,7 @@
 #
 # qar_ogre_adapter package configuration.
 #   find_package(qar_ogre_adapter 0.1.0 CONFIG REQUIRED COMPONENTS <component>...)
-# Components and targets: qar_ar_core qar_ogre_streaming capi render panels url gestures
+# Components and targets: qar_ar_core qar_ogre_streaming capi session render panels url gestures
 # -> qar_ogre_adapter::<component>. Ogre (rviz_ogre_vendor from the ROS 2 Humble distribution)
 # is a dependency of qar_ogre_streaming and render only; it is searched on CMAKE_PREFIX_PATH and
 # in $ENV{ROS2_INSTALL_ROOT}. Without COMPONENTS all components are requested.
@@ -11,7 +11,7 @@
 
 include(CMakeFindDependencyMacro)
 
-set(_qar_ogre_adapter_all qar_ar_core qar_ogre_streaming capi render panels url gestures)
+set(_qar_ogre_adapter_all qar_ar_core qar_ogre_streaming capi session render panels url gestures)
 if(NOT qar_ogre_adapter_FIND_COMPONENTS)
   set(qar_ogre_adapter_FIND_COMPONENTS ${_qar_ogre_adapter_all})
 endif()

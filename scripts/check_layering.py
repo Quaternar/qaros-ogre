@@ -84,14 +84,15 @@ EXAMPLE_POLICY = {
     'ogre_standalone_streaming_sample': dict(project={'qar_ogre_streaming', 'qar_ar_core'},
                                              prod={'STD', 'OGRE', 'STB'}, test=set(), platform=set(), adapter=set()),
     'qaros_live_stream': dict(project={'qar_ogre_streaming', 'qar_ar_core', 'qar_qar_adapter'},
-                              prod={'STD', 'OGRE', 'STB'}, test=set(), platform=set(), adapter={'render'}),
+                              prod={'STD', 'OGRE', 'STB'}, test=set(), platform=set(), adapter={'render', 'session'}),
     'qt_panel_example': dict(project={'qar_qt_streaming', 'qar_ar_core', 'qar_qar_adapter'},
-                             prod={'STD', 'QT'}, test=set(), platform=set(), adapter={'render', 'panels'}),
+                             prod={'STD', 'QT'}, test=set(), platform=set(), adapter={'session', 'panels'}),
     'web_panel_example': dict(project={'qar_ui_model', 'qar_web_panels', 'qar_ar_core', 'qar_qar_adapter'},
-                              prod={'STD', 'QT'}, test=set(), platform=set(), adapter={'render', 'url'}),
+                              prod={'STD', 'QT'}, test=set(), platform=set(), adapter={'render', 'session', 'url'}),
     'ros_topic_panel_example': dict(project={'qar_ui_model', 'qar_web_panels', 'qar_ros_ui', 'qar_ar_core',
                                              'qar_qar_adapter'},
-                                    prod={'STD', 'QT', 'ROS'}, test=set(), platform=set(), adapter={'render', 'url'}),
+                                    prod={'STD', 'QT', 'ROS'}, test=set(), platform=set(),
+                                    adapter={'render', 'session', 'url'}),
 }
 
 # (module, target project module) -> the only headers that edge may use.
@@ -110,9 +111,15 @@ ADAPTER_COMPONENT = {
     'qar_capi_loader.cpp': 'capi', 'qar_capi_input_slots.hpp': 'capi', 'qar_capi_input_slots.cpp': 'capi',
     'qar_capi_session_owner.hpp': 'capi',
     'log_time.hpp': 'capi', 'panel_state_log.hpp': 'capi', 'frame_stall_probe.hpp': 'capi',
+    'gui_call_guard.hpp': 'capi', 'gui_call_guard.cpp': 'capi', 'panel_state_guard.hpp': 'capi',
     'qar_capi_render_sender_adapter.hpp': 'render', 'qar_capi_render_sender_adapter.cpp': 'render',
-    'render_timing.hpp': 'render', 'env_config.hpp': 'render', 'env_config.cpp': 'render',
+    'render_timing.hpp': 'render',
     'geo_anchor.hpp': 'render', 'geo_anchor.cpp': 'render',
+    'qar_session_owner.hpp': 'session', 'qar_session_owner.cpp': 'session',
+    'identity_store.hpp': 'session', 'identity_store.cpp': 'session',
+    'onboarding_status.hpp': 'session', 'onboarding_status.cpp': 'session',
+    'target_rule.hpp': 'session', 'env_config.hpp': 'session', 'env_config.cpp': 'session',
+    'fake_qar_api.hpp': 'test', 'session_owner_harness.hpp': 'test',
     'qar_capi_panel_sender_adapter.hpp': 'panels', 'qar_capi_panel_sender_adapter.cpp': 'panels',
     'qar_capi_panel_input_source.hpp': 'panels', 'qar_capi_panel_input_source.cpp': 'panels',
     'qar_capi_url_panel_adapter.hpp': 'url', 'qar_capi_url_panel_adapter.cpp': 'url',
@@ -121,12 +128,13 @@ ADAPTER_COMPONENT = {
 }
 COMPONENT_MAY_INCLUDE = {
     'capi': {'capi'},
-    'render': {'capi', 'render'},
+    'session': {'capi', 'session'},
+    'render': {'capi', 'session', 'render'},
     'panels': {'capi', 'panels', 'input_private'},
     'url': {'capi', 'url'},
     'gestures': {'capi', 'gestures', 'input_private'},
     'input_private': {'capi'},
-    'test': {'capi', 'render'},
+    'test': {'capi', 'session', 'render', 'panels', 'url', 'test'},
 }
 # Only these components may use the Ogre library's seam headers (EDGE_ONLY above).
 OGRE_SEAM_COMPONENTS = {'render'}
@@ -349,7 +357,7 @@ def self_test():
             '#include "qar_qar_adapter/qar_capi_render_sender_adapter.hpp"\n')
         put('examples/qt_panel_example/main.cpp',
             '#include <QWidget>\n#include "qar_qt_streaming/x.hpp"\n#include "qar_qar_adapter/qar_capi_panel_sender_adapter.hpp"\n'
-            '#include "qar_qar_adapter/qar_capi_render_sender_adapter.hpp"\n#include "qar_qar_adapter/qar_capi_url_panel_adapter.hpp"\n')
+            '#include "qar_qar_adapter/qar_session_owner.hpp"\n#include "qar_qar_adapter/qar_capi_url_panel_adapter.hpp"\n')
         put('examples/stray.cpp', '#include <QWidget>\n')
         expect = {
             'qar_ar_core': ['[L1] QT header <QWidget>', '[L2] qar_ar_core must not include qar_qt_streaming/x.hpp',

@@ -218,9 +218,9 @@ struct SpatialPoint
   std::string error;
   /// The ONE refusal that means "the operator aimed at empty space": an
   /// @ref PickTargetKind::ActionPoint pick whose reported point was not a scene
-  /// hit. Per the header of the drop after the minimum drop the action point IS the
-  /// start point -- the hand -- when the runtime intersected nothing, so publishing
-  /// it would put the marker on the operator's own hand. A flag rather than a string
+  /// hit. Per the installed runtime's header the action point IS the start point
+  /// -- the hand -- when the runtime intersected nothing, so publishing it would
+  /// put the marker on the operator's own hand. A flag rather than a string
   /// match so the controller can count it on its own (qar_rviz_plugin's
   /// `SpatialInputStats::refused_no_intersection`).
   bool refused_no_intersection = false;
@@ -281,9 +281,9 @@ struct SpatialPoint
 /// came from a real aim rather than from a mouse, and it never changes where a
 /// plane target puts the answer, nor what @ref PickTargetKind::Depth publishes.
 ///
-/// **The one exception - @ref PickTargetKind::ActionPoint GATES on it.** The header
-/// of the drop after the minimum drop defines the action point as "the intersection
-/// the gesture acts on, or the start point when nothing was intersected", and the
+/// **The one exception - @ref PickTargetKind::ActionPoint GATES on it.** The
+/// installed runtime's header defines the action point as "the intersection the
+/// gesture acts on, or the start point when nothing was intersected", and the
 /// start point is the hand. So an action point that is NOT a scene hit is the
 /// operator's own hand, and publishing it verbatim would put the marker on the
 /// hand. Such a pick comes back `valid == false`,

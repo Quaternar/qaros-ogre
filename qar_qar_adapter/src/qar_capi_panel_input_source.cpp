@@ -4,6 +4,7 @@
 #include "qar_qar_adapter/qar_capi_panel_input_source.hpp"
 
 #include "qar_capi_input_internal.hpp"
+#include "qar_qar_adapter/gui_call_guard.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -17,7 +18,7 @@ namespace qar_qar_adapter
 namespace
 {
 
-/// Monotonic seconds. Panel gestures DO carry a timestamp now
+/// Monotonic seconds. Panel gestures DO carry a timestamp
 /// (qar_gui_panel_gesture_get_timestamp), but it is the recogniser's own clock
 /// and the header is explicit that it is "comparable only within one source
 /// peer id" — not across peers, and not against anything of ours. Downstream
@@ -77,7 +78,7 @@ uv_from_content_pixels(
     return false;
   }
   // Documented as already clamped to [0, w-1] x [0, h-1], and SIGNED "for
-  // headroom" (2026-09-21 SDK). Clamping anyway is not distrust of the runtime,
+  // headroom". Clamping anyway is not distrust of the runtime,
   // it is the panel having been resized under a subscription that was made for
   // the old size: a stale coordinate must land on the panel's edge, never past
   // the end of a widget — and a negative one must land on the near edge, not
@@ -99,9 +100,9 @@ std::uint32_t
 panel_pointer_id_for(const QarPeerId & peer, qar_ar_core::PointerHand hand)
 {
   // Two hands of one peer are two pointers, and two peers' hands are four --
-  // each with its own grab and its own double-click memory. The 2026-09-21 SDK
-  // is the first to report a hand; without one every AR contact in the room
-  // shares kPanelPointerId and a second operator could steal a first one's press.
+  // each with its own grab and its own double-click memory. Without a hand
+  // every AR contact in the room shares kPanelPointerId and a second operator
+  // could steal a first one's press.
   std::uint32_t hash = 2166136261u;
   const auto * bytes = reinterpret_cast<const unsigned char *>(&peer);
   for (std::size_t i = 0; i < sizeof(QarPeerId); ++i) {
@@ -128,21 +129,35 @@ QarCApiPanelInputSource::~QarCApiPanelInputSource()
   unsubscribe_all();
 }
 
+std::string
+QarCApiPanelInputSource::last_error() const
+{
+  const std::lock_guard<std::mutex> lock(mutex_);
+  return last_error_;
+}
+
+void
+QarCApiPanelInputSource::set_last_error(std::string text)
+{
+  const std::lock_guard<std::mutex> lock(mutex_);
+  last_error_ = std::move(text);
+}
+
 bool
 QarCApiPanelInputSource::subscribe_panel(
   const std::string & panel_key, const QarGuiPanelId & id, std::uint32_t content_width,
   std::uint32_t content_height, const std::string & our_stream_id)
 {
   if (session_ == nullptr) {
-    last_error_ = "no QarSession (is QAR streaming started?)";
+    set_last_error("no QarSession (is QAR streaming started?)");
     return false;
   }
   if (panel_key.empty()) {
-    last_error_ = "panel input needs a panel key to report samples against";
+    set_last_error("panel input needs a panel key to report samples against");
     return false;
   }
   if (content_width == 0 || content_height == 0) {
-    last_error_ = "panel input needs a non-zero content size to normalise against";
+    set_last_error("panel input needs a non-zero content size to normalise against");
     return false;
   }
 
@@ -157,7 +172,7 @@ QarCApiPanelInputSource::subscribe_panel(
     // A minted slot is never freed, so a half-made set is simply disowned.
     detail::retire_slot(subscription.gesture_slot);
     detail::retire_slot(subscription.state_slot);
-    last_error_ = "panel input slot arena is full (too many subscriptions this process)";
+    set_last_error("panel input slot arena is full (too many subscriptions this process)");
     return false;
   }
   for (detail::PointerSlot * slot : {subscription.gesture_slot, subscription.state_slot}) {
@@ -168,9 +183,12 @@ QarCApiPanelInputSource::subscribe_panel(
   }
 
   // One token per subscription: cancelling one must not silence the other.
-  QarResult r = qar_cancel_token_create(&subscription.gesture_token);
-  if (qar_result_is_error(r)) {
-    last_error_ = input_result_error("qar_cancel_token_create", r);
+  QarResult r = QAR_CALL(qar_cancel_token_create, &subscription.gesture_token);
+  if (qar_result_is_error(r) || subscription.gesture_token == nullptr) {
+    set_last_error(qar_result_is_error(r) ?
+      input_result_error("qar_cancel_token_create", r) :
+      std::string("qar_cancel_token_create gave no token"));
+    subscription.gesture_token = nullptr;
     retire(subscription);
     return false;
   }
@@ -180,11 +198,12 @@ QarCApiPanelInputSource::subscribe_panel(
   // hover and the drag that grows out of the same contact keep the order the
   // producer published them in." Order between a hover Ended and a drag Started
   // from the SAME contact is exactly what the state machine's grab depends on.
-  r = qar_gui_panels_subscribe_all_gesture_events(
-    session_, &id, &QarCApiPanelInputSource::on_gesture_event, subscription.gesture_slot,
-    subscription.gesture_token);
+  r = QAR_CALL(
+      qar_gui_panels_subscribe_all_gesture_events, session_, &id,
+      &QarCApiPanelInputSource::on_gesture_event, subscription.gesture_slot,
+      subscription.gesture_token);
   if (qar_result_is_error(r)) {
-    last_error_ = input_result_error("qar_gui_panels_subscribe_all_gesture_events", r);
+    set_last_error(input_result_error("qar_gui_panels_subscribe_all_gesture_events", r));
     retire(subscription);
     return false;
   }
@@ -194,9 +213,13 @@ QarCApiPanelInputSource::subscribe_panel(
   // slot discipline: the callback arrives on a runtime thread, and the only safe
   // way to survive a retirement racing it is the disown-under-the-slot-mutex
   // dance the pointer callbacks already do.
-  r = qar_cancel_token_create(&subscription.state_token);
-  if (qar_result_is_error(r)) {
-    last_error_ = input_result_error("qar_cancel_token_create", r);
+  // Required for the panel's updates: the token owns the subscription.
+  r = QAR_CALL(qar_cancel_token_create, &subscription.state_token);
+  if (qar_result_is_error(r) || subscription.state_token == nullptr) {
+    set_last_error(qar_result_is_error(r) ?
+      input_result_error("qar_cancel_token_create", r) :
+      std::string("qar_cancel_token_create gave no token"));
+    subscription.state_token = nullptr;
     retire(subscription);
     return false;
   }
@@ -206,11 +229,11 @@ QarCApiPanelInputSource::subscribe_panel(
     const std::lock_guard<std::mutex> lock(mutex_);
     record_log_.begin(panel_key, our_stream_id);
   }
-  r = qar_gui_panels_subscribe_panel_updates(
-    session_, &id, &QarCApiPanelInputSource::on_panel_update, subscription.state_slot,
-    subscription.state_token);
+  r = QAR_CALL(
+      qar_gui_panels_subscribe_panel_updates, session_, &id,
+      &QarCApiPanelInputSource::on_panel_update, subscription.state_slot, subscription.state_token);
   if (qar_result_is_error(r)) {
-    last_error_ = input_result_error("qar_gui_panels_subscribe_panel_updates", r);
+    set_last_error(input_result_error("qar_gui_panels_subscribe_panel_updates", r));
     {
       const std::lock_guard<std::mutex> lock(mutex_);
       record_log_.end(panel_key);
@@ -226,7 +249,7 @@ QarCApiPanelInputSource::subscribe_panel(
     // new widget) starts its close history afresh.
     closed_panels_.erase(panel_key);
   }
-  last_error_.clear();
+  set_last_error(std::string());
   return true;
 }
 
@@ -279,19 +302,19 @@ QarCApiPanelInputSource::retire(PanelSubscription & subscription)
   // anything already in flight finds nothing to touch. Only then destroy the
   // token handles.
   if (subscription.gesture_token != nullptr) {
-    qar_cancel_token_cancel(subscription.gesture_token);
+    QAR_CALL(qar_cancel_token_cancel, subscription.gesture_token);
   }
   if (subscription.state_token != nullptr) {
-    qar_cancel_token_cancel(subscription.state_token);
+    QAR_CALL(qar_cancel_token_cancel, subscription.state_token);
   }
   detail::retire_slot(subscription.gesture_slot);
   detail::retire_slot(subscription.state_slot);
   if (subscription.gesture_token != nullptr) {
-    qar_cancel_token_handle_destroy(subscription.gesture_token);
+    QAR_CALL(qar_cancel_token_handle_destroy, subscription.gesture_token);
     subscription.gesture_token = nullptr;
   }
   if (subscription.state_token != nullptr) {
-    qar_cancel_token_handle_destroy(subscription.state_token);
+    QAR_CALL(qar_cancel_token_handle_destroy, subscription.state_token);
     subscription.state_token = nullptr;
   }
   subscription.gesture_slot = nullptr;
@@ -313,7 +336,7 @@ QarCApiPanelInputSource::on_panel_update(QarGuiPanel * handle, void * user_state
     return;  // retired; the owner may be long gone
   }
   QarGuiPanelState state = QAR_GUI_PANEL_STATE_VISIBLE;
-  const QarResult r = qar_gui_panel_get_state(handle, &state);
+  const QarResult r = QAR_CALL(qar_gui_panel_get_state, handle, &state);
 
   // What the runtime says about the panel, whatever its state: read here, because the handle is
   // valid only during this call, and queued for the render thread to print. Three getters and a
@@ -322,12 +345,13 @@ QarCApiPanelInputSource::on_panel_update(QarGuiPanel * handle, void * user_state
   record.state_known = !qar_result_is_error(r);
   record.state = state;
   QarStreamId stream = qar_stream_id_default();
-  record.stream_known = !qar_result_is_error(qar_gui_panel_get_content_stream_id(handle, &stream));
+  record.stream_known =
+    !qar_result_is_error(QAR_CALL(qar_gui_panel_get_content_stream_id, handle, &stream));
   if (record.stream_known) {
     std::memcpy(record.stream_id, stream.data, sizeof(record.stream_id));
   }
   QarGuiPanelSize size{};
-  record.size_known = !qar_result_is_error(qar_gui_panel_get_size(handle, &size));
+  record.size_known = !qar_result_is_error(QAR_CALL(qar_gui_panel_get_size, handle, &size));
   if (record.size_known) {
     record.width_meters = size.width_meters;
     record.height_meters = size.height_meters;
@@ -395,21 +419,22 @@ QarCApiPanelInputSource::offer(QarGuiPanelGesture * gesture, const detail::Point
   QarGesturePhase phase = QAR_GESTURE_PHASE_INSTANT;
   QarGuiPanelPoint position{0, 0};
   QarGuiPanelPoint start_position{0, 0};
-  QarHand raw_hand = QAR_HAND_RIGHT;
+  QarHandedness raw_hand = QAR_HANDEDNESS_UNSPECIFIED;
   bool has_hand = false;
   std::uint8_t tap_count = 0;
 
   bool readable = !qar_result_is_error(
-    qar_gui_panel_gesture_get_lifecycle(gesture, &peer, &gesture_id));
+    QAR_CALL(qar_gui_panel_gesture_get_lifecycle, gesture, &peer, &gesture_id));
   readable = readable && !qar_result_is_error(
-    qar_gui_panel_gesture_get_classification(gesture, &kind, &phase));
+    QAR_CALL(qar_gui_panel_gesture_get_classification, gesture, &kind, &phase));
   readable = readable && !qar_result_is_error(
-    qar_gui_panel_gesture_get_positions(gesture, &position, &start_position));
+    QAR_CALL(qar_gui_panel_gesture_get_positions, gesture, &position, &start_position));
   if (readable) {
     // Diagnostic only, and documented as such, so a runtime that cannot supply
-    // it must not cost us the whole event.
-    has_hand = !qar_result_is_error(qar_gui_panel_gesture_get_hand(gesture, &raw_hand));
-    if (qar_result_is_error(qar_gui_panel_gesture_get_tap_count(gesture, &tap_count))) {
+    // it must not cost us the whole event. A value of UNSPECIFIED (no hand) maps to Unknown.
+    has_hand = !qar_result_is_error(
+      QAR_CALL(qar_gui_panel_gesture_get_handedness, gesture, &raw_hand));
+    if (qar_result_is_error(QAR_CALL(qar_gui_panel_gesture_get_tap_count, gesture, &tap_count))) {
       tap_count = 0;
     }
   }
@@ -693,7 +718,7 @@ QarCApiPanelInputSource::drain(std::vector<qar_ar_core::PanelPointerSample> & ou
   flush_runtime_records();
 
   // The liveness backstop. A hover that ENDS says so (HOVER has a real
-  // lifecycle since the 2026-09-21 SDK), so this is not the ordinary way a
+  // lifecycle), so this is not the ordinary way a
   // widget gets its Leave -- it is what happens when the producer stops talking
   // mid-gesture, which the header tells us to treat as a cancel after three
   // 250 ms heartbeats.

@@ -4,8 +4,11 @@
 #ifndef QAR_OGRE_STREAMING__OGRE_QAR_STREAMING_MANAGER_HPP_
 #define QAR_OGRE_STREAMING__OGRE_QAR_STREAMING_MANAGER_HPP_
 
+#include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <string>
 #include <vector>
 
 #include "qar_ogre_streaming/clock.hpp"
@@ -115,10 +118,19 @@ public:
   /// @return AlreadyExists if a stream for that peer exists; InvalidArgument if
   ///         @p config is invalid; InvalidState if the sender factory returns
   ///         null; otherwise Ok.
+  ///
+  /// A caller that retries after InvalidState (a sender is made asynchronously)
+  /// gets two diagnostics per wait, not one per retry: an Error line for the first
+  /// null, and one line with the number of nulls and the duration in ms when the
+  /// wait ends. It ends with Info when the sender came, and with a Warning when
+  /// destroy_stream() for that peer or set_sender_factory() ends it first. The
+  /// destructor drops an open wait without a line, because it never calls the
+  /// diagnostics sink. Every null still sets the last error and returns InvalidState.
   Result create_stream(const StereoStreamConfig & config);
 
-  /// @brief Destroy the stream for @p peer_id.
-  /// @return NotFound if no such stream; otherwise Ok.
+  /// @brief Destroy the stream for @p peer_id, or end the wait for its sender.
+  /// @return NotFound if no such stream (also when the call only ended a wait for its
+  ///         sender); otherwise Ok.
   Result destroy_stream(const QarPeerId & peer_id);
 
   bool has_stream(const QarPeerId & peer_id) const;
@@ -143,8 +155,26 @@ private:
     const std::string & message,
     const std::string & peer_id_hex = {});
 
+  /// A peer whose sender factory returned null and that is still waited for.
+  struct SenderWait
+  {
+    double started_s = 0.0;
+    uint64_t nulls = 0;
+  };
+
+  /// Close the wait of @p peer_id if one is open and emit its end line: Info when
+  /// @p got_sender, otherwise a Warning that names @p reason.
+  void end_sender_wait(const QarPeerId & peer_id, bool got_sender, const char * reason);
+  /// Close every open wait with a Warning that names @p reason.
+  void end_all_sender_waits(const char * reason);
+
   OgreQarStreamingConfig config_;
   std::unique_ptr<OgreQarRenderScheduler> scheduler_;
+  std::shared_ptr<IClock> clock_;
+
+  // Guards sender_waits_ only; a diagnostics sink is never called while it is held.
+  std::mutex sender_waits_mutex_;
+  std::map<QarPeerId, SenderWait, PeerIdLess> sender_waits_;
 
   std::map<QarPeerId, std::unique_ptr<OgreQarStereoStream>, PeerIdLess> streams_;
 

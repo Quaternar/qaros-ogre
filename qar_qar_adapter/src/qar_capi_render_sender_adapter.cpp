@@ -4,6 +4,7 @@
 #include "qar_qar_adapter/qar_capi_render_sender_adapter.hpp"
 
 #include "qar_qar_adapter/env_config.hpp"
+#include "qar_qar_adapter/gui_call_guard.hpp"
 #include "qar_qar_adapter/geo_anchor.hpp"
 #include "qar_qar_adapter/log_time.hpp"
 #include "qar_qar_adapter/render_timing.hpp"
@@ -19,8 +20,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
-#include <random>
+#include <filesystem>
+#include <functional>
+#include <system_error>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "qar_ogre_streaming/types.hpp"  // peer_id_to_hex (peer-id tracing)
@@ -39,11 +43,11 @@ namespace
 {
 
 // Trace QAR peer ids (gated by QAR_ADAPTER_TRACE) so the log shows which id
-// the invite returns, which the subscription surfaces, and which we create the
-// render sender with — the way to diagnose a "target app id do not match" rejection.
+// the subscription surfaces and which we create the render sender with — the way
+// to diagnose a "target app id do not match" rejection.
 void trace_peer_id(const char * what, const QarPeerId & id)
 {
-  if (std::getenv("QAR_ADAPTER_TRACE") == nullptr) { return; }
+  if (!environment_is_set("QAR_ADAPTER_TRACE")) { return; }
   std::fprintf(stderr, "[qar-adapter] %s peer_id=%s\n", what,
     qar_ogre_streaming::peer_id_to_hex(id).c_str());
   std::fflush(stderr);
@@ -130,30 +134,9 @@ void log_gesture_configuration(
 // count, call X hard-blocks the GUI thread; if the count climbs fast, it's saturation.
 bool adapter_trace_on()
 {
-  static const bool on = (std::getenv("QAR_ADAPTER_TRACE") != nullptr);
+  static const bool on = environment_is_set("QAR_ADAPTER_TRACE");
   return on;
 }
-/// Mint a random RFC-4122 v4 UUID in canonical 8-4-4-4-12 text form, so that
-/// each Visualizer invite gets a distinct payload; see Config::visualizer_conn_suffix.
-std::string make_random_uuid()
-{
-  static std::mt19937_64 rng{std::random_device{}()};
-  std::uint64_t hi = rng();
-  std::uint64_t lo = rng();
-  // Stamp version 4 and the RFC-4122 variant so the value is a well-formed UUID
-  // rather than 16 arbitrary bytes, in case the consumer validates it.
-  hi = (hi & 0xFFFFFFFFFFFF0FFFULL) | 0x0000000000004000ULL;
-  lo = (lo & 0x3FFFFFFFFFFFFFFFULL) | 0x8000000000000000ULL;
-  char buf[37];
-  std::snprintf(buf, sizeof(buf), "%08x-%04x-%04x-%04x-%012llx",
-    static_cast<unsigned>(hi >> 32),
-    static_cast<unsigned>((hi >> 16) & 0xFFFF),
-    static_cast<unsigned>(hi & 0xFFFF),
-    static_cast<unsigned>(lo >> 48),
-    static_cast<unsigned long long>(lo & 0xFFFFFFFFFFFFULL));
-  return std::string(buf);
-}
-
 /// Trace every frame up to this count, where a startup hang would show up.
 constexpr unsigned long kTraceFullFrames = 150;
 /// After that, keep one sampled frame per this many as a liveness breadcrumb.
@@ -162,8 +145,16 @@ constexpr unsigned long kTraceSampleEvery = 300;
 /// Set QAR_ADAPTER_TRACE_ALL to defeat the sampling and trace every frame.
 bool adapter_trace_all()
 {
-  static const bool on = (std::getenv("QAR_ADAPTER_TRACE_ALL") != nullptr);
+  static const bool on = environment_is_set("QAR_ADAPTER_TRACE_ALL");
   return on;
+}
+
+// QAR_ADAPTER_PRIME: one tick per frame instead of two (default on).
+bool prime_enabled_from_environment()
+{
+  const std::string value = read_environment("QAR_ADAPTER_PRIME");
+  return qar_qar_adapter::parse_bool_env(
+    environment_is_set("QAR_ADAPTER_PRIME") ? value.c_str() : nullptr, true);
 }
 
 void trace_submit(unsigned long n, const char * msg)
@@ -227,49 +218,6 @@ std::string report_result(const char * what, const QarResult & r)
   return text;
 }
 
-// The SDK-free LogSeverity (env_config.hpp) must stay in lock-step with the vendored
-// header's QarLogSeverity: the init struct takes the latter, QAR_LOG_SEVERITY and the
-// launcher speak the former's names.
-static_assert(static_cast<int>(LogSeverity::kTrace) == QAR_LOG_SEVERITY_TRACE, "enum drift");
-static_assert(static_cast<int>(LogSeverity::kDebug) == QAR_LOG_SEVERITY_DEBUG, "enum drift");
-static_assert(static_cast<int>(LogSeverity::kInfo) == QAR_LOG_SEVERITY_INFO, "enum drift");
-static_assert(static_cast<int>(LogSeverity::kWarn) == QAR_LOG_SEVERITY_WARN, "enum drift");
-static_assert(static_cast<int>(LogSeverity::kError) == QAR_LOG_SEVERITY_ERROR, "enum drift");
-static_assert(static_cast<int>(LogSeverity::kFatal) == QAR_LOG_SEVERITY_FATAL, "enum drift");
-
-/// Make the QAR_LOG_SEVERITY environment variable say what `QarLibraryInit.log_severity`
-/// says. The vendor library reads the VARIABLE in preference to the init struct (see
-/// resolve_library_logging()): a QAR_LOG_SEVERITY=trace left in the shell makes the
-/// in-RViz library write hundreds of thousands of TRACE lines although the panel passed
-/// WARN. Overwriting it also hands the same severity to the processes the runtime
-/// spawns (launcher, mixer, Visualizer), which inherit RViz's environment.
-///
-/// `_putenv_s`, not SetEnvironmentVariable: the library reads the variable through the C
-/// runtime's environment table, which only `_putenv` keeps in step (a bare Win32 write
-/// has no effect).
-///
-/// @return the value the variable had before ("" if it was unset).
-std::string export_library_log_severity(LogSeverity severity)
-{
-  std::string previous;
-#ifdef _WIN32
-  // _dupenv_s reads the same C-runtime table the vendor library does (and, unlike getenv,
-  // does not trip C4996).
-  char * before = nullptr;
-  std::size_t length = 0;
-  if (_dupenv_s(&before, &length, "QAR_LOG_SEVERITY") == 0 && before != nullptr) {
-    previous = before;
-    std::free(before);
-  }
-  _putenv_s("QAR_LOG_SEVERITY", log_severity_name(severity));
-#else
-  const char * before = std::getenv("QAR_LOG_SEVERITY");
-  previous = (before != nullptr) ? before : "";
-  setenv("QAR_LOG_SEVERITY", log_severity_name(severity), 1);
-#endif
-  return previous;
-}
-
 #ifdef _WIN32
 /// WGL entry points resolved from opengl32.dll at run time, so this adapter keeps NO
 /// link-time dependency on opengl32.lib (the plugin must load even where the SDK's GL
@@ -314,62 +262,6 @@ const WglApi & wgl()
   return api;
 }
 
-/// Turn on zenoh's OWN logging inside this process (opt-in via QAR_ZENOH_LOG).
-///
-/// QAR's transport is zenoh (Rust). When a session fails to come up the C API reports
-/// only "MsgInternalError Msg: -4 [ZenohMessaging.cpp:340]"; the actual reason —
-/// "Unable to open listener ...", "Unable to join multicast group ... on interface ...",
-/// "Unable to bind UDP port ..." — lives in zenoh's own log, which stays SILENT unless
-/// somebody initialises it. Setting RUST_LOG alone does nothing here: zenoh only reads
-/// it when the host calls one of the zc_init_log_* entry points, and RViz never does
-/// (the Visualizer process does, which is why zenoh lines appear in its log but not
-/// ours). zenohc.dll is already in the process as a dependency of qar_streaming.dll,
-/// so we can start its logger ourselves.
-///
-/// The request is honoured only while the library log severity is trace or debug
-/// (zenoh_logging_allowed): at debug zenoh writes thousands of lines per minute into
-/// RViz's stdout, so under the quiet profile a QAR_ZENOH_LOG left in the shell must not
-/// switch it on. The decision is always printed, so a log says whether zenoh logging
-/// was on and why.
-///
-/// @param filter a tracing filter such as "debug" or "zenoh=trace".
-void init_zenoh_logging_if_requested(LogSeverity library_severity)
-{
-  const char * filter = std::getenv("QAR_ZENOH_LOG");
-  if (filter == nullptr || *filter == '\0') {
-    std::fprintf(stderr, "[qar-adapter] zenoh logging: off (QAR_ZENOH_LOG not set)\n");
-    std::fflush(stderr);
-    return;
-  }
-  if (!zenoh_logging_allowed(library_severity)) {
-    std::fprintf(stderr,
-      "[qar-adapter] zenoh logging: OFF - QAR_ZENOH_LOG='%s' is ignored because the library "
-      "log severity is %s; use severity debug or trace to get it\n",
-      filter, log_severity_name(library_severity));
-    std::fflush(stderr);
-    return;
-  }
-
-  HMODULE z = GetModuleHandleA("zenohc.dll");
-  if (z == nullptr) { z = LoadLibraryA("zenohc.dll"); }
-  if (z == nullptr) {
-    std::fprintf(stderr, "[qar-adapter] QAR_ZENOH_LOG set but zenohc.dll is not loaded\n");
-    std::fflush(stderr);
-    return;
-  }
-  using PfnInitLogOr = void (*)(const char *);
-  auto init_or = reinterpret_cast<PfnInitLogOr>(
-    reinterpret_cast<void *>(::GetProcAddress(z, "zc_init_log_from_env_or")));
-  if (init_or == nullptr) {
-    std::fprintf(stderr, "[qar-adapter] zenohc.dll has no zc_init_log_from_env_or\n");
-    std::fflush(stderr);
-    return;
-  }
-  init_or(filter);
-  std::fprintf(stderr, "[qar-adapter] zenoh logging enabled (filter=%s)\n", filter);
-  std::fflush(stderr);
-}
-
 /// Block until this thread's queued GL work has completed.
 ///
 /// Required before handing our Ogre texture ids to QAR: per the GL spec (shared
@@ -398,195 +290,13 @@ void gl_finish_current_thread()
 }
 #endif  // _WIN32
 
-#ifdef _WIN32
-// Crash triage: qar_library_init works standalone but can hard-fault when
-// loaded inside rviz2.exe. To identify the faulting module without a debugger, we
-// run the C call under a Structured-Exception guard. On a hardware exception
-// (access violation, FP, illegal instruction, ...) the filter reports the
-// exception code + the module that owns the faulting address, then unwinds so the
-// host (rviz2) survives instead of dying silently. These helpers are C-style (no
-// unwindable C++ objects) so __try/__except is legal under /EHsc.
-LONG qar_seh_report(struct _EXCEPTION_POINTERS * ep, const char * where)
-{
-  const DWORD code = ep->ExceptionRecord->ExceptionCode;
-  void * addr = ep->ExceptionRecord->ExceptionAddress;
-  char modpath[MAX_PATH] = "<unknown>";
-  HMODULE hmod = nullptr;
-  if (GetModuleHandleExA(
-        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-        reinterpret_cast<LPCSTR>(addr), &hmod) && hmod != nullptr) {
-    GetModuleFileNameA(hmod, modpath, MAX_PATH);
-  }
-  std::fprintf(stderr,
-    "[qar-adapter] *** SEH FAULT in %s: code=0x%08lX addr=%p module=%s\n",
-    where, static_cast<unsigned long>(code), addr, modpath);
-  std::fflush(stderr);
-  return EXCEPTION_EXECUTE_HANDLER;
-}
-
-// Returns 0 on normal return (result in *out), 1 if the call hardware-faulted.
-int guarded_library_init(const QarLibraryInit * lib, QarResult * out)
-{
-  __try {
-    *out = qar_library_init(lib);
-    return 0;
-  } __except (qar_seh_report(GetExceptionInformation(), "qar_library_init")) {
-    return 1;
-  }
-}
-
-int guarded_runtime_create(const QarRuntimeInit * rt, QarRuntime ** out)
-{
-  __try {
-    QarResult r = qar_runtime_create(rt, out);
-    return qar_result_is_error(r) ? 2 : 0;
-  } __except (qar_seh_report(GetExceptionInformation(), "qar_runtime_create")) {
-    return 1;
-  }
-}
-#endif  // _WIN32
-
 
 bool peer_eq(const QarPeerId & a, const QarPeerId & b)
 {
   return std::memcmp(a.data, b.data, sizeof(a.data)) == 0;
 }
 
-/// Split a comma-separated list, dropping empty entries and surrounding blanks.
-std::vector<std::string> split_list(const std::string & text)
-{
-  std::vector<std::string> out;
-  std::size_t start = 0;
-  while (start <= text.size()) {
-    const std::size_t comma = text.find(',', start);
-    const std::size_t end = (comma == std::string::npos) ? text.size() : comma;
-    std::string item = text.substr(start, end - start);
-    const std::size_t first = item.find_first_not_of(" \t");
-    const std::size_t last = item.find_last_not_of(" \t");
-    if (first != std::string::npos) {
-      out.push_back(item.substr(first, last - first + 1));
-    }
-    if (comma == std::string::npos) { break; }
-    start = comma + 1;
-  }
-  return out;
-}
-
-/// Case-insensitive substring test (ASCII), for the display-name admission policy.
-bool icontains(const std::string & haystack, const std::string & needle)
-{
-  if (needle.empty()) { return false; }
-  auto lower = [](const std::string & s) {
-      std::string out = s;
-      for (char & c : out) {
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-      }
-      return out;
-    };
-  return lower(haystack).find(lower(needle)) != std::string::npos;
-}
-
-/// Read every readable field of a peer spec and print it (QAR_ADAPTER_TRACE only).
-///
-/// Multi-peer needs to tell a real Visualizer apart from the runtime's internal app
-/// peers, and nothing in the header says which field carries that. The subscription
-/// surfaces FIVE distinct ids for ONE invited Visualizer, so the discriminator has to
-/// be found empirically — this dumps every candidate (display name, app version,
-/// custom info, state, version id, room tag) for each peer, so ONE run is enough to
-/// pick the right admission filter.
-void trace_peer_spec(QarPeerSpec * spec, const QarPeerId & id, const char * display_name)
-{
-  if (!adapter_trace_on()) { return; }
-  auto str = [spec](QarResult (*fn)(QarPeerSpec *, char *, size_t), char * buf, size_t n) {
-      buf[0] = '\0';
-      const QarResult r = fn(spec, buf, n);
-      if (qar_result_is_error(r)) { std::snprintf(buf, n, "<err %d>", static_cast<int>(r.code)); }
-      return buf;
-    };
-  char version[128] = {0};
-  char custom[256] = {0};
-  char version_id[128] = {0};
-  char room[128] = {0};
-  QarAppState state = QAR_APP_STATE_UNKNOWN;
-  qar_peer_spec_get_app_state(spec, &state);
-  std::fprintf(stderr,
-    "[qar-adapter] peer_spec id=%s name='%s' app_version='%s' custom='%s' "
-    "version_id='%s' room='%s' state=%d\n",
-    qar_ogre_streaming::peer_id_to_hex(id).c_str(),
-    display_name != nullptr ? display_name : "",
-    str(&qar_peer_spec_get_app_version, version, sizeof(version)),
-    str(&qar_peer_spec_get_app_custom_peer_info, custom, sizeof(custom)),
-    str(&qar_peer_spec_get_version_id, version_id, sizeof(version_id)),
-    str(&qar_peer_spec_get_room_tag, room, sizeof(room)),
-    static_cast<int>(state));
-  std::fflush(stderr);
-}
-
-// Peer-update trampoline. The SDK surfaces peers joining/changing through
-// qar_peer_subscribe_updates, whose callback hands a QarPeerSpec* per updated peer.
-// We read its id (and its display name for the admission policy) and record it as a
-// "wants a stream" peer. Runs on the QAR runtime's thread — it only records the
-// id; stream creation happens later on the render thread.
-void peer_update_trampoline(QarPeerSpec * spec, void * user_state)
-{
-  auto * factory = static_cast<QarCApiSenderFactory *>(user_state);
-  if (spec == nullptr || factory == nullptr) { return; }
-  QarPeerId peer = qar_peer_id_default();
-  qar_peer_spec_get_id(spec, &peer);
-
-  const char * display_name = nullptr;
-  char name[256] = {0};
-  if (!qar_result_is_error(qar_peer_spec_get_display_name(spec, name, sizeof(name) - 1))) {
-    display_name = name;
-  }
-  trace_peer_spec(spec, peer, display_name);
-
-  factory->on_render_request(peer, display_name);
-  qar_peer_spec_handle_destroy(spec);
-}
-
 }  // namespace
-
-const char * to_string(PeerKind kind)
-{
-  switch (kind) {
-    case PeerKind::kHoloLens: return "hololens";
-    case PeerKind::kQuest:    return "quest";
-    case PeerKind::kZed:      return "zed";
-    case PeerKind::kVisualizer:
-    default:                  return "visualizer";
-  }
-}
-
-bool parse_peer_kind(const std::string & text, PeerKind & out)
-{
-  std::string t;
-  t.reserve(text.size());
-  for (const char c : text) {
-    if (std::isspace(static_cast<unsigned char>(c)) == 0) {
-      t.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-    }
-  }
-  if (t == "visualizer" || t == "viz") {
-    out = PeerKind::kVisualizer;
-  } else if (t == "hololens" || t == "hl" || t == "hololens2") {
-    out = PeerKind::kHoloLens;
-  } else if (t == "quest" || t == "metaquest") {
-    out = PeerKind::kQuest;
-  } else if (t == "zed") {
-    out = PeerKind::kZed;
-  } else {
-    return false;
-  }
-  return true;
-}
-
-bool peer_kind_needs_hostname(PeerKind kind)
-{
-  // qar_session_invite_connection_string_hololens is the only builder taking one, and
-  // its doc comment says the hostname "must not be NULL or empty".
-  return kind == PeerKind::kHoloLens;
-}
 
 // ===========================================================================
 //  Per-frame trace (QAR_ADAPTER_FRAME_TRACE) + pose re-read test
@@ -608,7 +318,7 @@ namespace
 bool frame_trace_on()
 {
   static const bool on = qar_qar_adapter::frame_trace_requested(
-    std::getenv("QAR_ADAPTER_FRAME_TRACE"));
+    environment_is_set("QAR_ADAPTER_FRAME_TRACE") ? "1" : nullptr);
   return on;
 }
 
@@ -647,9 +357,9 @@ std::string resolve_trace_log_folder(const std::string & preferred)
   if (!preferred.empty()) {
     return preferred;
   }
-  const char * tmp = std::getenv("TEMP");
-  if (tmp == nullptr) { tmp = std::getenv("TMP"); }
-  return (tmp != nullptr) ? (std::string(tmp) + "\\quaternar") : std::string("quaternar");
+  std::string tmp = read_environment("TEMP");
+  if (tmp.empty()) { tmp = read_environment("TMP"); }
+  return !tmp.empty() ? (tmp + "\\quaternar") : std::string("quaternar");
 }
 
 std::string timestamp_yyyyMMdd_HHmmss()
@@ -786,12 +496,15 @@ public:
   : peer_hex_(qar_ogre_streaming::peer_id_to_hex(peer_id))
   {
     const std::string folder = resolve_trace_log_folder(log_folder_path);
-#ifdef _WIN32
-    CreateDirectoryA(folder.c_str(), nullptr);  // ok if it already exists
-#endif
+    std::error_code folder_error;
+    std::filesystem::create_directories(std::filesystem::u8path(folder), folder_error);
     path_ = folder + "\\qar_frame_trace_" + timestamp_yyyyMMdd_HHmmss() + "_" +
       make_stream_tag(peer_id) + ".csv";
+#ifdef _WIN32
+    if (_wfopen_s(&file_, std::filesystem::u8path(path_).c_str(), L"w") != 0) { file_ = nullptr; }
+#else
     file_ = std::fopen(path_.c_str(), "w");
+#endif
     if (file_ == nullptr) {
       std::fprintf(stderr, "[qar-adapter] frame trace: failed to open '%s'\n", path_.c_str());
       std::fflush(stderr);
@@ -847,8 +560,8 @@ public:
     wait_.ready_tp = std::chrono::system_clock::now();
     wait_.have_a = false;
     if (is_prime_call) {
-      const QarResult rl = qar_render_frame_info_get_view_pose(handle, 0, &wait_.a_left);
-      const QarResult rr = qar_render_frame_info_get_view_pose(handle, 1, &wait_.a_right);
+      const QarResult rl = QAR_CALL(qar_render_frame_info_get_view_pose, handle, 0, &wait_.a_left);
+      const QarResult rr = QAR_CALL(qar_render_frame_info_get_view_pose, handle, 1, &wait_.a_right);
       wait_.have_a = qar_result_is_success(rl) && qar_result_is_success(rr);
       if (!wait_.have_a) {
         std::fprintf(stderr, "[qar-adapter] frame trace: (a) pose re-read failed\n");
@@ -892,7 +605,7 @@ public:
   void abandon_row()
   {
     if (row_.handle != nullptr) {
-      qar_render_frame_info_handle_destroy(row_.handle);
+      QAR_CALL(qar_render_frame_info_handle_destroy, row_.handle);
       row_.handle = nullptr;
     }
     row_.valid = false;
@@ -914,8 +627,8 @@ public:
     if (!row_.valid || row_.handle == nullptr) { return; }
     QarPose c_left{};
     QarPose c_right{};
-    const QarResult rl = qar_render_frame_info_get_view_pose(row_.handle, 0, &c_left);
-    const QarResult rr = qar_render_frame_info_get_view_pose(row_.handle, 1, &c_right);
+    const QarResult rl = QAR_CALL(qar_render_frame_info_get_view_pose, row_.handle, 0, &c_left);
+    const QarResult rr = QAR_CALL(qar_render_frame_info_get_view_pose, row_.handle, 1, &c_right);
     row_.have_c = qar_result_is_success(rl) && qar_result_is_success(rr);
     if (row_.have_c) {
       row_.c_left = c_left;
@@ -924,7 +637,7 @@ public:
       std::fprintf(stderr, "[qar-adapter] frame trace: (c) pose re-read failed\n");
       std::fflush(stderr);
     }
-    qar_render_frame_info_handle_destroy(row_.handle);
+    QAR_CALL(qar_render_frame_info_handle_destroy, row_.handle);
     row_.handle = nullptr;
   }
 
@@ -1034,7 +747,7 @@ QarCApiRenderSenderAdapter::QarCApiRenderSenderAdapter(
   // create_stream), and the panel checkbox changes it live from there. Read here too
   // so an adapter built outside that flow (a test, a standalone sample) still honors
   // the env var on its own.
-  prime_enabled_(qar_qar_adapter::parse_bool_env(std::getenv("QAR_ADAPTER_PRIME"), true))
+  prime_enabled_(prime_enabled_from_environment())
 {
   peer_label_ = qar_ogre_streaming::peer_id_to_hex(peer_id).substr(0, 8);
   {
@@ -1063,7 +776,7 @@ QarCApiRenderSenderAdapter::~QarCApiRenderSenderAdapter()
 {
   // Release a primed-but-unconsumed frame BEFORE the stream that owns it.
   if (primed_info_ != nullptr) {
-    qar_render_frame_info_handle_destroy(primed_info_);
+    QAR_CALL(qar_render_frame_info_handle_destroy, primed_info_);
     primed_info_ = nullptr;
   }
   // Same ordering concern for a trace-only kept-alive handle (the pre-show pose re-read):
@@ -1075,7 +788,7 @@ QarCApiRenderSenderAdapter::~QarCApiRenderSenderAdapter()
     frame_trace_->abandon_row();
   }
   if (stream_ != nullptr) {
-    qar_render_stream_handle_destroy(stream_);
+    QAR_CALL(qar_render_stream_handle_destroy, stream_);
     stream_ = nullptr;
   }
 }
@@ -1128,18 +841,29 @@ bool QarCApiRenderSenderAdapter::begin_frame(qar_ogre_streaming::QarFrameInfo & 
     if (tbf_trace) { trace_msg("begin_frame: -> try_begin_frame"); }
     if (frame_trace_) { frame_trace_->note_try_begin_frame_call(/*from_prime=*/false); }
     const std::int64_t poll_start_us = timing_ ? qar_ar_core::timing_epoch_us() : 0;
-    const QarResult r = qar_render_sender_try_begin_frame(stream_, &info, &ready);
+    const QarResult r = QAR_CALL(qar_render_sender_try_begin_frame, stream_, &info, &ready);
     if (timing_) { timing_->note_poll_call(poll_start_us); }
     if (tbf_trace) { trace_msg(ready ? "begin_frame: <- try_begin_frame (ready)"
                                       : "begin_frame: <- try_begin_frame (pending)"); }
     if (qar_result_is_error(r)) {
+      if (info != nullptr) { QAR_CALL(qar_render_frame_info_handle_destroy, info); }
+      // Two answers mean "not yet", not a failure of the sender: the app volume is not resolved
+      // in the Hub yet (the stream hands out nothing meanwhile), or the receiver paused the
+      // stream because its display is not visible. The tick declines and polls again.
+      if (qar_result_has_code(r, QAR_STATUS_RENDERING_PRODUCER_APP_VOLUME_UNRESOLVED)) {
+        last_skip_detail_ = "app volume not resolved yet";
+        return true;
+      }
+      if (qar_result_has_code(r, QAR_STATUS_MEDIA_STREAMING_STREAM_IS_PAUSED)) {
+        last_skip_detail_ = "paused by the receiver (its display is not visible)";
+        return true;
+      }
       if (qar_result_has_code(r, QAR_STATUS_RENDERING_PRODUCER_STREAM_IS_CLOSED)) {
         closed_.store(true);
         last_skip_detail_ = "try_begin_frame: producer stream is closed";
       } else {
         last_skip_detail_ = result_text("try_begin_frame", r);
       }
-      if (info != nullptr) { qar_render_frame_info_handle_destroy(info); }
       return false;
     }
     if (timing_) {
@@ -1153,7 +877,7 @@ bool QarCApiRenderSenderAdapter::begin_frame(qar_ogre_streaming::QarFrameInfo & 
     }
   }
   if (!ready || info == nullptr) {
-    if (info != nullptr) { qar_render_frame_info_handle_destroy(info); }
+    if (info != nullptr) { QAR_CALL(qar_render_frame_info_handle_destroy, info); }
     // The begin-frame wait has not completed. In the steady state this is just
     // the viewer pacing us below our tick rate. If it NEVER completes again the
     // SDK trace parks on "RenderingProducer: waiting for available frame" and no
@@ -1178,17 +902,17 @@ bool QarCApiRenderSenderAdapter::begin_frame(qar_ogre_streaming::QarFrameInfo & 
   struct ViewRead { const char * what; QarResult result; };
   const ViewRead view_reads[] = {
     {"qar_render_frame_info_get_view_pose(0)",
-      qar_render_frame_info_get_view_pose(info, 0, &left_pose)},
+      QAR_CALL(qar_render_frame_info_get_view_pose, info, 0, &left_pose)},
     {"qar_render_frame_info_get_view_fov(0)",
-      qar_render_frame_info_get_view_fov(info, 0, &left_fov)},
+      QAR_CALL(qar_render_frame_info_get_view_fov, info, 0, &left_fov)},
     {"qar_render_frame_info_get_view_pose(1)",
-      qar_render_frame_info_get_view_pose(info, 1, &right_pose)},
+      QAR_CALL(qar_render_frame_info_get_view_pose, info, 1, &right_pose)},
     {"qar_render_frame_info_get_view_fov(1)",
-      qar_render_frame_info_get_view_fov(info, 1, &right_fov)},
+      QAR_CALL(qar_render_frame_info_get_view_fov, info, 1, &right_fov)},
   };
   for (const ViewRead & read : view_reads) {
     if (qar_result_is_error(read.result)) {
-      qar_render_frame_info_handle_destroy(info);
+      QAR_CALL(qar_render_frame_info_handle_destroy, info);
       last_skip_detail_ = result_text(read.what, read.result);
       return false;
     }
@@ -1207,7 +931,9 @@ bool QarCApiRenderSenderAdapter::begin_frame(qar_ogre_streaming::QarFrameInfo & 
     StallPoint{right_pose.position.x, right_pose.position.y, right_pose.position.z});
 
   out_info.frame_index = frame_index_++;
-  out_info.predicted_display_time = QarTimePoint{out_info.frame_index, 0};
+  out_info.predicted_display_time = QarTimePoint{static_cast<std::int64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count())};
   out_info.left_eye.pose = left_pose;
   out_info.left_eye.fov = left_fov;
   out_info.left_eye.near_far = near_far_;
@@ -1224,7 +950,7 @@ bool QarCApiRenderSenderAdapter::begin_frame(qar_ogre_streaming::QarFrameInfo & 
     frame_trace_->begin_row(
       out_info.frame_index, prime_enabled_, tick_ms_, left_pose, right_pose, info);
   } else {
-    qar_render_frame_info_handle_destroy(info);
+    QAR_CALL(qar_render_frame_info_handle_destroy, info);
   }
   return true;
 }
@@ -1240,17 +966,16 @@ void QarCApiRenderSenderAdapter::publish_pointing_ray(const QarPose & eye_pose)
   // publishing that invalid ray is how "the hands went away" reaches the
   // picker instead of a stale aim.
   QarDeviceHandsWithJoints hands = qar_device_hand_with_joints_default();
-  const QarResult hands_result = qar_render_sender_last_hands(stream_, &hands);
+  const QarResult hands_result = QAR_CALL(qar_render_sender_last_hands, stream_, &hands);
 
   qar_ar_core::PointingRayInputs inputs;
   if (!qar_result_is_error(hands_result)) {
     inputs = qar_ar_core::pointing_ray_inputs_from_hands(
-      hands, QAR_HAND_RIGHT, qar_ar_core::HandRayJoint::IndexTip);
+      hands, QAR_HANDEDNESS_RIGHT, qar_ar_core::HandRayJoint::IndexTip);
   }
   inputs.has_eye = true;
   inputs.eye_position = eye_pose.position;
-  inputs.timestamp_s = static_cast<double>(hands.device_timestamp.count) *
-    (hands.device_timestamp.precision == 1 ? 1e-9 : 1e-3);
+  inputs.timestamp_s = static_cast<double>(hands.device_timestamp.unix_ns) * 1e-9;
 
   // The hand itself, published WITH the ray it produced. The ray says where the
   // operator is aiming; the probe says where their hand is, and only the second
@@ -1277,7 +1002,7 @@ void QarCApiRenderSenderAdapter::publish_pointing_ray(const QarPose & eye_pose)
       "[qar-adapter] hands: the device IS sending hand joints - AR pointing ray is live "
       "(%s, %s of the %s hand). origin=(%.3f, %.3f, %.3f) dir=(%.3f, %.3f, %.3f) room\n",
       qar_ar_core::to_string(ray.kind), qar_ar_core::to_string(ray.joint),
-      ray.hand == QAR_HAND_LEFT ? "left" : "right",
+      ray.hand == QAR_HANDEDNESS_LEFT ? "left" : "right",
       static_cast<double>(ray.origin.x), static_cast<double>(ray.origin.y),
       static_cast<double>(ray.origin.z), static_cast<double>(ray.direction.x),
       static_cast<double>(ray.direction.y), static_cast<double>(ray.direction.z));
@@ -1374,7 +1099,7 @@ bool QarCApiRenderSenderAdapter::submit_opengl_stereo_frame(
     gl_finish_current_thread();
 #endif
     trace_submit(n, "-> frame_opengl (supply-own)");
-    const QarResult fr = qar_render_sender_frame_opengl(stream_, &gl);
+    const QarResult fr = QAR_CALL(qar_render_sender_frame_opengl, stream_, &gl);
     trace_submit(n, "<- frame_opengl (supply-own)");
     if (qar_result_is_error(fr)) {
       // Abandoned before show_frame: release the trace's kept-alive handle (if any)
@@ -1388,7 +1113,7 @@ bool QarCApiRenderSenderAdapter::submit_opengl_stereo_frame(
     // color/depth INTO those ids before show_frame (see GlSubmitMode).
     fill_frame_layout(gl, frame, /*supply_ids=*/false);
     trace_submit(n, "-> frame_opengl (render-into)");
-    const QarResult fr = qar_render_sender_frame_opengl(stream_, &gl);
+    const QarResult fr = QAR_CALL(qar_render_sender_frame_opengl, stream_, &gl);
     trace_submit(n, "<- frame_opengl (render-into)");
     if (qar_result_is_error(fr)) {
       if (frame_trace_) { frame_trace_->abandon_row(); }
@@ -1427,7 +1152,7 @@ bool QarCApiRenderSenderAdapter::submit_opengl_stereo_frame(
   if (frame_trace_) { frame_trace_->note_pre_show(); }
 
   trace_submit(n, "-> show_frame");
-  const QarResult sr = qar_render_sender_show_frame(stream_, &show);
+  const QarResult sr = QAR_CALL(qar_render_sender_show_frame, stream_, &show);
   trace_submit(n, "<- show_frame");
   const bool show_ok = qar_result_is_success(sr);
   submit_timing.show_returned(show_ok);
@@ -1504,13 +1229,13 @@ void QarCApiRenderSenderAdapter::prime_next_frame()
   // immediately is a bonus. Non-blocking either way, so it is safe on this thread.
   if (frame_trace_) { frame_trace_->note_try_begin_frame_call(/*from_prime=*/true); }
   const std::int64_t poll_start_us = timing_ ? qar_ar_core::timing_epoch_us() : 0;
-  const QarResult r = qar_render_sender_try_begin_frame(stream_, &info, &ready);
+  const QarResult r = QAR_CALL(qar_render_sender_try_begin_frame, stream_, &info, &ready);
   if (timing_) { timing_->note_poll_call(poll_start_us); }
   if (qar_result_is_error(r)) {
     if (qar_result_has_code(r, QAR_STATUS_RENDERING_PRODUCER_STREAM_IS_CLOSED)) {
       closed_.store(true);
     }
-    if (info != nullptr) { qar_render_frame_info_handle_destroy(info); }
+    if (info != nullptr) { QAR_CALL(qar_render_frame_info_handle_destroy, info); }
     return;
   }
   if (timing_) {
@@ -1523,7 +1248,7 @@ void QarCApiRenderSenderAdapter::prime_next_frame()
     if (frame_trace_) { frame_trace_->note_ready(/*is_prime_call=*/true, info); }
     primed_info_ = info;
   } else if (info != nullptr) {
-    qar_render_frame_info_handle_destroy(info);
+    QAR_CALL(qar_render_frame_info_handle_destroy, info);
   }
 }
 
@@ -2039,9 +1764,10 @@ private:
     gen_framebuffers_(2, fbos);
     src_fbo_ = fbos[0];
     dst_fbo_ = fbos[1];
-    flip_y_ = std::getenv("QAR_ADAPTER_FLIP_Y") != nullptr;
-    if (const char * pe = std::getenv("QAR_ADAPTER_PROBE_EVERY")) {
-      const long v = std::strtol(pe, nullptr, 10);
+    flip_y_ = environment_is_set("QAR_ADAPTER_FLIP_Y");
+    const std::string probe_every = read_environment("QAR_ADAPTER_PROBE_EVERY");
+    if (environment_is_set("QAR_ADAPTER_PROBE_EVERY")) {
+      const long v = std::strtol(probe_every.c_str(), nullptr, 10);
       probe_every_ = (v > 0) ? static_cast<unsigned int>(v) : 0u;
     }
     ready_ = src_fbo_ != 0u && dst_fbo_ != 0u;
@@ -2118,463 +1844,196 @@ std::shared_ptr<IQarGlTextureCopyHook> make_gl_copy_image_hook()
 // ===========================================================================
 //  QarCApiSenderFactory
 // ===========================================================================
-QarCApiSenderFactory::QarCApiSenderFactory(const Config & config) : config_(config)
+QarCApiSenderFactory::QarCApiSenderFactory(
+  std::shared_ptr<QarSessionOwner> owner, const Config & config)
+: config_(config), owner_(owner), shared_(std::make_shared<CrossThread>())
 {
-  // Diagnostic breadcrumbs: a hard fault inside any of the SDK C
-  // calls below kills the whole host process (rviz2) before last_error_ can be
-  // surfaced. Setting QAR_ADAPTER_TRACE=1 emits a flushed stderr line around each
-  // call so the last crumb printed pinpoints the faulting call. No-op otherwise.
-  const bool trace = std::getenv("QAR_ADAPTER_TRACE") != nullptr;
-  // Delegate to trace_msg so the bootstrap crumbs carry the same elapsed/delta
-  // stamps as everything else — this straight line of blocking calls is precisely
-  // where we need to know which one owns the multi-second stall.
-  auto crumb = [trace](const char * msg) {
-    if (trace) { trace_msg(msg); }
-  };
-  crumb("ctor begin");
-
-  // Invite flow: we will invite ONE specific Visualizer and must stream
-  // ONLY to it. Arm the filter BEFORE qar_peer_subscribe_updates so the internal
-  // runtime peers that surface immediately are dropped (not queued) until the
-  // invited Visualizer id is known — otherwise the sender is built for whichever
-  // internal peer arrives first and the Visualizer's frames get app-id-rejected.
-  invite_flow_ = config_.invite_flow_admission;
-
-#ifdef QAR_ENABLE_DYNAMIC_LOADING
-  // Resolve and load the QAR implementation DLL before ANY qar_* call: with dynamic
-  // loading the wrappers dispatch through tables that are empty until this succeeds
-  // (calling one earlier would abort()).
-  if (!qar_is_library_loaded()) {
-    std::string dll = config_.sdk_library_path;
-    if (dll.empty()) {
-      dll = config_.runtime_binaries_folder_path.empty()
-        ? std::string("qar-streaming-c.dll")
-        : config_.runtime_binaries_folder_path + "/qar-streaming-c.dll";
-    }
-    crumb("-> qar_library_load");
-    if (trace) { std::fprintf(stderr, "[qar-adapter]    dll=%s\n", dll.c_str()); }
-    if (!qar_library_load(dll.c_str())) {
-      last_error_ = "qar_library_load failed for '" + dll +
-        "' (check the path and that its dependencies resolve)";
-      crumb("<- qar_library_load FAILED");
-      return;
-    }
-    crumb("<- qar_library_load");
-    loaded_library_ = true;
-  }
-#endif
-
-  QarLibraryInit lib = qar_library_init_default();
-  // Vendor request: always produce full library logs (TRACE) into a known folder so a
-  // bug report can carry them. Default folder: %TEMP%/quaternar (next to other logs).
-  if (config_.log_folder_path.empty()) {
-    const char * tmp = std::getenv("TEMP");
-    if (tmp == nullptr) { tmp = std::getenv("TMP"); }
-    config_.log_folder_path = (tmp != nullptr)
-      ? std::string(tmp) + "\\quaternar"
-      : std::string("quaternar");
-  }
-#ifdef _WIN32
-  CreateDirectoryA(config_.log_folder_path.c_str(), nullptr);  // ok if it already exists
-#endif
-  lib.log_folder_path = config_.log_folder_path.c_str();
-  lib.log_severity = config_.log_severity;
-  lib.enable_console_logging = config_.enable_console_logging;
-  {
-    // THE REASON "severity=3 was passed but ignored": the vendor library obeys the
-    // QAR_LOG_SEVERITY environment variable over lib.log_severity, so a stale value in
-    // the environment beat the struct. State the request on both channels, and say what
-    // was found. Only the real (dynamically loaded) library has this behaviour.
-    const LogSeverity severity = static_cast<LogSeverity>(static_cast<int>(config_.log_severity));
-    std::string env_before;
-    bool env_exported = false;
-#ifdef QAR_ENABLE_DYNAMIC_LOADING
-    env_before = export_library_log_severity(severity);
-    env_exported = true;
-#endif
-    std::fprintf(stderr,
-      "[qar-adapter] library logging: severity=%s console=%s folder=%s%s\n",
-      log_severity_name(severity), config_.enable_console_logging ? "on" : "off",
-      config_.log_folder_path.c_str(),
-      (env_exported && !env_before.empty() && env_before != log_severity_name(severity)) ?
-      (std::string("  [QAR_LOG_SEVERITY='") + env_before +
-      "' was in the environment and takes precedence over the init struct inside the vendor "
-      "library - overwritten with '" + log_severity_name(severity) + "']").c_str() : "");
-    std::fflush(stderr);
-#ifdef _WIN32
-    // Before any session work: zenohc.dll is now in the process (qar_library_load pulled
-    // it in), so its logger can be started. Off unless QAR_ZENOH_LOG asks AND the severity
-    // is trace/debug.
-    init_zenoh_logging_if_requested(severity);
-#endif
-  }
-  crumb("-> qar_library_init");
-  QarResult r{};
-#ifdef _WIN32
-  if (guarded_library_init(&lib, &r) != 0) {
-    last_error_ = "qar_library_init HARD-FAULTED (see '*** SEH FAULT' line above for module)";
-    crumb("<- qar_library_init (SEH FAULT)");
-    return;
-  }
-#else
-  r = qar_library_init(&lib);
-#endif
-  crumb("<- qar_library_init");
-  if (qar_result_is_error(r)) { last_error_ = report_result("qar_library_init", r); return; }
-
-  QarRuntimeInit rt = qar_runtime_init_default();
-  // Point the runtime at the folder it spawns app binaries (the
-  // Visualizer) from — otherwise qar_runtime_create warns "Runtime folder path
-  // not provided. Using cwd." The config string outlives this call (stored in
-  // config_). Empty => keep the QAR default.
-  if (!config_.runtime_binaries_folder_path.empty()) {
-    rt.runtime_binaries_folder_path = config_.runtime_binaries_folder_path.c_str();
-  }
-  crumb("-> qar_runtime_create");
-#ifdef _WIN32
-  {
-    const int gc = guarded_runtime_create(&rt, &runtime_);
-    if (gc == 1) {
-      last_error_ = "qar_runtime_create HARD-FAULTED (see '*** SEH FAULT' line above for module)";
-      crumb("<- qar_runtime_create (SEH FAULT)");
-      return;
-    }
-    if (gc != 0 || runtime_ == nullptr) {
-      last_error_ = "qar_runtime_create failed";
-      crumb("<- qar_runtime_create (err)");
-      return;
-    }
-  }
-#else
-  r = qar_runtime_create(&rt, &runtime_);
-  if (qar_result_is_error(r) || runtime_ == nullptr) {
-    last_error_ = report_result("qar_runtime_create", r);
-    return;
-  }
-#endif
-  crumb("<- qar_runtime_create");
-
-  // Session lifecycle. The SDK creates a session on the runtime (the host mints an
-  // invite), then obtains an active QarSession* handle: a host "creates the session
-  // manually, then invites the visualizer via invitePeer".
-  //
-  // The header exposes create_session -> QarSessionInvite*, but
-  // the ONLY function returning a QarSession** is qar_session_join (documented "peer
-  // side"); qar_runtime_join_session returns no handle. So we activate the host's own
-  // session by serializing the created invite and joining it (see
-  // docs/QAROS_INTEGRATION_NOTES.md#session-bootstrap).
-  QarSessionCreateInit create = qar_session_create_init_default();
-  // Vendor guidance: the session GUID must be UNIQUE and NON-ZERO —
-  // the all-zero id (QAR_ID_DEFAULT) must not be used. (Matching the launcher's
-  // default-session storage key space with an all-zero id is the wrong fix: the
-  // runtime spawns and configures its own launcher, so the storage follows the
-  // session we create.) Belt-and-braces: if the generated id were somehow
-  // all-zero, force the last byte to 1.
-  QarSessionId session_id = qar_session_id_unique();
-  {
-    bool all_zero = true;
-    for (std::size_t i = 0; i < QAR_MAX_ID_LENGTH; ++i) {
-      if (session_id.data[i] != 0) { all_zero = false; break; }
-    }
-    if (all_zero) { session_id.data[QAR_MAX_ID_LENGTH - 1] = 1; }
-  }
-  create.session_id = &session_id;
-  // The runtime (not us) starts qar-runtime-launcher.exe; this JSON is its config.
-  // `{"enableMixer": false}` => direct RViz -> Visualizer path (debug default).
-  if (!config_.launcher_config_json.empty()) {
-    create.launcher_config_json = config_.launcher_config_json.c_str();
-  }
-  if (trace) {
-    std::fprintf(stderr, "[qar-adapter]    session_id=%s launcher_cfg=%s\n",
-      qar_ogre_streaming::peer_id_to_hex(
-        *reinterpret_cast<const QarPeerId *>(&session_id)).c_str(),
-      config_.launcher_config_json.empty() ? "(null)" : config_.launcher_config_json.c_str());
-    std::fflush(stderr);
-  }
-  crumb("-> qar_runtime_create_session");
-  r = qar_runtime_create_session(runtime_, &create, &invite_);
-  crumb("<- qar_runtime_create_session");
-  if (qar_result_is_error(r) || invite_ == nullptr) {
-    last_error_ = report_result("qar_runtime_create_session", r);
-    if (invite_ == nullptr) { last_error_ += " (invite handle is null)"; }
-    return;
-  }
-
-  std::array<uint8_t, 4096> invite_bytes{};
-  size_t invite_written = 0;
-  crumb("-> qar_session_invite_serialize");
-  r = qar_session_invite_serialize(
-    invite_, invite_bytes.data(), invite_bytes.size(), &invite_written);
-  crumb("<- qar_session_invite_serialize");
-  if (qar_result_is_error(r)) {
-    last_error_ = report_result("qar_session_invite_serialize", r);
-    return;
-  }
-
-  QarSessionJoinInit join = qar_session_join_init_default();
-  join.invite_data = invite_bytes.data();
-  join.invite_data_size = invite_written;
-  crumb("-> qar_session_join");
-  r = qar_session_join(&join, &session_);
-  crumb("<- qar_session_join");
-  if (qar_result_is_error(r) || session_ == nullptr) {
-    last_error_ = report_result("qar_session_join", r);
-    if (session_ == nullptr) { last_error_ += " (session handle is null)"; }
-    return;
-  }
-
-  // Learn our OWN peer id before subscribing. Every admission policy excludes it —
-  // we are a peer of this session too, and streaming to ourselves is never right.
-  {
-    QarPeerSpec * my_spec = nullptr;
-    crumb("-> qar_session_get_my_spec");
-    const QarResult ms = qar_session_get_my_spec(session_, &my_spec);
-    crumb("<- qar_session_get_my_spec");
-    if (!qar_result_is_error(ms) && my_spec != nullptr) {
-      if (!qar_result_is_error(qar_peer_spec_get_id(my_spec, &self_peer_))) {
-        has_self_peer_ = true;
-        trace_peer_id("self", self_peer_);
-      }
-      qar_peer_spec_handle_destroy(my_spec);
-    }
-  }
-
-  // Create the app volume BEFORE subscribing, so it is already known by the time any
-  // peer surfaces and create_sender() runs. The app volume is the mixer's unit of
-  // work: it composites each incoming stream into the volume named by that stream's
-  // QarRenderSenderInit::app_volume_id. With the mixer ON, a stream created with the
-  // default NULL id has nowhere to land — the Visualizer renders an empty room.
-  if (config_.create_app_volume) {
-    QarAppVolumeInit vol = qar_app_volume_init_default();
-    vol.display_name = config_.app_volume_name.c_str();
-    // gesture_configuration stays NULL (qar_app_volume_init_default()'s own
-    // default) -- the vendor's own advice: leaving it NULL gives
-    // the volume the runtime's default configuration, and
-    // qar_app_volume_gesture_configuration_default() returns that EXACT same
-    // configuration, so a struct
-    // we build and pass back would change no field while adding a real risk:
-    // any rule we left unfilled, or any drift against the runtime's own
-    // layout, silently zeros to QAR_APP_VOLUME_CONTROLLER_RAY_LINE_STYLE_NONE
-    // -- an invisible ray -- rather than to the vendor's SOLID/DOTTED
-    // defaults. NULL removes that possibility outright.
-    // pose is the cuboid CENTRE in room space, so lift the box off the floor rather
-    // than leaving half of it sunk below y=0.
-    vol.pose = qar_pose_default();
-    vol.pose.position.y = config_.app_volume_center_y_m;
-    vol.size.width_meters = config_.app_volume_width_m;
-    vol.size.length_meters = config_.app_volume_length_m;
-    vol.size.height_meters = config_.app_volume_height_m;
-    vol.app_pose = qar_pose_default();
-    vol.app_scale = config_.app_volume_scale;
-
-    crumb("-> qar_app_volumes_add_volume");
-    const QarResult av = qar_app_volumes_add_volume(session_, &vol, &app_volume_);
-    crumb("<- qar_app_volumes_add_volume");
-    if (qar_result_is_error(av)) {
-      // Not fatal to the CONNECT -- the session is still usable and a later tick may
-      // succeed -- but fatal to every render stream: since the 2026-09-21 SDK
-      // the field is Required and NULL is rejected outright, so without a
-      // volume create_sender() refuses; see the refusal there.
-      std::fprintf(stderr,
-        "[qar-adapter] %s - NO render stream can be created without an app volume: "
-        "QarRenderSenderInit::app_volume_id is required and NULL is rejected with "
-        "QAR_STATUS_APP_VOLUME_INVALID_ID.\n",
-        report_result("qar_app_volumes_add_volume", av).c_str());
-      std::fflush(stderr);
-    } else {
-      has_app_volume_ = true;
-      if (adapter_trace_on()) {
-        std::fprintf(stderr,
-          "[qar-adapter] app volume '%s' created id=%s size=%.2fx%.2fx%.2f m "
-          "centre_y=%.2f m app_scale=%.3f\n",
-          config_.app_volume_name.c_str(), app_volume_id_to_hex(app_volume_).c_str(),
-          static_cast<double>(config_.app_volume_width_m),
-          static_cast<double>(config_.app_volume_length_m),
-          static_cast<double>(config_.app_volume_height_m),
-          static_cast<double>(config_.app_volume_center_y_m),
-          static_cast<double>(config_.app_volume_scale));
-        // Always NULL -- see the comment above vol.gesture_configuration.
-        std::fprintf(stderr,
-          "[qar-adapter] app volume gesture configuration (sent): NULL (runtime "
-          "default)\n");
-        std::fflush(stderr);
-        if (config_.app_volume_pick_gestures) {
-          // There is no get-handle-by-id call (see scene_placement() below for
-          // the same limitation), so enumerate the session's app volumes and
-          // match by id to read back what the runtime actually holds -- that
-          // is what proves arbitration, not what we intended to send it.
-          std::size_t volume_count = 0;
-          if (!qar_result_is_error(qar_query_app_volumes_count(session_, &volume_count)) &&
-            volume_count > 0)
-          {
-            std::vector<QarAppVolume *> volume_handles(volume_count, nullptr);
-            std::size_t volumes_written = 0;
-            if (!qar_result_is_error(qar_query_app_volumes(
-                  session_, volume_handles.data(), volume_count, &volumes_written)))
-            {
-              bool read_back_logged = false;
-              for (std::size_t i = 0; i < volumes_written && i < volume_handles.size(); ++i) {
-                QarAppVolume * const handle = volume_handles[i];
-                if (handle == nullptr) { continue; }
-                if (!read_back_logged) {
-                  QarAppVolumeId id{};
-                  const bool is_ours =
-                    !qar_result_is_error(qar_app_volume_get_id(handle, &id)) &&
-                    std::memcmp(&id, &app_volume_, sizeof(QarAppVolumeId)) == 0;
-                  QarAppVolumeGestureConfiguration read_back{};
-                  if (is_ours && !qar_result_is_error(
-                        qar_app_volume_get_gesture_configuration(handle, &read_back)))
-                  {
-                    log_gesture_configuration("read-back", read_back);
-                    read_back_logged = true;
-                  }
-                }
-                qar_app_volume_handle_destroy(handle);
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-
-  // Discover peers that want a render stream through the peer-spec update subscription:
-  // each joining visualizer surfaces via the callback, which records the peer id
-  // (drained by poll_new_peer_requests()).
-  crumb("-> qar_peer_subscribe_updates");
-  r = qar_peer_subscribe_updates(session_, peer_update_trampoline, this, nullptr);
-  crumb("<- qar_peer_subscribe_updates");
-  if (qar_result_is_error(r)) {
-    last_error_ = report_result("qar_peer_subscribe_updates", r);
-    return;
-  }
-
-  // Optionally invite QAR Visualizer peers so the runtime spawns/
-  // connects them (the host creates the session, then invites the visualizer
-  // via invitePeer). An invited peer then surfaces through peer_subscribe_updates
-  // and gets a render sender via create_sender(). The runtime spawns the invited
-  // Visualizer itself: nothing starts qar-runtime-launcher.exe or the Visualizer
-  // by hand.
-  // DEFAULT 0: connecting opens the session and invites NOTHING. The
-  // operator spawns a Visualizer on demand from the panel, because a real-device
-  // session often wants no Visualizer at all, and because each invite is a blocking
-  // call we should not force into every connect.
-  if (config_.auto_invite_visualizers > 0) {
-    {
-      // Drop any internal peers that slipped into the queue before ANY invited id was
-      // known, so the FIRST stream we open is a Visualizer's (matching app id).
-      std::lock_guard<std::mutex> lk(mutex_);
-      pending_requests_.clear();
-    }
-    // One Visualizer == one physical client head, so invite as many as were asked for.
-    // Each spawns its own Visualizer and yields a distinct peer id.
-    for (uint32_t i = 0; i < config_.auto_invite_visualizers; ++i) {
-      QarPeerId invited = qar_peer_id_default();
-      const std::string err =
-        invite_one_peer_locked_free(PeerKind::kVisualizer, std::string(), invited);
-      if (!err.empty()) {
-        // Auto-inviting is an opt-in convenience, not the bootstrap path: a failed
-        // invite leaves a perfectly usable session the operator can still invite into.
-        // So warn and stop auto-inviting rather than failing the whole connect.
-        std::fprintf(stderr, "[qar-adapter] *** auto visualizer invite %u/%u: %s\n",
-          i + 1u, config_.auto_invite_visualizers, err.c_str());
-        std::fflush(stderr);
-        break;
-      }
-      // Queue each invited peer explicitly so its sender exists before it connects
-      // (the runtime accepts its frames only against a sender built for its app id).
-      on_render_request(invited);
-    }
-  }
-
-  // Real devices, e.g. "hololens:HOLOLENS-A2B3,hololens:HOLOLENS-C4D5,quest".
-  // Inviting them here is what puts them in the allow-list, so they are admitted by
-  // exact id and the kInvitedOrNew timing heuristic is not needed for them at all.
-  // One unreachable headset must never stop the session or the other devices.
-  for (const std::string & entry : split_list(config_.invite_peers)) {
-    const std::size_t colon = entry.find(':');
-    const std::string kind_text = entry.substr(0, colon);
-    const std::string hostname =
-      (colon == std::string::npos) ? std::string() : entry.substr(colon + 1);
-    PeerKind kind = PeerKind::kVisualizer;
-    if (!parse_peer_kind(kind_text, kind)) {
-      std::fprintf(stderr,
-        "[qar-adapter] *** invite_peers: unknown device kind '%s' in '%s' "
-        "(use visualizer|hololens|quest|zed)\n", kind_text.c_str(), entry.c_str());
-      std::fflush(stderr);
-      continue;
-    }
-    QarPeerId invited = qar_peer_id_default();
-    const std::string err = invite_one_peer_locked_free(kind, hostname, invited);
-    if (!err.empty()) {
-      std::fprintf(stderr, "[qar-adapter] *** invite '%s' failed: %s\n",
-        entry.c_str(), err.c_str());
-      std::fflush(stderr);
-      continue;
-    }
-    on_render_request(invited);
-  }
-
-  crumb("ctor ready");
-  {
-    // Starts the kInvitedOrNew settle window: peers surfacing from here until
-    // baseline_settle_ms elapses are the runtime's own, anything later is a consumer.
-    std::lock_guard<std::mutex> lk(mutex_);
-    connected_at_ = std::chrono::steady_clock::now();
-    connected_at_set_ = true;
-  }
-  ready_ = true;
 }
 
-QarCApiSenderFactory::~QarCApiSenderFactory()
+// What the thread that owns the session and the consumer thread share. The consumer thread reads
+// it through shared_; the tasks hold their own reference.
+struct QarCApiSenderFactory::CrossThread
 {
-  if (session_ != nullptr) { qar_session_destroy(session_); session_ = nullptr; }
-  if (invite_ != nullptr) { qar_session_invite_handle_destroy(invite_); invite_ = nullptr; }
-  if (runtime_ != nullptr) { qar_runtime_destroy(runtime_); runtime_ = nullptr; }
-#ifdef QAR_ENABLE_DYNAMIC_LOADING
-  // The constructor returns before qar_library_init exactly when qar_library_load failed.
-  // The dispatch tables are empty then, and calling the wrapper would abort() the host.
-  if (qar_is_library_loaded()) { qar_library_destroy(); }
-#else
-  qar_library_destroy();
-#endif
-#ifdef _WIN32
-  // Destroy the per-sender contexts only after the library (and therefore every QAR
-  // graphics thread) is gone, so we never delete a context still current elsewhere.
-  {
-    const WglApi & w = wgl();
-    for (auto & ctx : gl_sender_contexts_) {
-      if (ctx != nullptr && ctx->context != nullptr && w.DeleteContext != nullptr) {
-        w.DeleteContext(static_cast<HGLRC>(ctx->context));
-        ctx->context = nullptr;
-      }
-    }
-  }
-#endif
-  gl_sender_contexts_.clear();
-#ifdef QAR_ENABLE_DYNAMIC_LOADING
-  // Release the dynamically loaded QAR DLL only if we were the ones who loaded it.
-  if (loaded_library_) {
-    qar_library_unload();
-    loaded_library_ = false;
-  }
-#endif
+  using Clock = std::chrono::steady_clock;
+
+  // Guards last_error, volume and the anchor requests.
+  mutable std::mutex mutex;
+  std::string last_error;
+  QarAppVolumeId volume{};
+  std::atomic<bool> has_volume{false};
+  std::atomic<bool> attached{false};
+  std::atomic<AttachState> attach_state{AttachState::kIdle};
+  /// Set by detach() and by the next attach: the tasks of this state undo themselves.
+  std::atomic<bool> retired{false};
+  /// Held while the attach decides to register the listener and while detach() retires, so
+  /// that the listener is never registered after detach() removed it.
+  std::mutex listener_mutex;
+
+  std::atomic<bool> has_geo_anchor{false};
+  bool geo_result_ready = false;
+  std::string geo_result;
+  bool geo_pending = false;
+  bool geo_clear = false;
+  QarGeoAnchorFrame geo_frame{};
+  bool geo_task_queued = false;
+
+  // The placement cache. Guarded by placement_mutex, which no QarOS call is made under.
+  std::mutex placement_mutex;
+  qar_ar_core::ScenePlacement placement;
+  Clock::time_point read_at{};
+  /// The next refresh is not asked for before this (after a failure, or a slow refresh).
+  Clock::time_point refresh_not_before{};
+  std::chrono::milliseconds refresh_interval{1000};
+  Clock::time_point full_read_at{};
+  /// When a change of the cached placement was last logged (the log is rate-limited).
+  Clock::time_point change_logged_at{};
+  bool subscribed = false;
+  std::uint64_t updates_seen = 0;
+  bool latest_failure_noted = false;
+  std::atomic<bool> refresh_in_flight{false};
+
+  // The update subscription. Owner thread only.
+  QarCancelToken * token = nullptr;
+  PlacementSubscription * subscription = nullptr;
+};
+
+/// What the runtime's update callback needs. Heap-allocated for the life of the subscription: the
+/// runtime may call back until the token is cancelled.
+struct QarCApiSenderFactory::PlacementSubscription
+{
+  std::shared_ptr<CrossThread> shared;
+  QarAppVolumeId volume{};
+};
+
+struct QarCApiSenderFactory::AttachJob
+{
+  Config config;
+  std::shared_ptr<CrossThread> shared;
+  /// Alive while any task runs: the tasks run on the owner's own thread, which the owner joins
+  /// before it is destroyed.
+  QarSessionOwner * owner = nullptr;
+  std::weak_ptr<ITargetListener> listener;
+};
+
+void QarCApiSenderFactory::set_error(const std::string & text)
+{
+  std::lock_guard<std::mutex> lk(shared_->mutex);
+  shared_->last_error = text;
 }
 
-bool QarCApiSenderFactory::scene_placement(qar_ar_core::ScenePlacement & out) const
+std::string QarCApiSenderFactory::last_error() const
 {
-  if (!has_app_volume_ || session_ == nullptr) {
+  std::lock_guard<std::mutex> lk(shared_->mutex);
+  return shared_->last_error;
+}
+
+bool QarCApiSenderFactory::attached() const
+{
+  return shared_->attached.load();
+}
+
+bool QarCApiSenderFactory::has_geo_anchor() const
+{
+  return shared_->has_geo_anchor.load();
+}
+
+bool QarCApiSenderFactory::app_volume(QarAppVolumeId & out_id) const
+{
+  if (!shared_->has_volume.load()) {
     return false;
   }
+  std::lock_guard<std::mutex> lk(shared_->mutex);
+  out_id = shared_->volume;
+  return true;
+}
+
+bool QarCApiSenderFactory::post_session_task(
+  const char * name, SessionTask task, std::function<void()> dropped)
+{
+  const std::shared_ptr<QarSessionOwner> owner = owner_.lock();
+  if (owner == nullptr) {
+    return false;
+  }
+  return owner->post_session_task(name, std::move(task), std::move(dropped));
+}
+
+QarCApiSenderFactory::AttachState QarCApiSenderFactory::attach_state() const
+{
+  return shared_->attach_state.load();
+}
+
+bool QarCApiSenderFactory::begin_attach()
+{
+  if (shared_->attached.load()) {
+    return true;
+  }
+  if (shared_->attach_state.load() == AttachState::kPending) {
+    return true;
+  }
+  // A new attempt starts from a state of its own; a task of an earlier attempt that is still
+  // queued sees `retired` and undoes itself.
+  shared_->retired.store(true);
+  shared_ = std::make_shared<CrossThread>();
+
+  const std::shared_ptr<QarSessionOwner> owner = owner_.lock();
+  if (owner == nullptr || !owner->ready() || owner->session() == nullptr) {
+    set_error("attach: the QarOS session is not running");
+    return false;
+  }
+  const std::weak_ptr<QarCApiSenderFactory> self = weak_from_this();
+  if (self.expired()) {
+    set_error("attach: the factory must be owned by a std::shared_ptr");
+    return false;
+  }
+  auto job = std::make_shared<AttachJob>();
+  job->config = config_;
+  job->shared = shared_;
+  job->owner = owner.get();
+  job->listener = self;
+  const std::shared_ptr<CrossThread> shared = shared_;
+  shared->attach_state.store(AttachState::kPending);
+  const bool posted = owner->post_session_task(
+    "attach", [job](QarSession * session) { run_attach(session, *job); },
+    [shared] {
+      {
+        std::lock_guard<std::mutex> lk(shared->mutex);
+        shared->last_error = "attach: the QarOS session ended before the attach ran";
+      }
+      shared->attach_state.store(AttachState::kFailed);
+    });
+  if (!posted) {
+    shared->attach_state.store(AttachState::kIdle);
+    set_error("attach: the QarOS session is not accepting calls");
+    return false;
+  }
+  return true;
+}
+
+bool QarCApiSenderFactory::attach()
+{
+  if (!begin_attach()) {
+    return false;
+  }
+  while (attach_state() == AttachState::kPending) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  return attach_state() == AttachState::kAttached;
+}
+
+bool QarCApiSenderFactory::read_placement_by_query(
+  QarSession * session, const QarAppVolumeId & volume, qar_ar_core::ScenePlacement & out)
+{
   // There is no get-handle-by-id call, so enumerate and match. The session owns
   // one volume in practice; the loop exists because the API cannot promise it.
   std::size_t count = 0;
-  if (qar_result_is_error(qar_query_app_volumes_count(session_, &count)) || count == 0) {
+  if (qar_result_is_error(QAR_CALL(qar_query_app_volumes_count, session, &count)) || count == 0) {
     return false;
   }
   std::vector<QarAppVolume *> handles(count, nullptr);
   std::size_t written = 0;
-  if (qar_result_is_error(qar_query_app_volumes(session_, handles.data(), count, &written))) {
+  if (qar_result_is_error(
+      QAR_CALL(qar_query_app_volumes, session, handles.data(), count, &written)))
+  {
     return false;
   }
   bool found = false;
@@ -2586,8 +2045,8 @@ bool QarCApiSenderFactory::scene_placement(qar_ar_core::ScenePlacement & out) co
     }
     if (!found) {
       QarAppVolumeId id{};
-      const bool is_ours = !qar_result_is_error(qar_app_volume_get_id(handle, &id)) &&
-        std::memcmp(&id, &app_volume_, sizeof(QarAppVolumeId)) == 0;
+      const bool is_ours = !qar_result_is_error(QAR_CALL(qar_app_volume_get_id, handle, &id)) &&
+        std::memcmp(&id, &volume, sizeof(QarAppVolumeId)) == 0;
       if (is_ours) {
         QarPose volume_pose{};
         QarPose app_pose{};
@@ -2595,9 +2054,9 @@ bool QarCApiSenderFactory::scene_placement(qar_ar_core::ScenePlacement & out) co
         // All three or none: a placement assembled from a partial read would be
         // a different transform, not a slightly wrong one.
         const bool ok =
-          !qar_result_is_error(qar_app_volume_get_pose(handle, &volume_pose)) &&
-          !qar_result_is_error(qar_app_volume_get_app_pose(handle, &app_pose)) &&
-          !qar_result_is_error(qar_app_volume_get_app_scale(handle, &app_scale));
+          !qar_result_is_error(QAR_CALL(qar_app_volume_get_pose, handle, &volume_pose)) &&
+          !qar_result_is_error(QAR_CALL(qar_app_volume_get_app_pose, handle, &app_pose)) &&
+          !qar_result_is_error(QAR_CALL(qar_app_volume_get_app_scale, handle, &app_scale));
         if (ok) {
           placement.known = true;
           placement.volume_pose = volume_pose;
@@ -2607,13 +2066,477 @@ bool QarCApiSenderFactory::scene_placement(qar_ar_core::ScenePlacement & out) co
         }
       }
     }
-    qar_app_volume_handle_destroy(handle);
+    QAR_CALL(qar_app_volume_handle_destroy, handle);
   }
   if (!found) {
     return false;
   }
   out = placement;
   return true;
+}
+
+void QarCApiSenderFactory::placement_update_trampoline(QarAppVolume * handle, void * user_state)
+{
+  // A library thread. The handle is borrowed: its accessors are read here and it is not kept. No
+  // I/O, and only the cache lock is taken.
+  const auto * subscription = static_cast<const PlacementSubscription *>(user_state);
+  if (subscription == nullptr || handle == nullptr) {
+    return;
+  }
+  QarAppVolumeId id{};
+  if (qar_result_is_error(QAR_CALL(qar_app_volume_get_id, handle, &id)) ||
+    std::memcmp(&id, &subscription->volume, sizeof(QarAppVolumeId)) != 0)
+  {
+    return;
+  }
+  QarPose volume_pose{};
+  QarPose app_pose{};
+  float app_scale = 1.0f;
+  if (qar_result_is_error(QAR_CALL(qar_app_volume_get_pose, handle, &volume_pose)) ||
+    qar_result_is_error(QAR_CALL(qar_app_volume_get_app_pose, handle, &app_pose)) ||
+    qar_result_is_error(QAR_CALL(qar_app_volume_get_app_scale, handle, &app_scale)))
+  {
+    return;
+  }
+  CrossThread & state = *subscription->shared;
+  std::lock_guard<std::mutex> lk(state.placement_mutex);
+  state.placement.known = true;
+  state.placement.volume_pose = volume_pose;
+  state.placement.app_pose = app_pose;
+  state.placement.app_scale = app_scale;
+  state.read_at = CrossThread::Clock::now();
+  ++state.updates_seen;
+}
+
+void QarCApiSenderFactory::run_attach(QarSession * session, const AttachJob & job)
+{
+  CrossThread & state = *job.shared;
+  const Config & config = job.config;
+  if (state.retired.load()) {
+    return;
+  }
+
+  // Get the app volume BEFORE any peer is served, so it is known by the time create_sender()
+  // runs. The app volume is the mixer's unit of work: it composites each incoming stream into
+  // the volume named by that stream's QarRenderSenderInit::app_volume_id. With the mixer ON, a
+  // stream created with the default NULL id has nowhere to land: the Visualizer renders an empty
+  // room. The common name is stable, so the next start finds the same volume again.
+  if (config.create_app_volume) {
+    const std::string common_name = qar_ar_core::make_volume_common_name(config.name_scope);
+    QarAppVolumeInit vol = qar_app_volume_init_default();
+    vol.common_name = common_name.c_str();
+    vol.display_name = config.app_volume_name.c_str();
+    // gesture_configuration stays NULL (qar_app_volume_init_default()'s own default): the
+    // volume then gets the runtime's default configuration, which is exactly what
+    // qar_app_volume_gesture_configuration_default() returns, so a struct built here would
+    // change no field while adding a real risk: any rule left unfilled, or any drift against
+    // the runtime's own layout, silently zeros to QAR_APP_VOLUME_CONTROLLER_RAY_LINE_STYLE_NONE
+    // (an invisible ray) rather than to the vendor's SOLID or DOTTED defaults.
+    // The pose is the cuboid CENTRE in room space, so the box is lifted rather than leaving
+    // half of it below y = 0.
+    vol.pose = qar_pose_default();
+    vol.pose.position.y = config.app_volume_center_y_m;
+    vol.size.width_meters = config.app_volume_width_m;
+    vol.size.length_meters = config.app_volume_length_m;
+    vol.size.height_meters = config.app_volume_height_m;
+    vol.app_pose = qar_pose_default();
+    vol.app_scale = config.app_volume_scale;
+
+    QarAppVolumeId volume_id{};
+    trace_msg("-> qar_app_volumes_get_or_create");
+    const QarResult av = QAR_CALL(qar_app_volumes_get_or_create, session, &vol, &volume_id);
+    trace_msg("<- qar_app_volumes_get_or_create");
+    if (qar_result_is_error(av)) {
+      // Fatal to every render stream: the field is Required and NULL is rejected outright,
+      // so without a volume create_sender() refuses; see the refusal there.
+      {
+        std::lock_guard<std::mutex> lk(state.mutex);
+        state.last_error = report_result("qar_app_volumes_get_or_create", av);
+      }
+      std::fprintf(stderr,
+        "[qar-adapter] NO render stream can be created without an app volume: "
+        "QarRenderSenderInit::app_volume_id is required and NULL is rejected with "
+        "QAR_STATUS_APP_VOLUME_INVALID_ID.\n");
+      std::fflush(stderr);
+      state.attach_state.store(AttachState::kFailed);
+      return;
+    }
+    {
+      std::lock_guard<std::mutex> lk(state.mutex);
+      state.volume = volume_id;
+    }
+    state.has_volume.store(true);
+
+    // What the Hub holds for the volume at this moment. A volume that existed already keeps the
+    // placement the operator gave it, so this line says whether the placement was restored. It
+    // is the one query of the placement: after it the cache is kept by the update subscription.
+    qar_ar_core::ScenePlacement placement;
+    if (read_placement_by_query(session, volume_id, placement)) {
+      {
+        std::lock_guard<std::mutex> lk(state.placement_mutex);
+        state.placement = placement;
+        state.read_at = CrossThread::Clock::now();
+        state.full_read_at = state.read_at;
+      }
+      std::fprintf(stderr,
+        "[qar-adapter] app volume '%s' id=%s placement read back: volume pose=(%.2f, %.2f, %.2f) "
+        "app_scale=%.3f (asked: centre_y=%.2f m, size=%.2fx%.2fx%.2f m, app_scale=%.3f)\n",
+        common_name.c_str(), app_volume_id_to_hex(volume_id).c_str(),
+        static_cast<double>(placement.volume_pose.position.x),
+        static_cast<double>(placement.volume_pose.position.y),
+        static_cast<double>(placement.volume_pose.position.z),
+        static_cast<double>(placement.app_scale),
+        static_cast<double>(config.app_volume_center_y_m),
+        static_cast<double>(config.app_volume_width_m),
+        static_cast<double>(config.app_volume_length_m),
+        static_cast<double>(config.app_volume_height_m),
+        static_cast<double>(config.app_volume_scale));
+    } else {
+      std::fprintf(stderr,
+        "[qar-adapter] app volume '%s' id=%s: the placement could not be read back\n",
+        common_name.c_str(), app_volume_id_to_hex(volume_id).c_str());
+    }
+    std::fflush(stderr);
+
+    if (adapter_trace_on() && config.app_volume_pick_gestures) {
+      // There is no get-handle-by-id call, so enumerate the session's app volumes and match
+      // by id to read back what the runtime actually holds: that is what proves arbitration,
+      // not what we intended to send it.
+      std::size_t volume_count = 0;
+      if (!qar_result_is_error(QAR_CALL(qar_query_app_volumes_count, session, &volume_count)) &&
+        volume_count > 0)
+      {
+        std::vector<QarAppVolume *> volume_handles(volume_count, nullptr);
+        std::size_t volumes_written = 0;
+        if (!qar_result_is_error(QAR_CALL(
+              qar_query_app_volumes, session, volume_handles.data(), volume_count,
+              &volumes_written)))
+        {
+          bool read_back_logged = false;
+          for (std::size_t i = 0; i < volumes_written && i < volume_handles.size(); ++i) {
+            QarAppVolume * const handle = volume_handles[i];
+            if (handle == nullptr) { continue; }
+            if (!read_back_logged) {
+              QarAppVolumeId id{};
+              const bool is_ours =
+                !qar_result_is_error(QAR_CALL(qar_app_volume_get_id, handle, &id)) &&
+                std::memcmp(&id, &volume_id, sizeof(QarAppVolumeId)) == 0;
+              QarAppVolumeGestureConfiguration read_back{};
+              if (is_ours && !qar_result_is_error(
+                    QAR_CALL(qar_app_volume_get_gesture_configuration, handle, &read_back)))
+              {
+                log_gesture_configuration("read-back", read_back);
+                read_back_logged = true;
+              }
+            }
+            QAR_CALL(qar_app_volume_handle_destroy, handle);
+          }
+        }
+      }
+    }
+
+    // Changes made by the operator or by another peer reach the cache through the runtime's own
+    // update subscription; the getters of the refresh task back it up.
+    QarCancelToken * token = nullptr;
+    if (!qar_result_is_error(QAR_CALL(qar_cancel_token_create, &token)) && token != nullptr) {
+      auto * subscription = new PlacementSubscription();
+      subscription->shared = job.shared;
+      subscription->volume = volume_id;
+      const QarResult subscribed = QAR_CALL(
+          qar_app_volumes_subscribe_updates, session,
+          &QarCApiSenderFactory::placement_update_trampoline, subscription, token);
+      if (qar_result_is_error(subscribed)) {
+        QAR_CALL(qar_cancel_token_handle_destroy, token);
+        delete subscription;
+        std::fprintf(stderr, "[qar-adapter] %s; the placement is refreshed with the getters\n",
+          result_text("qar_app_volumes_subscribe_updates", subscribed).c_str());
+        std::fflush(stderr);
+      } else {
+        state.token = token;
+        state.subscription = subscription;
+        std::lock_guard<std::mutex> lk(state.placement_mutex);
+        state.subscribed = true;
+      }
+    }
+  }
+
+  {
+    // Held with detach(): either the listener is registered before detach() retires this state
+    // and removes it, or it is not registered.
+    std::lock_guard<std::mutex> lk(state.listener_mutex);
+    if (state.retired.load()) {
+      run_placement_unsubscribe(job.shared);
+      return;
+    }
+    if (job.owner != nullptr) {
+      job.owner->set_target_listener(job.listener);
+    }
+    {
+      std::lock_guard<std::mutex> lock(state.mutex);
+      state.last_error.clear();
+    }
+    state.attached.store(true);
+    state.attach_state.store(AttachState::kAttached);
+  }
+}
+
+void QarCApiSenderFactory::run_placement_unsubscribe(const std::shared_ptr<CrossThread> & shared)
+{
+  CrossThread & state = *shared;
+  QarCancelToken * const token = state.token;
+  PlacementSubscription * const subscription = state.subscription;
+  state.token = nullptr;
+  state.subscription = nullptr;
+  {
+    std::lock_guard<std::mutex> lk(state.placement_mutex);
+    state.subscribed = false;
+  }
+  if (token != nullptr) {
+    // Returns after a callback that is running has ended, so the context can go right after.
+    QAR_CALL(qar_cancel_token_cancel, token);
+    QAR_CALL(qar_cancel_token_handle_destroy, token);
+  }
+  delete subscription;
+}
+
+// True when the two placements differ by more than a millimetre or a thousandth of a scale (an
+// unknown placement differs from every read).
+static bool placement_differs(
+  const qar_ar_core::ScenePlacement & a, const qar_ar_core::ScenePlacement & b)
+{
+  if (!a.known || !b.known) {
+    return a.known != b.known;
+  }
+  const auto far_apart = [](float x, float y) { return std::fabs(x - y) > 0.001f; };
+  const auto pose_far = [&far_apart](const QarPose & p, const QarPose & q) {
+      return far_apart(p.position.x, q.position.x) || far_apart(p.position.y, q.position.y) ||
+             far_apart(p.position.z, q.position.z) ||
+             far_apart(p.orientation.x, q.orientation.x) ||
+             far_apart(p.orientation.y, q.orientation.y) ||
+             far_apart(p.orientation.z, q.orientation.z) ||
+             far_apart(p.orientation.w, q.orientation.w);
+    };
+  return pose_far(a.volume_pose, b.volume_pose) || pose_far(a.app_pose, b.app_pose) ||
+         far_apart(a.app_scale, b.app_scale);
+}
+
+void QarCApiSenderFactory::run_placement_refresh(
+  QarSession * session, const std::shared_ptr<CrossThread> & shared)
+{
+  CrossThread & state = *shared;
+  struct Done
+  {
+    CrossThread & state;
+    ~Done() { state.refresh_in_flight.store(false); }
+  } done{state};
+  if (state.retired.load() || !state.has_volume.load()) {
+    return;
+  }
+  QarAppVolumeId volume{};
+  {
+    std::lock_guard<std::mutex> lk(state.mutex);
+    volume = state.volume;
+  }
+  const CrossThread::Clock::time_point start = CrossThread::Clock::now();
+  QarPose volume_pose{};
+  QarPose app_pose{};
+  float app_scale = 1.0f;
+  QarResult failure{};
+  bool ok = true;
+  const QarResult pose_result = QAR_CALL(
+      qar_app_volume_get_latest_pose, session, &volume, &volume_pose);
+  if (qar_result_is_error(pose_result)) {
+    ok = false;
+    failure = pose_result;
+  }
+  if (ok) {
+    const QarResult result = QAR_CALL(
+        qar_app_volume_get_latest_app_pose, session, &volume, &app_pose);
+    if (qar_result_is_error(result)) {
+      ok = false;
+      failure = result;
+    }
+  }
+  if (ok) {
+    const QarResult result = QAR_CALL(
+        qar_app_volume_get_latest_app_scale, session, &volume, &app_scale);
+    if (qar_result_is_error(result)) {
+      ok = false;
+      failure = result;
+    }
+  }
+  // Stores a value that was read and logs it, rate-limited, when it changes what was cached:
+  // the values before and after and the source that answered. A value that only looks valid
+  // (a default the runtime answers for a volume without a fast-path change) shows up here.
+  const auto store = [&state](const qar_ar_core::ScenePlacement & after, const char * source) {
+      qar_ar_core::ScenePlacement before;
+      bool log_it = false;
+      {
+        std::lock_guard<std::mutex> lk(state.placement_mutex);
+        before = state.placement;
+        state.placement = after;
+        state.placement.known = true;
+        const CrossThread::Clock::time_point now = CrossThread::Clock::now();
+        log_it = placement_differs(before, state.placement) &&
+          (now - state.change_logged_at) >= std::chrono::seconds(5);
+        if (log_it) {
+          state.change_logged_at = now;
+        }
+      }
+      if (log_it) {
+        std::fprintf(stderr,
+          "[qar-adapter] placement changed (%s)%s: volume pose (%.3f, %.3f, %.3f) -> "
+          "(%.3f, %.3f, %.3f), app pose (%.3f, %.3f, %.3f) -> (%.3f, %.3f, %.3f), "
+          "app_scale %.3f -> %.3f\n",
+          source, before.known ? "" : " [first value]",
+          static_cast<double>(before.volume_pose.position.x),
+          static_cast<double>(before.volume_pose.position.y),
+          static_cast<double>(before.volume_pose.position.z),
+          static_cast<double>(after.volume_pose.position.x),
+          static_cast<double>(after.volume_pose.position.y),
+          static_cast<double>(after.volume_pose.position.z),
+          static_cast<double>(before.app_pose.position.x),
+          static_cast<double>(before.app_pose.position.y),
+          static_cast<double>(before.app_pose.position.z),
+          static_cast<double>(after.app_pose.position.x),
+          static_cast<double>(after.app_pose.position.y),
+          static_cast<double>(after.app_pose.position.z),
+          static_cast<double>(before.app_scale), static_cast<double>(after.app_scale));
+        std::fflush(stderr);
+      }
+    };
+  bool note_failure = false;
+  bool query_instead = false;
+  if (ok) {
+    qar_ar_core::ScenePlacement after;
+    after.volume_pose = volume_pose;
+    after.app_pose = app_pose;
+    after.app_scale = app_scale;
+    store(after, "qar_app_volume_get_latest_pose, _app_pose, _app_scale");
+  } else {
+    std::lock_guard<std::mutex> lk(state.placement_mutex);
+    note_failure = !state.latest_failure_noted;
+    state.latest_failure_noted = true;
+    // Without the update subscription the getters are the only source: a query then keeps the
+    // cache from going stale, at most every 10 s. A placement that is not known yet is read by
+    // a query as well, because the getters may have nothing to answer with.
+    query_instead = (!state.subscribed || !state.placement.known) &&
+      (CrossThread::Clock::now() - state.full_read_at) >= std::chrono::seconds(10);
+  }
+  if (note_failure) {
+    std::fprintf(stderr, "[qar-adapter] %s; the placement relies on the update subscription\n",
+      result_text("qar_app_volume_get_latest_*", failure).c_str());
+    std::fflush(stderr);
+  }
+  if (!ok && query_instead) {
+    qar_ar_core::ScenePlacement placement;
+    if (read_placement_by_query(session, volume, placement)) {
+      store(placement, "qar_query_app_volumes");
+      {
+        std::lock_guard<std::mutex> lk(state.placement_mutex);
+        state.full_read_at = CrossThread::Clock::now();
+      }
+      ok = true;
+    }
+  }
+  const CrossThread::Clock::time_point end = CrossThread::Clock::now();
+  const auto took = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+  std::lock_guard<std::mutex> lk(state.placement_mutex);
+  state.read_at = end;
+  // A refresh that is slow is asked for less often, so it cannot keep the thread busy: it
+  // may take at most a twentieth of the time.
+  state.refresh_interval = std::min(
+    std::max(std::chrono::milliseconds(1000), took * 20), std::chrono::milliseconds(30000));
+  state.refresh_not_before = ok ? end : end + std::chrono::seconds(10);
+}
+
+void QarCApiSenderFactory::detach()
+{
+  // The tasks of the state that is left behind see `retired` and undo themselves. The next
+  // attach starts from a fresh state.
+  const std::shared_ptr<CrossThread> left = shared_;
+  {
+    std::lock_guard<std::mutex> lk(left->listener_mutex);
+    left->retired.store(true);
+  }
+  shared_ = std::make_shared<CrossThread>();
+
+  // Removing the listener returns after a delivery in progress ended, so the factory is not used
+  // by a QAR thread afterwards and may be released by the caller.
+  if (const std::shared_ptr<QarSessionOwner> owner = owner_.lock()) {
+    owner->set_target_listener(std::weak_ptr<ITargetListener>());
+    // The update subscription ends on the thread that owns the session, behind an attach that
+    // may still be running. When the post is refused (the session ended on its own) the
+    // subscription is not cancelled here: the destruction of the session ends it, and the
+    // senders with it.
+    owner->post_session_task(
+      "placement-unsubscribe", [left](QarSession *) { run_placement_unsubscribe(left); });
+  }
+  left->attached.store(false);
+  for (const std::shared_ptr<PendingSender> & pending : pending_senders_) {
+    abandon_pending(*pending);
+  }
+  pending_senders_.clear();
+  std::lock_guard<std::mutex> lk(mutex_);
+  pending_requests_.clear();
+  served_peers_.clear();
+  closed_peers_.clear();
+  adapters_.clear();
+}
+
+QarCApiSenderFactory::~QarCApiSenderFactory()
+{
+  detach();
+#ifdef _WIN32
+  // Destroy the per-sender contexts last: every sender of this factory is gone by now (the
+  // producer destroys its manager before it releases the factory), so no QAR graphics thread
+  // binds one of them.
+  {
+    const WglApi & w = wgl();
+    for (auto & ctx : gl_sender_contexts_) {
+      if (ctx != nullptr && ctx->context != nullptr && w.DeleteContext != nullptr) {
+        w.DeleteContext(static_cast<HGLRC>(ctx->context));
+        ctx->context = nullptr;
+      }
+    }
+  }
+#endif
+  gl_sender_contexts_.clear();
+}
+
+bool QarCApiSenderFactory::scene_placement(qar_ar_core::ScenePlacement & out) const
+{
+  const std::shared_ptr<CrossThread> shared = shared_;
+  if (!shared->has_volume.load()) {
+    return false;
+  }
+  bool refresh = false;
+  bool known = false;
+  {
+    std::lock_guard<std::mutex> lk(shared->placement_mutex);
+    known = shared->placement.known;
+    if (known) {
+      out = shared->placement;
+    }
+    // Asked for also while nothing is known: a read that failed at the attach is tried again,
+    // paced like every refresh.
+    const CrossThread::Clock::time_point now = CrossThread::Clock::now();
+    refresh = (now - shared->read_at) >= shared->refresh_interval &&
+      now >= shared->refresh_not_before;
+  }
+  if (refresh && shared->attached.load() && !shared->retired.load() &&
+    !shared->refresh_in_flight.exchange(true))
+  {
+    const std::shared_ptr<QarSessionOwner> owner = owner_.lock();
+    const bool posted = owner != nullptr && owner->post_session_task(
+      "placement-refresh",
+      [shared](QarSession * session) { run_placement_refresh(session, shared); },
+      [shared] { shared->refresh_in_flight.store(false); });
+    if (!posted) {
+      shared->refresh_in_flight.store(false);
+    }
+  }
+  return known;
 }
 
 bool QarCApiSenderFactory::capture_gl_context()
@@ -2798,13 +2721,14 @@ bool QarCApiSenderFactory::gl_restore_current_cb(
 std::shared_ptr<qar_ogre_streaming::IQarRenderSenderAdapter>
 QarCApiSenderFactory::create_sender(const QarPeerId & peer_id)
 {
-  if (!ready_) { return nullptr; }
+  if (!ready() || !shared_->attached.load()) { return nullptr; }
+  QarSession * const open_session = session();
 
   // ---------------------------------------------------------------------------
   // ASYNC creation. Creating a sender negotiates a transfer with the
-  // receiver and, with SDK drops earlier than that of 2026-09-28, could take
-  // arbitrarily long - or never finish: an OpenGL sender against the Vulkan-only
-  // mixer parked in "waiting for receiver borrow signal" forever. Because create_sender()
+  // receiver and is not bounded in time: it can take arbitrarily long - or never
+  // finish: an OpenGL sender against the Vulkan-only mixer parks in "waiting for
+  // receiver borrow signal" forever. Because create_sender()
   // is driven from the panel's QTimer tick, the synchronous call would freeze the whole of RViz.
   //
   // So this function never waits. First call for a peer kicks off
@@ -2831,7 +2755,7 @@ QarCApiSenderFactory::create_sender(const QarPeerId & peer_id)
       return nullptr;
     }
 
-    QarRenderSender * const stream = p->stream;
+    QarRenderSender * const stream = p->stream.exchange(nullptr);
     const bool failed = p->failed.load(std::memory_order_acquire);
     pending_senders_.erase(it);
     if (failed || stream == nullptr) {
@@ -2880,9 +2804,8 @@ QarCApiSenderFactory::create_sender(const QarPeerId & peer_id)
   // is not necessarily still current — so we use the handles latched by
   // capture_gl_context(), which the panel calls every tick. Try once more here in
   // case this is the very first tick.
-  // One struct PER CONTEXT TYPE since the 2026-09-21 SDK: the Egl, Wgl and Glx variants
-  // of QarStreamParamsOpenGl replace the single QarStreamParamsOpenGl (and its
-  // QarOpenGlContextType discriminator, structure type 0x4001). We own a WGL context,
+  // One struct PER CONTEXT TYPE: the Egl, Wgl and Glx variants of
+  // QarStreamParamsOpenGl, with no context-type discriminator. We own a WGL context,
   // so this is the Wgl one and the context type is the struct's identity.
   QarStreamParamsOpenGlWgl gl_params = qar_stream_params_opengl_wgl_default();
 #ifdef _WIN32
@@ -2949,7 +2872,7 @@ QarCApiSenderFactory::create_sender(const QarPeerId & peer_id)
 #endif
 
   init.enable_auto_reconnects = true;
-  // Key this stream to our app volume. REQUIRED since the 2026-09-21 SDK: the
+  // Key this stream to our app volume. REQUIRED by the installed runtime: the
   // field is documented "Required ... NULL is rejected with
   // QAR_STATUS_APP_VOLUME_INVALID_ID", and "a stream without one is not
   // positioned in the scene and no viewer can show it".
@@ -2959,10 +2882,11 @@ QarCApiSenderFactory::create_sender(const QarPeerId & peer_id)
   // "no stream at all, with a confusing error". Refusing HERE turns it into a
   // legible message on the tick that would have failed, and create_sender is
   // retried every render tick, so a volume that appears later still works.
-  if (!has_app_volume_) {
+  QarAppVolumeId stream_volume{};
+  if (!app_volume(stream_volume)) {
     std::fprintf(stderr,
       "[qar-adapter] create_sender: no app volume, and QarRenderSenderInit::app_volume_id "
-      "is REQUIRED since the 2026-09-21 SDK (NULL => QAR_STATUS_APP_VOLUME_INVALID_ID). "
+      "is REQUIRED by the QAROS runtime (NULL => QAR_STATUS_APP_VOLUME_INVALID_ID). "
       "%s\n",
       config_.create_app_volume
         ? "Volume creation failed at connect - see the qar_app_volumes_add_volume error above."
@@ -2970,6 +2894,7 @@ QarCApiSenderFactory::create_sender(const QarPeerId & peer_id)
     std::fflush(stderr);
     return nullptr;
   }
+  app_volume_ = stream_volume;
   init.app_volume_id = &app_volume_;
   if (adapter_trace_on()) {
     std::fprintf(stderr, "[qar-adapter] create_sender: app_volume_id=%s\n",
@@ -3005,9 +2930,10 @@ QarCApiSenderFactory::create_sender(const QarPeerId & peer_id)
   }
 
   trace_msg("create_sender: -> qar_render_sender_create_async");
-  const QarResult r = qar_render_sender_create_async(
-    session_, &pending->init, &QarCApiSenderFactory::sender_created_trampoline,
-    new std::shared_ptr<PendingSender>(pending), nullptr);
+  const QarResult r = QAR_CALL(
+      qar_render_sender_create_async, open_session, &pending->init,
+      &QarCApiSenderFactory::sender_created_trampoline, new std::shared_ptr<PendingSender>(pending),
+      nullptr);
   trace_msg("create_sender: <- qar_render_sender_create_async (kicked off)");
   if (qar_result_is_error(r)) {
     std::fprintf(stderr, "[qar-adapter] %s\n",
@@ -3038,133 +2964,29 @@ void QarCApiSenderFactory::sender_created_trampoline(
   if (!holder || !*holder) { return; }
   PendingSender & p = **holder;
 
-  p.stream = stream;
+  p.stream.store(stream);
   p.failed.store(qar_result_is_error(status) || stream == nullptr,
     std::memory_order_relaxed);
   // Only the number is kept: the render tick prints it, a callback of the runtime does no I/O.
   p.callback_thread.store(thread_number(), std::memory_order_relaxed);
-  p.done.store(true, std::memory_order_release);
-}
-
-std::string QarCApiSenderFactory::invite_one_peer_locked_free(
-  PeerKind kind, const std::string & hostname, QarPeerId & out_peer)
-{
-  if (session_ == nullptr) {
-    return "invite_peer: no active session";
-  }
-  if (peer_kind_needs_hostname(kind) && hostname.empty()) {
-    return std::string("invite_peer: ") + to_string(kind) + " needs a device hostname";
-  }
-  {
-    std::lock_guard<std::mutex> lk(mutex_);
-    if (invited_peers_.size() >= config_.max_peers) {
-      return "invite_peer: already at the max_peers ceiling (" +
-             std::to_string(config_.max_peers) + ")";
+  p.done.store(true);
+  // A creation that detach() gave up has no reader: the stream is destroyed here. Both sides
+  // set their flag first and look at the other's second, and whoever takes the stream owns it.
+  if (p.abandoned.load()) {
+    if (QarRenderSender * const late = p.stream.exchange(nullptr)) {
+      QAR_CALL(qar_render_stream_handle_destroy, late);
     }
   }
-  // One connection-string builder per device type; only HoloLens is addressable, by
-  // hostname. Inviting a real device here is what puts it in the allow-list, so the
-  // timing heuristic (kInvitedOrNew) is not needed for anything invited this way.
-  char conn[1024] = {0};
-  QarResult r{};
-  switch (kind) {
-    case PeerKind::kHoloLens:
-      trace_msg("-> qar_session_invite_connection_string_hololens");
-      r = qar_session_invite_connection_string_hololens(hostname.c_str(), conn, sizeof(conn));
-      break;
-    case PeerKind::kQuest:
-      trace_msg("-> qar_session_invite_connection_string_quest");
-      r = qar_session_invite_connection_string_quest(conn, sizeof(conn));
-      break;
-    case PeerKind::kZed:
-      trace_msg("-> qar_session_invite_connection_string_zed");
-      r = qar_session_invite_connection_string_zed(conn, sizeof(conn));
-      break;
-    case PeerKind::kVisualizer:
-    default:
-      trace_msg("-> qar_session_invite_connection_string_visualizer");
-      r = qar_session_invite_connection_string_visualizer(conn, sizeof(conn));
-      if (!qar_result_is_error(r)) {
-        // The builder emits a BARE "visualizer:". Every such invite resolves to the
-        // same peer, so a second Visualizer cannot be opened. Naming a distinct GUID
-        // in the payload slot is the vendor-suggested way to address a distinct
-        // instance; QarOS already launches one mixer process per GUID.
-        std::string suffix = hostname.empty() ? config_.visualizer_conn_suffix
-                                              : hostname;
-        if (suffix == "auto") {
-          suffix = make_random_uuid();
-        }
-        if (!suffix.empty()) {
-          const std::size_t len = std::strlen(conn);
-          if (len + suffix.size() + 1 <= sizeof(conn)) {
-            std::memcpy(conn + len, suffix.c_str(), suffix.size() + 1);
-          } else {
-            return "invite_peer: visualizer connection string too long";
-          }
-        }
-      }
-      break;
-  }
-  if (qar_result_is_error(r)) {
-    return report_result("qar_session_invite_connection_string", r);
-  }
-  if (adapter_trace_on()) {
-    // The launcher logs the invite it receives as `hostname='' device=…`, so seeing the
-    // string we built is what makes a failed device invite diagnosable at all.
-    std::fprintf(stderr, "[qar-adapter] invite kind=%s host='%s' conn='%s'\n",
-      to_string(kind), hostname.c_str(), conn);
-    std::fflush(stderr);
-  }
-  QarSessionInvitePeerInit invite_peer = qar_session_invite_peer_init_default();
-  invite_peer.connection_string = conn;
-  QarPeerId invited = qar_peer_id_default();
-  trace_msg("-> qar_session_invite_peer");
-  r = qar_session_invite_peer(session_, &invite_peer, &invited, nullptr);
-  trace_msg("<- qar_session_invite_peer");
-  if (qar_result_is_error(r)) {
-    return report_result(
-      (std::string("qar_session_invite_peer(") + to_string(kind) + ")").c_str(), r);
-  }
-  trace_peer_id("invite_peer->invited", invited);
-  {
-    std::lock_guard<std::mutex> lk(mutex_);
-    invited_peers_.push_back(invited);
-  }
-  out_peer = invited;
-  return {};
 }
 
-std::string QarCApiSenderFactory::invite_additional_peer(
-  PeerKind kind, const std::string & hostname, QarPeerId & out_peer)
+void QarCApiSenderFactory::abandon_pending(PendingSender & pending)
 {
-  if (!ready_) {
-    return "invite_peer: factory is not ready";
+  pending.abandoned.store(true);
+  if (pending.done.load()) {
+    if (QarRenderSender * const stream = pending.stream.exchange(nullptr)) {
+      QAR_CALL(qar_render_stream_handle_destroy, stream);
+    }
   }
-  const std::string err = invite_one_peer_locked_free(kind, hostname, out_peer);
-  if (!err.empty()) {
-    return err;
-  }
-  // Queue it so its sender exists before it connects: the runtime accepts a peer's
-  // frames only against a sender built for its app id.
-  on_render_request(out_peer);
-  return {};
-}
-
-std::string QarCApiSenderFactory::invite_additional_visualizer(QarPeerId & out_peer)
-{
-  return invite_additional_peer(PeerKind::kVisualizer, std::string(), out_peer);
-}
-
-std::vector<QarPeerId> QarCApiSenderFactory::invited_peers() const
-{
-  std::lock_guard<std::mutex> lk(mutex_);
-  return invited_peers_;
-}
-
-std::size_t QarCApiSenderFactory::admitted_peer_count() const
-{
-  std::lock_guard<std::mutex> lk(mutex_);
-  return admitted_peers_.size();
 }
 
 // ===========================================================================
@@ -3186,12 +3008,24 @@ std::string QarCApiSenderFactory::set_geo_anchor_wgs84(
   return set_geo_anchor_ecef(origin, east, north, up);
 }
 
+bool QarCApiSenderFactory::take_geo_anchor_result(std::string & out_error)
+{
+  std::lock_guard<std::mutex> lk(shared_->mutex);
+  if (!shared_->geo_result_ready) {
+    return false;
+  }
+  out_error = std::move(shared_->geo_result);
+  shared_->geo_result.clear();
+  shared_->geo_result_ready = false;
+  return true;
+}
+
 std::string QarCApiSenderFactory::set_geo_anchor_ecef(
   const double origin_xyz[3],
   const double axis_x[3], const double axis_y[3], const double axis_z[3])
 {
-  if (session_ == nullptr) { return "set_geo_anchor: no session"; }
-  if (!has_app_volume_) {
+  if (!ready()) { return "set_geo_anchor: no session"; }
+  if (!shared_->has_volume.load()) {
     // The anchor is a property OF a volume, so without one there is nothing to
     // georeference. Worth saying plainly: Config::create_app_volume = false silently
     // makes geolocation impossible rather than merely unhelpful.
@@ -3200,160 +3034,164 @@ std::string QarCApiSenderFactory::set_geo_anchor_ecef(
 
   QarGeoAnchorFrame frame{};
   frame.world_ref_system = QAR_WORLD_REF_SYSTEM_ECEF_WGS84_METERS;
-  frame.origin_world = QarGeoVec3d{origin_xyz[0], origin_xyz[1], origin_xyz[2]};
-  frame.axis_x_world = QarGeoVec3d{axis_x[0], axis_x[1], axis_x[2]};
-  frame.axis_y_world = QarGeoVec3d{axis_y[0], axis_y[1], axis_y[2]};
-  frame.axis_z_world = QarGeoVec3d{axis_z[0], axis_z[1], axis_z[2]};
+  frame.origin_world = QarVector3d{origin_xyz[0], origin_xyz[1], origin_xyz[2]};
+  frame.axis_x_world = QarVector3d{axis_x[0], axis_x[1], axis_x[2]};
+  frame.axis_y_world = QarVector3d{axis_y[0], axis_y[1], axis_y[2]};
+  frame.axis_z_world = QarVector3d{axis_z[0], axis_z[1], axis_z[2]};
   // ENU (East, North, Up) is right-handed, and so is the ROS frame it comes from.
   frame.handedness = QAR_HANDEDNESS_RIGHT;
-
-  trace_msg("-> qar_app_volumes_change_app_world_anchor");
-  const QarResult r =
-    qar_app_volumes_change_app_world_anchor(session_, &app_volume_, &frame);
-  trace_msg("<- qar_app_volumes_change_app_world_anchor");
-  if (qar_result_is_error(r)) {
-    has_geo_anchor_ = false;
-    return report_result("qar_app_volumes_change_app_world_anchor", r);
-  }
-  has_geo_anchor_ = true;
-  return {};
+  return queue_geo_request(false, &frame);
 }
 
 std::string QarCApiSenderFactory::clear_geo_anchor()
 {
-  if (session_ == nullptr || !has_app_volume_) { return "clear_geo_anchor: no volume"; }
-  const QarResult r = qar_app_volumes_clear_app_world_anchor(session_, &app_volume_);
-  if (qar_result_is_error(r)) {
-    return report_result("qar_app_volumes_clear_app_world_anchor", r);
+  if (!ready() || !shared_->has_volume.load()) { return "clear_geo_anchor: no volume"; }
+  return queue_geo_request(true, nullptr);
+}
+
+std::string QarCApiSenderFactory::queue_geo_request(bool clear, const QarGeoAnchorFrame * frame)
+{
+  const std::shared_ptr<CrossThread> shared = shared_;
+  bool post = false;
+  {
+    // A request that has not run yet is replaced by the newer one; one task is queued at most.
+    std::lock_guard<std::mutex> lk(shared->mutex);
+    shared->geo_pending = true;
+    shared->geo_clear = clear;
+    if (frame != nullptr) {
+      shared->geo_frame = *frame;
+    }
+    post = !shared->geo_task_queued;
+    shared->geo_task_queued = true;
   }
-  has_geo_anchor_ = false;
+  if (!post) {
+    return {};
+  }
+  const bool posted = post_session_task(
+    "geo-anchor", [shared](QarSession * session) { run_geo_anchor(session, shared); },
+    [shared] {
+      std::lock_guard<std::mutex> lk(shared->mutex);
+      shared->geo_task_queued = false;
+      shared->geo_pending = false;
+      shared->geo_result = "the QarOS session ended before the anchor change ran";
+      shared->geo_result_ready = true;
+    });
+  if (!posted) {
+    std::lock_guard<std::mutex> lk(shared->mutex);
+    shared->geo_task_queued = false;
+    shared->geo_pending = false;
+    return clear ? "clear_geo_anchor: no session" : "set_geo_anchor: no session";
+  }
   return {};
 }
 
-bool QarCApiSenderFactory::baseline_frozen_locked()
+void QarCApiSenderFactory::run_geo_anchor(
+  QarSession * session, const std::shared_ptr<CrossThread> & shared)
 {
-  if (!connected_at_set_) {
-    return false;  // session not up yet: everything seen so far is the runtime's own
-  }
-  const auto elapsed = std::chrono::steady_clock::now() - connected_at_;
-  const bool frozen = elapsed >= std::chrono::milliseconds(config_.baseline_settle_ms);
-  if (frozen && !baseline_logged_) {
-    baseline_logged_ = true;
-    std::fprintf(stderr,
-      "[qar-adapter] peer baseline frozen: %zu pre-existing peer(s); any peer "
-      "appearing from now on is treated as a consumer and admitted\n",
-      baseline_peers_.size());
-    for (const QarPeerId & p : baseline_peers_) {
-      std::fprintf(stderr, "[qar-adapter]    baseline peer %s\n",
-        qar_ogre_streaming::peer_id_to_hex(p).c_str());
+  CrossThread & state = *shared;
+  bool clear = false;
+  QarGeoAnchorFrame frame{};
+  QarAppVolumeId volume{};
+  {
+    std::lock_guard<std::mutex> lk(state.mutex);
+    state.geo_task_queued = false;
+    if (!state.geo_pending) {
+      return;
     }
-    std::fflush(stderr);
+    state.geo_pending = false;
+    clear = state.geo_clear;
+    frame = state.geo_frame;
+    volume = state.volume;
   }
-  return frozen;
-}
-
-bool QarCApiSenderFactory::admit_locked(const QarPeerId & peer_id, const char * display_name)
-{
-  auto contains = [&peer_id](const std::vector<QarPeerId> & v) {
-      return std::any_of(v.begin(), v.end(),
-               [&peer_id](const QarPeerId & p) { return peer_eq(p, peer_id); });
-    };
-
-  // Never stream to ourselves, whatever the policy says.
-  if (has_self_peer_ && peer_eq(peer_id, self_peer_)) {
-    return false;
-  }
-  // Already admitted: let it through again (the producer de-dupes by stream) without
-  // re-running the policy or re-counting it against max_peers.
-  if (contains(admitted_peers_)) {
-    return true;
-  }
-
-  // With invite_flow_admission off there is no invite flow, so the viewer-driven
-  // peers flow through unchanged.
-  // NOTE: this is deliberately NOT tied to whether we auto-invited anything. A session
-  // that invites nothing at connect still filters, otherwise the runtime's internal
-  // peers would all be admitted the moment the subscription opens.
-  bool ok = !invite_flow_;
-  if (!ok) {
-    switch (config_.admission) {
-      case PeerAdmission::kAny:
-        ok = true;
-        break;
-      case PeerAdmission::kInvitedOrNamed:
-        ok = contains(invited_peers_);
-        if (!ok && display_name != nullptr && !config_.admission_name_filter.empty()) {
-          ok = icontains(std::string(display_name), config_.admission_name_filter);
-        }
-        break;
-      case PeerAdmission::kInvitedOrNew:
-        ok = contains(invited_peers_);
-        if (!ok) {
-          // Everything visible during the settle window is the runtime's own; anything
-          // that turns up later is a consumer that onboarded (a headset, or another
-          // machine's Visualizer) and must be streamed to. See the enum's comment for
-          // why timing is the only signal the SDK leaves us.
-          if (!baseline_frozen_locked()) {
-            if (!contains(baseline_peers_)) {
-              baseline_peers_.push_back(peer_id);
-            }
-          } else {
-            ok = !contains(baseline_peers_);
-          }
-        }
-        break;
-      case PeerAdmission::kInvitedOnly:
-      default:
-        ok = contains(invited_peers_);
-        break;
+  std::string outcome;
+  if (clear) {
+    const QarResult r = QAR_CALL(qar_app_volumes_clear_app_world_anchor, session, &volume);
+    if (qar_result_is_error(r)) {
+      outcome = report_result("qar_app_volumes_clear_app_world_anchor", r);
+    } else {
+      state.has_geo_anchor.store(false);
+    }
+  } else {
+    trace_msg("-> qar_app_volumes_change_app_world_anchor");
+    const QarResult r = QAR_CALL(qar_app_volumes_change_app_world_anchor, session, &volume, &frame);
+    trace_msg("<- qar_app_volumes_change_app_world_anchor");
+    if (qar_result_is_error(r)) {
+      state.has_geo_anchor.store(false);
+      outcome = report_result("qar_app_volumes_change_app_world_anchor", r);
+    } else {
+      state.has_geo_anchor.store(true);
     }
   }
-  if (!ok) {
-    return false;
-  }
-
-  // Every peer costs four scene renders per frame (color and depth for each of two eyes), so
-  // refuse loudly past the ceiling rather than quietly turning the render tick into a slideshow.
-  if (admitted_peers_.size() >= config_.max_peers) {
-    std::fprintf(stderr,
-      "[qar-adapter] *** peer %s refused: already streaming to %zu peers "
-      "(max_peers=%u)\n",
-      qar_ogre_streaming::peer_id_to_hex(peer_id).c_str(), admitted_peers_.size(),
-      config_.max_peers);
-    std::fflush(stderr);
-    return false;
-  }
-
-  admitted_peers_.push_back(peer_id);
-  if (adapter_trace_on()) {
-    std::fprintf(stderr, "[qar-adapter] ADMITTED peer %s name='%s' (%zu streaming)\n",
-      qar_ogre_streaming::peer_id_to_hex(peer_id).c_str(),
-      display_name != nullptr ? display_name : "", admitted_peers_.size());
-    std::fflush(stderr);
-  }
-  return true;
+  std::lock_guard<std::mutex> lk(state.mutex);
+  state.geo_result = std::move(outcome);
+  state.geo_result_ready = true;
 }
 
-void QarCApiSenderFactory::on_render_request(const QarPeerId & peer_id, const char * display_name)
+void QarCApiSenderFactory::on_render_request(const QarPeerId & peer_id)
 {
   std::lock_guard<std::mutex> lk(mutex_);
-  // The peer subscription surfaces every peer in the session — the invited
-  // Visualizer(s) AND the runtime's internal apps. Creating senders for the internal
-  // ones mismatches app ids (the runtime then rejects the Visualizer's frames) and
-  // multiplies GUI-thread render work, so admission is filtered. Multi-peer is
-  // supported: the allow-list holds every Visualizer we invited, not just the first.
-  if (!admit_locked(peer_id, display_name)) {
-    return;
-  }
-  // Peer specs update repeatedly (there are more callbacks than peers), and the
-  // producer re-queues a peer whose stream creation must be retried. Keep the queue
-  // free of same-tick duplicates; it is drained every render tick anyway.
+  // Targets surface repeatedly and the producer re-queues a peer whose stream creation must be
+  // retried. Keep the queue free of duplicates; it is drained every render tick anyway.
   for (const QarPeerId & queued : pending_requests_) {
     if (peer_eq(queued, peer_id)) {
       return;
     }
   }
   pending_requests_.push_back(peer_id);
+}
+
+void QarCApiSenderFactory::on_target_up(const TargetInfo & target)
+{
+  std::lock_guard<std::mutex> lk(mutex_);
+  const bool known = std::any_of(served_peers_.begin(), served_peers_.end(),
+      [&target](const QarPeerId & p) { return peer_eq(p, target.id); });
+  if (!known) {
+    // Every peer costs four scene renders per frame (color and depth for each of two eyes), so
+    // refuse loudly past the ceiling rather than quietly turning the render tick into a
+    // slideshow.
+    if (served_peers_.size() >= config_.max_peers) {
+      std::fprintf(stderr,
+        "[qar-adapter] *** peer %s refused: already streaming to %zu peers (max_peers=%u)\n",
+        qar_ogre_streaming::peer_id_to_hex(target.id).c_str(), served_peers_.size(),
+        config_.max_peers);
+      std::fflush(stderr);
+      return;
+    }
+    served_peers_.push_back(target.id);
+  }
+  for (const QarPeerId & queued : pending_requests_) {
+    if (peer_eq(queued, target.id)) {
+      return;
+    }
+  }
+  pending_requests_.push_back(target.id);
+}
+
+void QarCApiSenderFactory::on_target_down(const QarPeerId & id, QarPeerPresence presence)
+{
+  (void)presence;
+  std::lock_guard<std::mutex> lk(mutex_);
+  pending_requests_.erase(
+    std::remove_if(pending_requests_.begin(), pending_requests_.end(),
+      [&id](const QarPeerId & p) { return peer_eq(p, id); }),
+    pending_requests_.end());
+  const bool known = std::any_of(served_peers_.begin(), served_peers_.end(),
+      [&id](const QarPeerId & p) { return peer_eq(p, id); });
+  if (!known) {
+    return;
+  }
+  // The producer closes the stream through poll_closed_peers() and then calls forget().
+  const bool listed = std::any_of(closed_peers_.begin(), closed_peers_.end(),
+      [&id](const QarPeerId & p) { return peer_eq(p, id); });
+  if (!listed) {
+    closed_peers_.push_back(id);
+  }
+}
+
+std::size_t QarCApiSenderFactory::served_peer_count() const
+{
+  std::lock_guard<std::mutex> lk(mutex_);
+  return served_peers_.size();
 }
 
 void QarCApiSenderFactory::poll_new_peer_requests(std::vector<QarPeerId> & out)
@@ -3366,24 +3204,57 @@ void QarCApiSenderFactory::poll_new_peer_requests(std::vector<QarPeerId> & out)
 void QarCApiSenderFactory::poll_closed_peers(std::vector<QarPeerId> & out)
 {
   std::lock_guard<std::mutex> lk(mutex_);
+  for (const QarPeerId & id : closed_peers_) {
+    out.push_back(id);
+  }
   for (const PeerAdapter & pa : adapters_) {
     auto sp = pa.adapter.lock();
-    if (sp && sp->is_closed()) { out.push_back(pa.peer_id); }
+    if (sp && sp->is_closed()) {
+      const bool listed = std::any_of(out.begin(), out.end(),
+          [&pa](const QarPeerId & p) { return peer_eq(p, pa.peer_id); });
+      if (!listed) {
+        out.push_back(pa.peer_id);
+      }
+    }
   }
 }
 
 void QarCApiSenderFactory::forget(const QarPeerId & peer_id)
 {
-  std::lock_guard<std::mutex> lk(mutex_);
-  for (auto it = adapters_.begin(); it != adapters_.end(); ++it) {
-    if (peer_eq(it->peer_id, peer_id)) { adapters_.erase(it); break; }
+  {
+    std::lock_guard<std::mutex> lk(mutex_);
+    for (auto it = adapters_.begin(); it != adapters_.end(); ++it) {
+      if (peer_eq(it->peer_id, peer_id)) { adapters_.erase(it); break; }
+    }
+    closed_peers_.erase(
+      std::remove_if(closed_peers_.begin(), closed_peers_.end(),
+        [&peer_id](const QarPeerId & p) { return peer_eq(p, peer_id); }),
+      closed_peers_.end());
+    // A request that the producer queued again for a peer that went down in the same tick
+    // would be asked for every tick for good: nothing serves the peer any more, and a later
+    // on_target_down ignores a peer that is not served. A target that is still here is
+    // requested again below.
+    pending_requests_.erase(
+      std::remove_if(pending_requests_.begin(), pending_requests_.end(),
+        [&peer_id](const QarPeerId & p) { return peer_eq(p, peer_id); }),
+      pending_requests_.end());
+    // Free the peer's slot against max_peers, so a client that disconnects and comes back (or
+    // a different one taking its place) is served again.
+    served_peers_.erase(
+      std::remove_if(served_peers_.begin(), served_peers_.end(),
+        [&peer_id](const QarPeerId & p) { return peer_eq(p, peer_id); }),
+      served_peers_.end());
   }
-  // Free the peer's slot against max_peers, so a client that disconnects and comes
-  // back (or a different one taking its place) is admitted again.
-  admitted_peers_.erase(
-    std::remove_if(admitted_peers_.begin(), admitted_peers_.end(),
-      [&peer_id](const QarPeerId & p) { return peer_eq(p, peer_id); }),
-    admitted_peers_.end());
+  // A target that is still here lost only its stream (QAR closed it): ask for a new one. The
+  // owner's table is read with no lock of this factory held.
+  if (const std::shared_ptr<QarSessionOwner> owner = owner_.lock()) {
+    for (const TargetInfo & target : owner->targets()) {
+      if (peer_eq(target.id, peer_id) && target.served) {
+        on_target_up(target);
+        break;
+      }
+    }
+  }
 }
 
 }  // namespace qar_qar_adapter

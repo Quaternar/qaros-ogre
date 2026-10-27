@@ -18,6 +18,14 @@
 namespace qar_qar_adapter
 {
 
+/// @brief The value of the environment variable @p name, or an empty string when it is not set.
+/// The one place the adapter reads the process environment through, so the platform's
+/// deprecation of getenv is handled once.
+std::string read_environment(const char * name);
+
+/// @brief True when the environment variable @p name is set, also to an empty value.
+bool environment_is_set(const char * name);
+
 /// @brief Parse a boolean env value. Recognizes "1"/"true"/"on"/"yes" as true and
 /// "0"/"false"/"off"/"no" as false, case-insensitively; anything else (including a
 /// null pointer, i.e. the variable is unset) yields @p default_value. Used for
@@ -46,7 +54,8 @@ double parse_tick_ms_env(const char * value, double default_ms);
 /// @brief Severity filter, in the SAME order and with the SAME numeric values as the
 /// vendored C API's `QarLogSeverity` (third_party/qar/include/qar_streaming.h: TRACE=0,
 /// DEBUG=1, INFO=2, WARN=3, ERROR=4, FATAL=5). Declared here so the parsing is
-/// SDK-free; qar_capi_render_sender_adapter.cpp static_asserts the two enums agree.
+/// SDK-free; the session owner converts between the two enums by number, so the order and
+/// the values must not change.
 enum class LogSeverity : int
 {
   kTrace = 0,

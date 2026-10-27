@@ -17,8 +17,8 @@
 ///     `qar_app_volume_gesture_get_points` accessor gives a room-space action
 ///     point),
 ///   * the vendor's per-panel gesture API —
-///     `qar_gui_panels_subscribe_all_gesture_events`, reshaped by the
-///     2026-09-21 drop and bound by `qar_qar_adapter`'s QarCApiPanelInputSource:
+///     `qar_gui_panels_subscribe_all_gesture_events`, bound by
+///     `qar_qar_adapter`'s QarCApiPanelInputSource:
 ///     a panel id plus a (u, v), plus a hand, a tap count and a full
 ///     hover/tap/long-press/DRAG lifecycle, or
 ///   * a test, a simulator, or the host's own desktop mouse.
@@ -33,8 +33,8 @@
 ///
 /// ## Why the vendor handles are read in the ADAPTER, not here
 ///
-/// Since the 2026-09-21 SDK both events are opaque handles read through
-/// `qar_*_gesture_get_*()` accessors. Those accessors are real C API calls, and
+/// Both events are opaque handles read through `qar_*_gesture_get_*()` accessors.
+/// Those accessors are real C API calls, and
 /// qar_ar_core links NO Qar runtime — it reuses Qar *types* only, which is what
 /// lets its tests, like those of qar_qt_streaming, run with neither a headset nor a
 /// runtime. So the pure field-copy and the enum mapping stay here, where they are
@@ -75,18 +75,17 @@ namespace qar_ar_core
 // ---------------------------------------------------------------------------
 // The vendor enum values this seam maps FROM, pinned at compile time.
 //
-// The 2026-09-21 drop renumbered one of them and left the other alone, and the
-// two now disagree on the meaning of ZERO:
+// The two vendor kind enums disagree on the meaning of ZERO:
 //
-//   QarGuiPanelGestureKind : HOVER=0, TAP=1, LONG_PRESS=2, DRAG=3   (new)
-//   QarGestureKind         : CLICK=0, HOVER=1, ...                  (unchanged)
+//   QarGuiPanelGestureKind : HOVER=0, TAP=1, LONG_PRESS=2, DRAG=3
+//   QarGestureKind         : CLICK=0, HOVER=1, ...
 //
 // A stale mapping across that seam turns every hover into a click, which
 // publishes a robot goal for a hand that was merely pointing. There is no test
 // that can catch a renumbered enum -- the old numbers simply stop existing --
-// so it is caught HERE, at compile time, where the next SDK drop fails loudly
-// instead of silently committing picks. If one of these fires, read the new
-// header and fix the switch in pointer_gesture_from_panel_kind() /
+// so it is caught HERE, at compile time, where a header that renumbers them
+// fails loudly instead of silently committing picks. If one of these fires, read
+// the installed header and fix the switch in pointer_gesture_from_panel_kind() /
 // pointer_gesture_from_volume_kind() BEFORE changing the number below.
 // ---------------------------------------------------------------------------
 static_assert(
@@ -112,12 +111,13 @@ static_assert(
 
 /// @brief The gestures a pointer can perform on a panel.
 ///
-/// A NARROWING of the two vendor kind enums, not a mirror of either — the
-/// 2026-09-21 drop made them disagree (panel kinds are HOVER=0, TAP=1,
-/// LONG_PRESS=2, DRAG=3; app-volume kinds are still CLICK=0, HOVER=1), and
-/// value 0 changed meaning on the panel side. These values are the library's
-/// own and are deliberately UNCHANGED from before that drop, so nothing
-/// downstream had to move:
+/// A NARROWING of the two vendor kind enums, not a mirror of either — they
+/// disagree (panel kinds are HOVER=0, TAP=1, LONG_PRESS=2, DRAG=3; app-volume
+/// kinds are CLICK=0, HOVER=1), so value 0 means a different gesture on each
+/// side. These values are the library's own; the mapping from either vendor
+/// enum is done by pointer_gesture_from_panel_kind() and
+/// pointer_gesture_from_volume_kind(), so a downstream consumer never depends
+/// on a vendor number:
 ///
 /// | vendor kind                              | PointerGesture | phases seen              |
 /// |------------------------------------------|----------------|--------------------------|
@@ -169,16 +169,16 @@ constexpr bool gesture_commits_pick(PointerGesture gesture)
 
 /// @brief Which hand made the contact, when the source knows.
 ///
-/// `qar_gui_panel_gesture_get_hand()`, available since the 2026-09-21 drop;
-/// without it every AR contact would have to share one pointer id. The hand is
+/// `qar_gui_panel_gesture_get_handedness()`; without it every AR contact would have to share
+/// one pointer id. The hand is
 /// carried per sample rather than folded into
 /// `pointer_id` because the id must stay stable for a whole lifecycle while the
 /// hand is an attribute of it, and because the app-volume path still has none.
 enum class PointerHand : std::uint8_t
 {
-  Unknown = 0,  ///< The source does not report a hand (app-volume path, tests).
-  Left = 1,     ///< QAR_HAND_LEFT
-  Right = 2     ///< QAR_HAND_RIGHT
+  Unknown = 0,  ///< No hand reported (app-volume path, tests, QAR_HANDEDNESS_UNSPECIFIED).
+  Left = 1,     ///< QAR_HANDEDNESS_LEFT
+  Right = 2     ///< QAR_HANDEDNESS_RIGHT
 };
 
 /// @brief Where a gesture is in its lifecycle. Mirrors `QarGesturePhase`
@@ -212,7 +212,7 @@ struct PanelPointerSample
   double timestamp_s = 0.0;
 
   /// Which hand made the contact, when the source knows it
-  /// (`qar_gui_panel_gesture_get_hand`). Unknown on every other path.
+  /// (`qar_gui_panel_gesture_get_handedness`). Unknown on every other path.
   PointerHand hand = PointerHand::Unknown;
 
   /// Taps in this run, NATIVELY counted by the recogniser
@@ -244,9 +244,9 @@ struct PanelPointerSample
   /// `PickTargetKind::ActionPoint` publishes it verbatim. It is not the default
   /// target: `PickTarget::kind` starts as `GroundPlane`.
   ///
-  /// **It is NOT always a hit.** The header of the drop after the minimum drop says
-  /// the action point is "the intersection the gesture acts on, **or the start point
-  /// when nothing was intersected**". So an action point that equals the start point
+  /// **It is NOT always a hit.** The installed runtime's header says the action
+  /// point is "the intersection the gesture acts on, **or the start point when
+  /// nothing was intersected**". So an action point that equals the start point
   /// is the HAND and not a scene hit, and this flag is false for it — which is
   /// the whole reason the flag exists, because that is precisely the case where
   /// publishing the point verbatim would put a marker on the operator's hand.
@@ -263,9 +263,9 @@ struct PanelPointerSample
   ///
   /// **It is the HAND** — "where it was when the gesture began, and for a hover
   /// where it is now", midway between the hands for a two-hand gesture
-  /// (header of the drop after the minimum drop). Taken with @ref room_point it is therefore an
-  /// aiming ray, start → action, which is what @ref has_room_ray normally
-  /// carries; see `pointing_ray_from_gesture_points`.
+  /// (as the installed runtime's header states). Taken with @ref room_point it is
+  /// therefore an aiming ray, start → action, which is what @ref has_room_ray
+  /// normally carries; see `pointing_ray_from_gesture_points`.
   bool has_room_start_point = false;
   QarVector3 room_start_point{0.0f, 0.0f, 0.0f};
 
@@ -343,7 +343,7 @@ private:
   std::vector<std::string> closed_queue_;
 };
 
-/// @brief Convert a `QarTimePoint` to seconds.
+/// @brief Convert a `QarTimePoint` (nanoseconds since the Unix epoch) to seconds.
 double seconds_from_time_point(const QarTimePoint & time_point);
 
 /// @brief `QarGesturePhase` -> @ref PointerPhase. False for a value outside the
@@ -359,8 +359,9 @@ bool pointer_gesture_from_panel_kind(QarGuiPanelGestureKind kind, PointerGesture
 /// for the manipulation kinds, which move the volume and are not pointer input.
 bool pointer_gesture_from_volume_kind(QarGestureKind kind, PointerGesture & out);
 
-/// @brief `QarHand` -> @ref PointerHand. Unknown for a value outside the enum.
-PointerHand pointer_hand_from_qar(QarHand hand);
+/// @brief `QarHandedness` -> @ref PointerHand. Unknown for QAR_HANDEDNESS_UNSPECIFIED (no hand,
+/// as for a gesture made with both hands) and for a value outside the enum.
+PointerHand pointer_hand_from_qar(QarHandedness hand);
 
 /// @brief The mechanical mapping from the app-volume gesture API, as FIELDS.
 ///
@@ -484,9 +485,7 @@ QueuedPanelInputSource::pending() const
 inline double
 seconds_from_time_point(const QarTimePoint & time_point)
 {
-  // precision: 0 = milliseconds, 1 = nanoseconds (qar_streaming.h).
-  const double scale = time_point.precision == 1 ? 1e-9 : 1e-3;
-  return static_cast<double>(time_point.count) * scale;
+  return static_cast<double>(time_point.unix_ns) * 1e-9;
 }
 
 inline bool
@@ -552,13 +551,15 @@ pointer_gesture_from_volume_kind(QarGestureKind kind, PointerGesture & out)
 }
 
 inline PointerHand
-pointer_hand_from_qar(QarHand hand)
+pointer_hand_from_qar(QarHandedness hand)
 {
   switch (hand) {
-    case QAR_HAND_LEFT:
+    case QAR_HANDEDNESS_LEFT:
       return PointerHand::Left;
-    case QAR_HAND_RIGHT:
+    case QAR_HANDEDNESS_RIGHT:
       return PointerHand::Right;
+    case QAR_HANDEDNESS_UNSPECIFIED:
+      return PointerHand::Unknown;
   }
   return PointerHand::Unknown;
 }
@@ -596,9 +597,9 @@ pointer_sample_from_gesture_fields(
   if (has_action_point) {
     out.room_point = action_point;
     // The action point is the recogniser's own scene intersection -- EXCEPT
-    // when it equals the start point, which the header of the drop after the minimum
-    // drop defines as "nothing was intersected". That case hands back the HAND, so it
-    // must not be flagged as a hit: see PanelPointerSample::room_point_is_scene_hit.
+    // when it equals the start point, which the installed runtime's header defines
+    // as "nothing was intersected". That case hands back the HAND, so it must not
+    // be flagged as a hit: see PanelPointerSample::room_point_is_scene_hit.
     const bool intersected_nothing = has_start_point &&
       action_point.x == start_point.x && action_point.y == start_point.y &&
       action_point.z == start_point.z;

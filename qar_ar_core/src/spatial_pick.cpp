@@ -310,8 +310,8 @@ SpatialPoint resolve_pick_point(const PickTarget & target, const SpatialPointer 
     case PickTargetKind::ActionPoint: {
       // This is the target that MEANS "the thing I am pointing at", so a scene
       // hit is exactly right here and is taken at face value -- and ONLY a scene
-      // hit. The header of the drop after the minimum drop defines the action point
-      // as "the start point when nothing was intersected", i.e. the operator's HAND, and
+      // hit. The installed runtime's header defines the action point as "the
+      // start point when nothing was intersected", i.e. the operator's HAND, and
       // publishing that verbatim would put the marker on the hand. A click on
       // empty space therefore publishes nothing.
       if (!pointer.point_is_scene_hit) {

@@ -15,7 +15,7 @@
 /// (see docs/ARCHITECTURE.md#pose-projection-and-world-basis). The axes are what
 /// this file changes; which frame's UNITS a given API states its numbers in is a
 /// separate question, answered below ("The SDK reports gesture points in APP
-/// content space") and, since the drop after the minimum drop, by its own
+/// content space") and by the installed header's own
 /// `@section qar_coordinate_systems`, which calls that frame **App content
 /// space** and says an application uses its values as they come.
 /// RViz renders a **ROS/REP-103 world**: right-handed, metres, **+X forward,

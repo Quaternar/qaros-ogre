@@ -32,14 +32,14 @@ namespace
 
 /// The app-volume gesture as FIELDS — what the caller has already read off the
 /// opaque handle. `with_point` is the has_action_point flag, a real
-/// out-parameter of the SDK (since 2026-09-21) rather than a struct member.
+/// out-parameter of the SDK rather than a struct member.
 bool
 map_volume_gesture(
   QarGestureKind kind, QarGesturePhase phase, bool with_point, std::uint32_t pointer_id,
   PanelPointerSample & out)
 {
   const QarVector3 action_point{0.1f, 0.2f, 0.3f};
-  const QarTimePoint timestamp{1500, 0};  // milliseconds
+  const QarTimePoint timestamp{1500000000};  // nanoseconds
   return pointer_sample_from_gesture_fields(
     kind, phase, with_point, action_point, timestamp, pointer_id, out);
 }
@@ -58,9 +58,9 @@ TEST(PointerPhase, MirrorsQarGesturePhaseValueForValue)
 
 TEST(PointerGestureMapping, PanelKindsNarrowOntoTheWidgetVocabulary)
 {
-  // The 2026-09-21 drop made the two vendor kind enums disagree, and value 0
-  // changed meaning on the panel side (it was CLICK, it is now HOVER). Nothing
-  // may cast between them; this is the whole mapping.
+  // The two vendor kind enums disagree, and value 0 means CLICK on the app
+  // volume side and HOVER on the panel side. Nothing may cast between them;
+  // this is the whole mapping.
   PointerGesture gesture = PointerGesture::Click;
   ASSERT_TRUE(pointer_gesture_from_panel_kind(QAR_GUI_PANEL_GESTURE_KIND_HOVER, gesture));
   EXPECT_EQ(gesture, PointerGesture::Hover);
@@ -90,9 +90,10 @@ TEST(PointerGestureMapping, PhaseAndHandRefuseValuesOutsideTheEnums)
 {
   PointerPhase phase = PointerPhase::Updated;
   EXPECT_FALSE(pointer_phase_from_qar(static_cast<QarGesturePhase>(42), phase));
-  EXPECT_EQ(pointer_hand_from_qar(QAR_HAND_LEFT), PointerHand::Left);
-  EXPECT_EQ(pointer_hand_from_qar(QAR_HAND_RIGHT), PointerHand::Right);
-  EXPECT_EQ(pointer_hand_from_qar(static_cast<QarHand>(7)), PointerHand::Unknown);
+  EXPECT_EQ(pointer_hand_from_qar(QAR_HANDEDNESS_LEFT), PointerHand::Left);
+  EXPECT_EQ(pointer_hand_from_qar(QAR_HANDEDNESS_RIGHT), PointerHand::Right);
+  EXPECT_EQ(pointer_hand_from_qar(QAR_HANDEDNESS_UNSPECIFIED), PointerHand::Unknown);
+  EXPECT_EQ(pointer_hand_from_qar(static_cast<QarHandedness>(7)), PointerHand::Unknown);
 }
 
 TEST(QueuedInputSource, DrainsInOrderAndEmpties)
@@ -161,12 +162,15 @@ TEST(GestureEventMapping, ManipulationGesturesAreNotPointerSamples)
     map_volume_gesture(QAR_GESTURE_DUAL_POINTER_ROTATE, QAR_GESTURE_PHASE_UPDATED, true, 1, sample));
 }
 
-TEST(GestureEventMapping, TimePointsConvertInBothPrecisions)
+TEST(GestureEventMapping, TimePointsAreUnixNanoseconds)
 {
-  QarTimePoint millis{2500, 0};
-  EXPECT_DOUBLE_EQ(seconds_from_time_point(millis), 2.5);
-  QarTimePoint nanos{2500000000ULL, 1};
+  const QarTimePoint nanos{2500000000LL};
   EXPECT_DOUBLE_EQ(seconds_from_time_point(nanos), 2.5);
+  const QarTimePoint epoch{0};
+  EXPECT_DOUBLE_EQ(seconds_from_time_point(epoch), 0.0);
+  // A present-day instant stays exact to the microsecond in a double.
+  const QarTimePoint now_ish{1790000000123456000LL};
+  EXPECT_NEAR(seconds_from_time_point(now_ish), 1790000000.123456, 1e-5);
 }
 
 // ---------------------------------------------------------------------------
@@ -177,7 +181,7 @@ TEST(GestureEventMapping, TimePointsConvertInBothPrecisions)
 // at compile time. These catch the other half: a mapping that still compiles
 // but sends the wrong value through, which is what turns a hover into a
 // published robot goal. Both vendor enums are spelled out by NUMBER as well as
-// by name, because a drop that swaps two enumerators' values keeps every name
+// by name, because a header that swaps two enumerators' values keeps every name
 // valid.
 
 TEST(PointerGestureMapping, VendorKindNumbersAreTheOnesTheMappingAssumes)
@@ -192,7 +196,7 @@ TEST(PointerGestureMapping, VendorKindNumbersAreTheOnesTheMappingAssumes)
 
 TEST(PointerGestureMapping, ZeroMeansOppositeThingsOnTheTwoVendorEnums)
 {
-  // The trap the 2026-09-21 drop set: value 0 is a CLICK on an app volume and a
+  // The trap the two enums set: value 0 is a CLICK on an app volume and a
   // HOVER on a panel. Reading one enum's 0 with the other's table publishes a
   // pick for every hover.
   PointerGesture from_volume_zero{};
@@ -269,11 +273,11 @@ TEST(PointerSampleFromGestureFields, ActionPointIsMarkedAsASceneHit)
 
 TEST(PointerSampleFromGestureFields, AnActionPointEqualToTheStartPointIsNotASceneHit)
 {
-  // The header of the drop after the minimum drop says the action point is "the intersection the
+  // The installed runtime's header says the action point is "the intersection the
   // gesture acts on, OR THE START POINT WHEN NOTHING WAS INTERSECTED". So the
   // two being equal means the runtime handed back the HAND, and flagging that
   // as a scene hit is what puts a published marker on the operator's hand.
-  const QarTimePoint timestamp{0, 0};
+  const QarTimePoint timestamp{0};
   const QarVector3 hand{0.4f, 1.3f, -0.2f};
 
   PanelPointerSample no_hit;
@@ -297,7 +301,7 @@ TEST(PointerSampleFromGestureFields, AnActionPointEqualToTheStartPointIsNotAScen
 TEST(PointerSampleFromGestureFields, StartPointIsCarriedWhenThePathSuppliesOne)
 {
   PanelPointerSample sample;
-  const QarTimePoint timestamp{0, 0};
+  const QarTimePoint timestamp{0};
   const QarVector3 action{1.0f, 2.0f, 3.0f};
   const QarVector3 start{4.0f, 5.0f, 6.0f};
   ASSERT_TRUE(

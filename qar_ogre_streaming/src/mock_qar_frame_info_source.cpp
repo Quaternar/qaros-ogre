@@ -4,6 +4,7 @@
 #include "qar_ogre_streaming/mock_qar_frame_info_source.hpp"
 
 #include <cmath>
+#include <cstdint>
 
 namespace qar_ogre_streaming
 {
@@ -165,7 +166,11 @@ QarFrameInfo MockQarFrameInfoSource::frame_at(uint64_t frame_index) const
 
   QarFrameInfo info{};
   info.frame_index = frame_index;
-  info.predicted_display_time = QarTimePoint{frame_index, 0};  // ms precision
+  // Unix nanoseconds, as the runtime reports them: the mock's clock is the frame index, one
+  // millisecond per frame from the Unix epoch, so a frame always maps to the same instant.
+  constexpr std::int64_t kNanosecondsPerFrame = 1000000;
+  info.predicted_display_time =
+    QarTimePoint{static_cast<std::int64_t>(frame_index) * kNanosecondsPerFrame};
   info.should_render = true;
 
   // Left eye: shifted to the viewer's left (-right); right eye: +right. Both

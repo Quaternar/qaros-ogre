@@ -11,8 +11,8 @@
 /// ## Read this first — the SDK ships the ray
 ///
 /// @ref qar_ar_core::pointing_ray_from_gesture_points is the preferred
-/// source and everything below it is the FALLBACK. Since the drop after the minimum
-/// drop, `qar_app_volume_gesture_get_points` states that the start point is the hand,
+/// source and everything below it is the FALLBACK. The installed header of
+/// `qar_app_volume_gesture_get_points` states that the start point is the hand,
 /// the action point is what the aim intersected *or the start point when
 /// nothing was intersected*, and that **"from the start point to the action
 /// point is the ray the user is pointing along, which an app can draw itself"**.
@@ -20,9 +20,8 @@
 /// reconstruction below is needed only for the no-intersection case.
 ///
 /// An action point equal to the start point is that documented no-intersection
-/// case, not a sign that "the pair is not a ray". A drop older than the drop after
-/// the minimum drop reports the two equal on every instant gesture, so with it the
-/// fallback is always the ray in use.
+/// case, not a sign that "the pair is not a ray". A runtime that reports the two
+/// equal on every gesture therefore always gets the fallback ray.
 ///
 /// ## Why this file exists
 ///
@@ -155,15 +154,15 @@ enum class PointingRayKind : std::uint8_t
   /// Nothing usable arrived; @ref PointingRay::error says what was missing.
   None = 0,
   /// Eye position through hand position: the ray the wearer believes they are
-  /// aiming, because they sight along their finger. The FALLBACK; the SDK ray
-  /// (drop after the minimum drop) is preferred - see @ref GestureStartToAction.
+  /// aiming, because they sight along their finger. The FALLBACK; the runtime's own ray
+  /// (its start point through its action point) is preferred - see @ref GestureStartToAction.
   EyeThroughHand,
   /// The aiming joint's own forward axis (OpenXR: local -Z runs distally, out
   /// along the bone). Used when no eye pose is available.
   HandForward,
   /// The SDK's own aim: `qar_app_volume_gesture_get_points`' **start point**
   /// (the hand) through its **action point** (what the aim intersected). The
-  /// PREFERRED source (drop after the minimum drop): the header states it outright,
+  /// PREFERRED source (the installed runtime reports it): the header states it outright,
   /// see the file comment. It needs no eye pose, no hand joints and no
   /// reconstruction, and it is the runtime's own geometry rather than our
   /// straight-line guess at it.
@@ -195,7 +194,7 @@ struct PointingRay
   QarVector3 direction{0.0f, 0.0f, 0.0f};
   PointingRayKind kind = PointingRayKind::None;
   HandRayJoint joint = HandRayJoint::IndexTip;
-  QarHand hand = QAR_HAND_RIGHT;
+  QarHandedness hand = QAR_HANDEDNESS_RIGHT;
   /// The producer's own clock, seconds. Carried so a consumer can see how stale
   /// the ray is relative to the gesture it is about to be attached to.
   double timestamp_s = 0.0;
@@ -236,7 +235,7 @@ struct PointingRayInputs
   bool has_hand_orientation = false;
   QarQuaternion hand_orientation{0.0f, 0.0f, 0.0f, 1.0f};  ///< xyzw
 
-  QarHand hand = QAR_HAND_RIGHT;
+  QarHandedness hand = QAR_HANDEDNESS_RIGHT;
   HandRayJoint joint = HandRayJoint::IndexTip;
   double timestamp_s = 0.0;
 
@@ -260,8 +259,8 @@ PointingRay pointing_ray_from(const PointingRayInputs & inputs);
 /// point. Prefer this over @ref pointing_ray_from; fall back to that one when
 /// this returns an invalid ray.
 ///
-/// The header of the drop after the minimum drop (`qar_app_volume_gesture_get_points`)
-/// makes the pair a ray outright:
+/// The installed header of `qar_app_volume_gesture_get_points` makes the pair a
+/// ray outright:
 ///
 /// > *The start point is the hand ... The action point is the intersection the
 /// > gesture acts on, **or the start point when nothing was intersected** ...
@@ -270,9 +269,8 @@ PointingRay pointing_ray_from(const PointingRayInputs & inputs);
 ///
 /// So the two being EQUAL is not "the pair is not a ray" — it is the documented
 /// no-intersection case, and the only case in which this function refuses.
-/// (A drop older than the drop after the minimum drop reports the two equal on
-/// every instant gesture, so with it this function always refuses and the
-/// reconstruction is used.)
+/// (A runtime that reports the two equal on every gesture makes this function
+/// always refuse, and the reconstruction is used.)
 ///
 /// Both points are in **app content space**, in app units (the vendor's
 /// @ref qar_coordinate_systems section states it), which is the same frame the
@@ -311,21 +309,34 @@ float ray_point_distance(
 /// @return false when the hand is untracked or no usable joint was found; @p io
 ///         is then left with `hand_tracked == false`.
 bool hand_ray_inputs(
-  const QarHandJoints & hand_joints, QarHand which, HandRayJoint joint,
+  const QarHandJoints & hand_joints, QarHandedness which, HandRayJoint joint,
   PointingRayInputs & io);
 
 /// @brief Choose a hand out of a device sample and read its aiming joint.
 ///
 /// @p preferred wins when it is tracked; otherwise the other hand is used, so a
-/// left-handed operator is not silently ignored. Neither tracked gives
+/// left-handed operator is not silently ignored. QAR_HANDEDNESS_UNSPECIFIED prefers the right
+/// hand. Neither tracked gives
 /// `hand_tracked == false`, which @ref pointing_ray_from turns into an explained
 /// invalid ray.
 PointingRayInputs pointing_ray_inputs_from_hands(
-  const QarDeviceHandsWithJoints & hands, QarHand preferred, HandRayJoint joint);
+  const QarDeviceHandsWithJoints & hands, QarHandedness preferred, HandRayJoint joint);
 
 // ---------------------------------------------------------------------------
 // The hand itself -- the measurement that says what `action_point` IS
 // ---------------------------------------------------------------------------
+
+/// @brief The slot of @p which in a two-element array indexed by hand: LEFT 0, RIGHT 1, and -1
+/// for QAR_HANDEDNESS_UNSPECIFIED (no hand).
+inline int hand_index(QarHandedness which)
+{
+  switch (which) {
+    case QAR_HANDEDNESS_LEFT: return 0;
+    case QAR_HANDEDNESS_RIGHT: return 1;
+    case QAR_HANDEDNESS_UNSPECIFIED: break;
+  }
+  return -1;
+}
 
 /// @brief One device hand sample reduced to joint POSITIONS, plus the eye pose
 /// of the frame it was read on.
@@ -371,9 +382,16 @@ struct HandJointsProbe
   Hand left;
   Hand right;
 
-  const Hand & hand(QarHand which) const
+  /// The sample of @p which hand; QAR_HANDEDNESS_UNSPECIFIED has none and gives an untracked one.
+  const Hand & hand(QarHandedness which) const
   {
-    return which == QAR_HAND_LEFT ? left : right;
+    static const Hand kNone{};
+    switch (which) {
+      case QAR_HANDEDNESS_LEFT: return left;
+      case QAR_HANDEDNESS_RIGHT: return right;
+      case QAR_HANDEDNESS_UNSPECIFIED: break;
+    }
+    return kNone;
   }
 };
 
@@ -381,7 +399,7 @@ struct HandJointsProbe
 struct NearestHandJoint
 {
   bool found = false;
-  QarHand hand = QAR_HAND_RIGHT;
+  QarHandedness hand = QAR_HANDEDNESS_RIGHT;
   /// A `QarHandJoint` value; name it with @ref hand_joint_name.
   std::uint32_t joint_id = 0;
   QarVector3 position{0.0f, 0.0f, 0.0f};
@@ -412,7 +430,8 @@ NearestHandJoint nearest_hand_joint(const HandJointsProbe & probe, const QarVect
 /// joint a user believes they are pointing with, so "it landed on my fingertip"
 /// and "it landed somewhere on my hand" are different findings.
 float hand_joint_distance(
-  const HandJointsProbe & probe, QarHand which, QarHandJoint joint, const QarVector3 & point);
+  const HandJointsProbe & probe, QarHandedness which, QarHandJoint joint,
+  const QarVector3 & point);
 
 // ---------------------------------------------------------------------------
 // The thread hand-off
@@ -700,7 +719,7 @@ inline PointingRay pointing_ray_from(const PointingRayInputs & inputs)
 // ---------------------------------------------------------------------------
 
 inline bool hand_ray_inputs(
-  const QarHandJoints & hand_joints, QarHand which, HandRayJoint joint,
+  const QarHandJoints & hand_joints, QarHandedness which, HandRayJoint joint,
   PointingRayInputs & io)
 {
   io.hand = which;
@@ -740,20 +759,21 @@ inline bool hand_ray_inputs(
 }
 
 inline PointingRayInputs pointing_ray_inputs_from_hands(
-  const QarDeviceHandsWithJoints & hands, QarHand preferred, HandRayJoint joint)
+  const QarDeviceHandsWithJoints & hands, QarHandedness preferred, HandRayJoint joint)
 {
   PointingRayInputs inputs;
   inputs.hand = preferred;
   inputs.joint = joint;
 
   const QarHandJoints & first =
-    preferred == QAR_HAND_LEFT ? hands.left_hand : hands.right_hand;
+    preferred == QAR_HANDEDNESS_LEFT ? hands.left_hand : hands.right_hand;
   if (hand_ray_inputs(first, preferred, joint, inputs)) {
     return inputs;
   }
   // The other hand, so a left-handed operator is not silently ignored.
-  const QarHand other = preferred == QAR_HAND_LEFT ? QAR_HAND_RIGHT : QAR_HAND_LEFT;
-  const QarHandJoints & second = other == QAR_HAND_LEFT ? hands.left_hand : hands.right_hand;
+  const QarHandedness other =
+    preferred == QAR_HANDEDNESS_LEFT ? QAR_HANDEDNESS_RIGHT : QAR_HANDEDNESS_LEFT;
+  const QarHandJoints & second = other == QAR_HANDEDNESS_LEFT ? hands.left_hand : hands.right_hand;
   hand_ray_inputs(second, other, joint, inputs);
   return inputs;
 }
@@ -837,8 +857,8 @@ inline NearestHandJoint nearest_hand_joint(
   if (!probe.valid || !detail::finite(point)) {
     return out;
   }
-  const QarHand sides[2] = {QAR_HAND_LEFT, QAR_HAND_RIGHT};
-  for (const QarHand which : sides) {
+  const QarHandedness sides[2] = {QAR_HANDEDNESS_LEFT, QAR_HANDEDNESS_RIGHT};
+  for (const QarHandedness which : sides) {
     const HandJointsProbe::Hand & hand = probe.hand(which);
     if (!hand.tracked) {
       continue;
@@ -864,7 +884,8 @@ inline NearestHandJoint nearest_hand_joint(
 }
 
 inline float hand_joint_distance(
-  const HandJointsProbe & probe, QarHand which, QarHandJoint joint, const QarVector3 & point)
+  const HandJointsProbe & probe, QarHandedness which, QarHandJoint joint,
+  const QarVector3 & point)
 {
   namespace detail = pointing_ray_detail;
   if (!probe.valid || !detail::finite(point)) {

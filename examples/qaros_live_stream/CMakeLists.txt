@@ -2,13 +2,14 @@
 # SPDX-License-Identifier: MIT
 #
 # ===========================================================================
-# examples/qaros_live_stream - the Ogre sample scene, streamed to a real QarOS Visualizer
+# examples/qaros_live_stream - the Ogre sample scene, streamed to a target of the QAROS Hub
 # ===========================================================================
-# A plain Ogre program that opens a QarOS session through the render component of the adapter and
-# renders the scene of ../ogre_standalone_streaming_sample for an invited Visualizer. It links only
-# the public targets of this repository (the render component pulls in qar_ogre_streaming, Ogre and
-# the C API loader); there is no Qt, no ROS and no RViz. check_layering.py scans examples/** to keep
-# it that way. Nothing links the QarOS SDK: the DLL is loaded at run time from --sdk-bin.
+# A plain Ogre program that joins the QAROS Hub through the session component of the adapter
+# (QarSessionOwner) and renders the scene of ../ogre_standalone_streaming_sample for the first
+# target (a headset or a Visualizer) that comes up. It links only the public targets of this
+# repository (the render component pulls in the session component, qar_ogre_streaming, Ogre and the
+# C API loader); there is no Qt, no ROS and no RViz. check_layering.py scans examples/** to keep it
+# that way. Nothing links the QAROS SDK: the installed QAROS library is loaded at run time.
 
 add_executable(qar_ogre_live_stream_example
   main.cpp

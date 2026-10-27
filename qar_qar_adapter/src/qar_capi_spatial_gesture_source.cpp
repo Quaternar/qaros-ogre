@@ -4,6 +4,7 @@
 #include "qar_qar_adapter/qar_capi_spatial_gesture_source.hpp"
 
 #include "qar_capi_input_internal.hpp"
+#include "qar_qar_adapter/gui_call_guard.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -62,7 +63,7 @@ pointer_sample_from_gesture_event(
   QarGestureKind kind = QAR_GESTURE_CLICK;
   QarGesturePhase phase = QAR_GESTURE_PHASE_INSTANT;
   if (qar_result_is_error(
-      qar_app_volume_gesture_get_classification(gesture, &kind, &phase)))
+      QAR_CALL(qar_app_volume_gesture_get_classification, gesture, &kind, &phase)))
   {
     return false;
   }
@@ -72,14 +73,15 @@ pointer_sample_from_gesture_event(
   bool has_action_point = false;
   bool has_start_point = false;
   if (qar_result_is_error(
-      qar_app_volume_gesture_get_points(
-        gesture, &action_point, &has_action_point, &start_point, &has_start_point)))
+      QAR_CALL(
+          qar_app_volume_gesture_get_points, gesture, &action_point, &has_action_point,
+          &start_point, &has_start_point)))
   {
     return false;
   }
 
   QarTimePoint timestamp{};
-  if (qar_result_is_error(qar_app_volume_gesture_get_timestamp(gesture, &timestamp))) {
+  if (qar_result_is_error(QAR_CALL(qar_app_volume_gesture_get_timestamp, gesture, &timestamp))) {
     return false;
   }
 
@@ -119,14 +121,18 @@ QarCApiSpatialGestureSource::subscribe_kind(
     last_error_ = "gesture slot arena is full (too many subscriptions this process)";
     return false;
   }
-  const QarResult created = qar_cancel_token_create(&out_token);
-  if (qar_result_is_error(created)) {
-    last_error_ = input_result_error("qar_cancel_token_create", created);
+  const QarResult created = QAR_CALL(qar_cancel_token_create, &out_token);
+  if (qar_result_is_error(created) || out_token == nullptr) {
+    last_error_ = qar_result_is_error(created) ?
+      input_result_error("qar_cancel_token_create", created) :
+      std::string("qar_cancel_token_create gave no token");
+    out_token = nullptr;
     return false;
   }
-  const QarResult r = qar_app_volumes_subscribe_gesture_events(
-    session_, &volume_id, kind, &QarCApiSpatialGestureSource::on_gesture_event, out_slot,
-    out_token);
+  // The token is required: it owns the subscription (a NULL one is refused by the runtime).
+  const QarResult r = QAR_CALL(
+      qar_app_volumes_subscribe_gesture_events, session_, &volume_id, kind,
+      &QarCApiSpatialGestureSource::on_gesture_event, out_slot, out_token);
   if (qar_result_is_error(r)) {
     last_error_ = input_result_error("qar_app_volumes_subscribe_gesture_events", r);
     return false;
@@ -158,14 +164,17 @@ QarCApiSpatialGestureSource::subscribe(const QarAppVolumeId & volume_id)
     return false;
   }
   QarCancelToken * all_token = nullptr;
-  QarResult r = qar_cancel_token_create(&all_token);
-  if (qar_result_is_error(r)) {
-    last_error_ = input_result_error("qar_cancel_token_create", r);
+  QarResult r = QAR_CALL(qar_cancel_token_create, &all_token);
+  if (qar_result_is_error(r) || all_token == nullptr) {
+    last_error_ = qar_result_is_error(r) ?
+      input_result_error("qar_cancel_token_create", r) :
+      std::string("qar_cancel_token_create gave no token");
     detail::retire_slot(all_slot);
     return false;
   }
-  r = qar_app_volumes_subscribe_all_gesture_events(
-    session_, &volume_id, &QarCApiSpatialGestureSource::on_gesture_event, all_slot, all_token);
+  r = QAR_CALL(
+      qar_app_volumes_subscribe_all_gesture_events, session_, &volume_id,
+      &QarCApiSpatialGestureSource::on_gesture_event, all_slot, all_token);
   if (!qar_result_is_error(r)) {
     {
       const std::lock_guard<std::mutex> lock(mutex_);
@@ -189,9 +198,9 @@ QarCApiSpatialGestureSource::subscribe(const QarAppVolumeId & volume_id)
   // CLICK + HOVER pair this class used before, so the source keeps working.
   const std::string all_error =
     input_result_error("qar_app_volumes_subscribe_all_gesture_events", r);
-  qar_cancel_token_cancel(all_token);
+  QAR_CALL(qar_cancel_token_cancel, all_token);
   detail::retire_slot(all_slot);
-  qar_cancel_token_handle_destroy(all_token);
+  QAR_CALL(qar_cancel_token_handle_destroy, all_token);
 
   detail::PointerSlot * click_slot = nullptr;
   detail::PointerSlot * hover_slot = nullptr;
@@ -205,14 +214,14 @@ QarCApiSpatialGestureSource::subscribe(const QarAppVolumeId & volume_id)
   if (!ok_click) {
     for (QarCancelToken * token : {click_token, hover_token}) {
       if (token != nullptr) {
-        qar_cancel_token_cancel(token);
+        QAR_CALL(qar_cancel_token_cancel, token);
       }
     }
     detail::retire_slot(click_slot);
     detail::retire_slot(hover_slot);
     for (QarCancelToken * token : {click_token, hover_token}) {
       if (token != nullptr) {
-        qar_cancel_token_handle_destroy(token);
+        QAR_CALL(qar_cancel_token_handle_destroy, token);
       }
     }
     last_error_ = all_error + "; fallback also failed: " + last_error_;
@@ -258,7 +267,7 @@ QarCApiSpatialGestureSource::unsubscribe()
   }
   for (QarCancelToken * token : {all_token, click_token, hover_token}) {
     if (token != nullptr) {
-      qar_cancel_token_cancel(token);
+      QAR_CALL(qar_cancel_token_cancel, token);
     }
   }
   detail::retire_slot(all_slot);
@@ -266,7 +275,7 @@ QarCApiSpatialGestureSource::unsubscribe()
   detail::retire_slot(hover_slot);
   for (QarCancelToken * token : {all_token, click_token, hover_token}) {
     if (token != nullptr) {
-      qar_cancel_token_handle_destroy(token);
+      QAR_CALL(qar_cancel_token_handle_destroy, token);
     }
   }
 }
@@ -305,7 +314,7 @@ void
 QarCApiSpatialGestureSource::offer(QarAppVolumeGesture * gesture)
 {
   // Read everything off the handle FIRST: it is valid only for the duration of
-  // this call (the 2026-09-21 SDK made the event opaque), so nothing below may touch it.
+  // this call (the event is an opaque handle), so nothing below may touch it.
   QarPeerId peer{};
   QarAppVolumeId target{};
   QarGestureKind kind = QAR_GESTURE_CLICK;
@@ -316,12 +325,13 @@ QarCApiSpatialGestureSource::offer(QarAppVolumeGesture * gesture)
   bool has_start_point = false;
 
   bool readable = !qar_result_is_error(
-    qar_app_volume_gesture_get_lifecycle(gesture, &peer, &target));
+    QAR_CALL(qar_app_volume_gesture_get_lifecycle, gesture, &peer, &target));
   readable = readable && !qar_result_is_error(
-    qar_app_volume_gesture_get_classification(gesture, &kind, &phase));
+    QAR_CALL(qar_app_volume_gesture_get_classification, gesture, &kind, &phase));
   readable = readable && !qar_result_is_error(
-    qar_app_volume_gesture_get_points(
-      gesture, &action_point, &has_action_point, &start_point, &has_start_point));
+    QAR_CALL(
+        qar_app_volume_gesture_get_points, gesture, &action_point, &has_action_point, &start_point,
+        &has_start_point));
 
   // NOTE: qar_app_volume_gesture_get_deltas() is deliberately NOT read. Its
   // out_was_mapped_to_app_transform reports that the volume's
@@ -345,8 +355,8 @@ QarCApiSpatialGestureSource::offer(QarAppVolumeGesture * gesture)
   // returns a bare bool and the ways it can fail are indistinguishable from
   // outside. The whole classification is a switch on a C enum, so it costs the
   // callback thread nothing and it does no I/O either way.
-  // The aiming ray. FIRST CHOICE is the SDK's own, because since the drop after the
-  // minimum drop the gesture carries one: qar_app_volume_gesture_get_points
+  // The aiming ray. FIRST CHOICE is the SDK's own, because the gesture carries
+  // one: qar_app_volume_gesture_get_points
   // documents the start point as the hand, the action point as what the aim
   // intersected "or the start point when nothing was intersected", and says
   // outright that "from the start point to the action point is the ray the user
@@ -398,9 +408,9 @@ QarCApiSpatialGestureSource::offer(QarAppVolumeGesture * gesture)
     hand_trace.valid = probe.valid;
     hand_trace.has_eye = probe.has_eye;
     hand_trace.eye = probe.eye_position;
-    const QarHand sides[2] = {QAR_HAND_LEFT, QAR_HAND_RIGHT};
-    for (const QarHand which : sides) {
-      const std::size_t i = (which == QAR_HAND_LEFT) ? 0u : 1u;
+    const QarHandedness sides[2] = {QAR_HANDEDNESS_LEFT, QAR_HANDEDNESS_RIGHT};
+    for (const QarHandedness which : sides) {
+      const std::size_t i = static_cast<std::size_t>(qar_ar_core::hand_index(which));
       const qar_ar_core::HandJointsProbe::Hand & hand = probe.hand(which);
       hand_trace.tracked[i] = hand.tracked;
       const std::uint32_t tip = static_cast<std::uint32_t>(QAR_HAND_JOINT_INDEX_TIP_EXT);
@@ -423,7 +433,7 @@ QarCApiSpatialGestureSource::offer(QarAppVolumeGesture * gesture)
       }
       // Whichever hand's index tip is closer, so a left-handed operator is not
       // reported as "no index tip".
-      for (const QarHand which : sides) {
+      for (const QarHandedness which : sides) {
         const float distance = qar_ar_core::hand_joint_distance(
           probe, which, QAR_HAND_JOINT_INDEX_TIP_EXT, action_point);
         if (distance < 0.0f) {
@@ -575,8 +585,7 @@ QarCApiSpatialGestureSource::flush_event_trace()
     // from, so a run can be read from this log alone:
     //
     //   ray_src=SDK(start->action)  the runtime intersected something and we
-    //                               aim along its own line -- the normal case
-    //                               since the drop after the minimum drop;
+    //                               aim along its own line -- the usual one.
     //   ray_src=FALLBACK(<kind>/<joint>)  it intersected nothing, so the ray is
     //                               our eye-through-fingertip reconstruction
     //                               from the render thread's hand poll.
@@ -631,7 +640,7 @@ QarCApiSpatialGestureSource::flush_event_trace()
         std::snprintf(
           buffer, sizeof(buffer), " to_hand=%.3f(%s %s) to_index_tip=%.3f",
           static_cast<double>(r.hands.nearest_joint_m),
-          r.hands.nearest_hand == QAR_HAND_LEFT ? "left" : "right",
+          r.hands.nearest_hand == QAR_HANDEDNESS_LEFT ? "left" : "right",
           qar_ar_core::hand_joint_name(r.hands.nearest_joint_id),
           static_cast<double>(r.hands.index_tip_m));
       }

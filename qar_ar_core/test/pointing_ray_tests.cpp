@@ -80,7 +80,7 @@ QarHandJoints hand_with(
 }  // namespace
 
 // ---------------------------------------------------------------------------
-// The SDK's OWN ray: start point -> action point (drop after the minimum drop)
+// The SDK's OWN ray: start point -> action point
 //
 // `qar_app_volume_gesture_get_points`: "from the start point to the action
 // point is the ray the user is pointing along, which an app can draw itself",
@@ -295,7 +295,7 @@ TEST(PointingRay, TheIndexTipIsReadWhenItIsValid)
   const QarHandJoints hand =
     hand_with(QAR_HAND_JOINT_INDEX_TIP_EXT, QarVector3{0.2f, 1.1f, -0.4f});
   PointingRayInputs in;
-  ASSERT_TRUE(hand_ray_inputs(hand, QAR_HAND_RIGHT, HandRayJoint::IndexTip, in));
+  ASSERT_TRUE(hand_ray_inputs(hand, QAR_HANDEDNESS_RIGHT, HandRayJoint::IndexTip, in));
   EXPECT_TRUE(in.hand_tracked);
   EXPECT_EQ(in.joint, HandRayJoint::IndexTip);
   expect_vec(in.hand_position, 0.2f, 1.1f, -0.4f);
@@ -307,7 +307,7 @@ TEST(PointingRay, ACurledIndexFallsBackToThePalmRatherThanLosingTheRay)
   // "pointing" pose actually gives. Losing the ray there would drop the pick.
   const QarHandJoints hand = hand_with(QAR_HAND_JOINT_PALM_EXT, QarVector3{0.1f, 1.0f, -0.2f});
   PointingRayInputs in;
-  ASSERT_TRUE(hand_ray_inputs(hand, QAR_HAND_RIGHT, HandRayJoint::IndexTip, in));
+  ASSERT_TRUE(hand_ray_inputs(hand, QAR_HANDEDNESS_RIGHT, HandRayJoint::IndexTip, in));
   EXPECT_EQ(in.joint, HandRayJoint::Palm);
   expect_vec(in.hand_position, 0.1f, 1.0f, -0.2f);
 }
@@ -317,7 +317,7 @@ TEST(PointingRay, AnUntrackedHandIsNotRead)
   const QarHandJoints hand =
     hand_with(QAR_HAND_JOINT_INDEX_TIP_EXT, QarVector3{0.2f, 1.1f, -0.4f}, /*tracked=*/false);
   PointingRayInputs in;
-  EXPECT_FALSE(hand_ray_inputs(hand, QAR_HAND_RIGHT, HandRayJoint::IndexTip, in));
+  EXPECT_FALSE(hand_ray_inputs(hand, QAR_HANDEDNESS_RIGHT, HandRayJoint::IndexTip, in));
   EXPECT_FALSE(in.hand_tracked);
 }
 
@@ -326,7 +326,7 @@ TEST(PointingRay, AJointWithoutThePositionValidBitIsNotTrusted)
   QarHandJoints hand = hand_with(QAR_HAND_JOINT_INDEX_TIP_EXT, QarVector3{5.0f, 5.0f, 5.0f});
   hand.joint_locations[QAR_HAND_JOINT_INDEX_TIP_EXT].location_flags = 0u;
   PointingRayInputs in;
-  EXPECT_FALSE(hand_ray_inputs(hand, QAR_HAND_RIGHT, HandRayJoint::IndexTip, in))
+  EXPECT_FALSE(hand_ray_inputs(hand, QAR_HANDEDNESS_RIGHT, HandRayJoint::IndexTip, in))
     << "a stale array entry must not become an aim";
 }
 
@@ -336,9 +336,9 @@ TEST(PointingRay, TheOtherHandIsUsedWhenThePreferredOneIsNotTracked)
   hands.right_hand.is_tracked = false;
   hands.left_hand = hand_with(QAR_HAND_JOINT_INDEX_TIP_EXT, QarVector3{-0.3f, 1.2f, -0.5f});
   const PointingRayInputs in =
-    pointing_ray_inputs_from_hands(hands, QAR_HAND_RIGHT, HandRayJoint::IndexTip);
+    pointing_ray_inputs_from_hands(hands, QAR_HANDEDNESS_RIGHT, HandRayJoint::IndexTip);
   ASSERT_TRUE(in.hand_tracked) << "a left-handed operator must not be silently ignored";
-  EXPECT_EQ(in.hand, QAR_HAND_LEFT);
+  EXPECT_EQ(in.hand, QAR_HANDEDNESS_LEFT);
   expect_vec(in.hand_position, -0.3f, 1.2f, -0.5f);
 }
 
@@ -348,7 +348,7 @@ TEST(PointingRay, NeitherHandTrackedGivesAnInvalidRayAndNotAZeroOne)
   hands.left_hand.is_tracked = false;
   hands.right_hand.is_tracked = false;
   PointingRayInputs in =
-    pointing_ray_inputs_from_hands(hands, QAR_HAND_RIGHT, HandRayJoint::IndexTip);
+    pointing_ray_inputs_from_hands(hands, QAR_HANDEDNESS_RIGHT, HandRayJoint::IndexTip);
   in.has_eye = true;
   in.eye_position = QarVector3{0.0f, 1.6f, 0.0f};
   const PointingRay ray = pointing_ray_from(in);
@@ -452,7 +452,7 @@ TEST(NearestHandJointTest, PicksTheClosestJointOfEitherHandAndNamesIt)
   const HandJointsProbe probe = hand_joints_probe_from(hands);
   const NearestHandJoint nearest = nearest_hand_joint(probe, QarVector3{0.0f, 0.0f, 0.0f});
   ASSERT_TRUE(nearest.found);
-  EXPECT_EQ(nearest.hand, QAR_HAND_LEFT);
+  EXPECT_EQ(nearest.hand, QAR_HANDEDNESS_LEFT);
   EXPECT_EQ(nearest.joint_id, static_cast<std::uint32_t>(QAR_HAND_JOINT_PALM_EXT));
   EXPECT_NEAR(nearest.distance_m, 0.1f, kTol);
   EXPECT_STREQ(hand_joint_name(nearest.joint_id), "palm");
@@ -469,7 +469,7 @@ TEST(NearestHandJointTest, AnUntrackedHandMeasuresAsUnknownAndNotAsZero)
   EXPECT_LT(nearest_hand_joint(empty, QarVector3{0.0f, 0.0f, 0.0f}).distance_m, 0.0f);
   EXPECT_LT(
     hand_joint_distance(
-      empty, QAR_HAND_RIGHT, QAR_HAND_JOINT_INDEX_TIP_EXT, QarVector3{0.0f, 0.0f, 0.0f}),
+      empty, QAR_HANDEDNESS_RIGHT, QAR_HAND_JOINT_INDEX_TIP_EXT, QarVector3{0.0f, 0.0f, 0.0f}),
     0.0f);
 }
 
@@ -481,17 +481,17 @@ TEST(HandJointDistance, MeasuresTheNamedJointAndRefusesOneThatIsNotTracked)
 
   EXPECT_NEAR(
     hand_joint_distance(
-      probe, QAR_HAND_RIGHT, QAR_HAND_JOINT_INDEX_TIP_EXT, QarVector3{0.0f, 0.0f, 0.0f}),
+      probe, QAR_HANDEDNESS_RIGHT, QAR_HAND_JOINT_INDEX_TIP_EXT, QarVector3{0.0f, 0.0f, 0.0f}),
     3.0f, kTol);
   // The same joint on the hand that is not tracked.
   EXPECT_LT(
     hand_joint_distance(
-      probe, QAR_HAND_LEFT, QAR_HAND_JOINT_INDEX_TIP_EXT, QarVector3{0.0f, 0.0f, 0.0f}),
+      probe, QAR_HANDEDNESS_LEFT, QAR_HAND_JOINT_INDEX_TIP_EXT, QarVector3{0.0f, 0.0f, 0.0f}),
     0.0f);
   // A joint the runtime did not fill on a hand that IS tracked.
   EXPECT_LT(
     hand_joint_distance(
-      probe, QAR_HAND_RIGHT, QAR_HAND_JOINT_WRIST_EXT, QarVector3{0.0f, 0.0f, 0.0f}),
+      probe, QAR_HANDEDNESS_RIGHT, QAR_HAND_JOINT_WRIST_EXT, QarVector3{0.0f, 0.0f, 0.0f}),
     0.0f);
 }
 
