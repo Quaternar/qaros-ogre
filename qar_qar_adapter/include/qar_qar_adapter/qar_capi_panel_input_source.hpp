@@ -4,9 +4,8 @@
 // The INPUT half of the QarOS panel path: pointer events on streamed QWidget
 // panels.
 //
-// The 2026-09-21 SDK drop replaced the two discrete entry points
-// (subscribe_click_events / subscribe_hover_events, delivering a flat
-// QarGuiPanelPointerEvent) with ONE gesture stream:
+// The runtime offers ONE gesture stream per panel (not a discrete click entry
+// point and a discrete hover entry point):
 //
 //   qar_gui_panels_subscribe_all_gesture_events(session, id, cb, state, token)
 //
@@ -48,8 +47,8 @@ namespace qar_qar_adapter
 /// for its implicit room-space pointer, and two sources sharing an id would share the
 /// state machine's grab and its double-click memory.
 ///
-/// The runtime reports which hand made a contact (`qar_gui_panel_gesture_get_hand`,
-/// since the 2026-09-21 SDK) and the lifecycle names its source peer, so
+/// The runtime reports which hand made a contact (`qar_gui_panel_gesture_get_handedness`,
+/// where UNSPECIFIED means no hand) and the lifecycle names its source peer, so
 /// @ref panel_pointer_id_for mints one id per (peer, hand): two hands, or two
 /// operators, do not fight over one grab and one double-click memory.
 /// Still one id across ALL PANELS of a hand, not one per panel — a single
@@ -74,9 +73,9 @@ struct PanelInputStats
 {
   /// Callbacks entered.
   std::uint64_t events_received = 0;
-  /// Events dropped because an accessor could not read the handle. Since the
-  /// 2026-09-21 SDK there is no invalid gesture (the flat event's `valid` flag
-  /// is gone), only a handle we failed to read.
+  /// Events dropped because an accessor could not read the handle. The runtime
+  /// has no notion of an invalid gesture (no `valid` flag), only a handle we
+  /// failed to read.
   std::uint64_t events_invalid = 0;
   /// Events whose pixel position was outside the content rectangle and had to
   /// be clamped. The renderer is documented to clamp already, so a non-zero
@@ -140,7 +139,9 @@ struct PanelInputStats
 ///
 /// ## Threading
 ///
-/// `subscribe_panel`, `unsubscribe_panel` and `drain` are for the Qt GUI thread.
+/// `subscribe_panel` and `unsubscribe_panel` are called by the panel adapters' tasks on the thread
+/// that owns the QarOS session; `drain` and `drain_closed_panels` are for the Qt GUI thread. The
+/// state they share is guarded by one mutex, and a subscription is retired outside it.
 /// The QarOS callback runs on a library background thread and does the minimum
 /// the header demands of it: convert, push, return. It takes exactly one lock
 /// (its slot's) and one more inside the queue, touches no Qt, and never calls
@@ -162,7 +163,7 @@ public:
   ///
   /// @param panel_key         The manager's key (PanelDesc::key); stamped on
   ///                          every sample this panel produces.
-  /// @param id                The QarGuiPanelId `qar_gui_panels_add_panel` gave.
+  /// @param id                The QarGuiPanelId `qar_gui_panels_get_or_create` gave.
   /// @param content_width     Extent of the streamed image the widget actually
   /// @param content_height    covers, in pixels (PanelDesc::content_width) —
   ///                          the frame the incoming coordinates are in. NOT
@@ -236,7 +237,8 @@ public:
   bool has_panel(const std::string & panel_key) const;
 
   PanelInputStats stats() const;
-  const std::string & last_error() const { return last_error_; }
+  /// @brief The reason of the last refusal (a copy: subscribing may run on another thread).
+  std::string last_error() const;
 
 private:
   /// One panel: ONE gesture subscription (every kind, one reader, publish
@@ -346,6 +348,7 @@ private:
   void flush_runtime_records();
 
   void retire(PanelSubscription & subscription);
+  void set_last_error(std::string text);
 
   QarSession * session_ = nullptr;
 

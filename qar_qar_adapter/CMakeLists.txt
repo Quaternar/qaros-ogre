@@ -2,18 +2,22 @@
 # SPDX-License-Identifier: MIT
 #
 # ===========================================================================
-# qar_qar_adapter — the QarOS C API side of the library seams, as five static
+# qar_qar_adapter — the QarOS C API side of the library seams, as six static
 # libraries. They are components of the qar_ogre_adapter package; EXPORT_NAME is
 # the name the package exports and the alias consumers use (qar_ogre_adapter::<name>):
 #
 #   capi      qar_qar_adapter_capi      the program's one QarOS C API loader
 #                                       (QAR_IMPLEMENT_DYNAMIC_LOADING), the
-#                                       callback-slot arena, IQarSessionOwner.
+#                                       callback-slot arena, IQarSessionOwner, the
+#                                       timer of QarOS calls on a GUI thread.
 #                                       Every other component links it.
+#   session   qar_qar_adapter_session   the session owner (QarSessionOwner): library
+#                                       load, runtime, joining the QAROS Hub, the
+#                                       targets, the stored pairing, status texts.
 #   render    qar_qar_adapter_render    3D stereo streams (IQarRenderSenderAdapter)
-#                                       and the session bootstrap
-#                                       (QarCApiSenderFactory). Needs Ogre, through
-#                                       qar_ogre_streaming's seam headers.
+#                                       and the factory that borrows the owner's
+#                                       session (QarCApiSenderFactory). Needs Ogre,
+#                                       through qar_ogre_streaming's seam headers.
 #   panels    qar_qar_adapter_panels    GUI-panel sender + per-panel input.
 #   url       qar_qar_adapter_url       browser-backed (URL) panels.
 #   gestures  qar_qar_adapter_gestures  app-volume (spatial) gestures.
@@ -30,9 +34,9 @@
 # its own folder is searched first for its dependencies, then the application directory,
 # the directories the program added and System32, never PATH or the current directory.
 #
-# The DLL path is resolved at run time from Config::runtime_binaries_folder_path, which
-# the host fills (qar_rviz_plugin reads QAR_RUNTIME_BINARIES_DIR); QAR_SDK_ROOT is only
-# a configure-time check.
+# The library is found at run time by the vendor's lookup (qar_library_load(NULL): beside the
+# program, QAROS_RUNTIME_DIR, the installed QAROS, PATH) unless SessionOwnerConfig::library_path
+# names a file; QAR_SDK_ROOT is only a configure-time check.
 # ---------------------------------------------------------------------------
 # QAR_SDK_ROOT is only checked here: -D (or a preset; an empty value counts as unset), else the
 # environment variable QAR_SDK_ROOT.
@@ -79,6 +83,8 @@ endfunction()
 qar_adapter_component(qar_qar_adapter_capi capi
   src/qar_capi_loader.cpp
   src/qar_capi_input_slots.cpp
+  # Times the QarOS calls of a GUI thread; every component calls through it.
+  src/gui_call_guard.cpp
 )
 target_link_libraries(qar_qar_adapter_capi PUBLIC
   qar_ogre_adapter::qar_ar_core
@@ -88,15 +94,28 @@ target_link_libraries(qar_qar_adapter_capi PUBLIC
 # dispatch through the tables qar_capi_loader.cpp defines. There is no import lib.
 target_compile_definitions(qar_qar_adapter_capi PUBLIC QAR_ENABLE_DYNAMIC_LOADING)
 
+qar_adapter_component(qar_qar_adapter_session session
+  src/qar_session_owner.cpp
+  # Pure units, kept separate so they are unit testable without a QarOS session
+  # (qar_qar_adapter/test): the stored pairing, the status texts, the env-var parsing.
+  src/identity_store.cpp
+  src/onboarding_status.cpp
+  src/env_config.cpp
+)
+target_link_libraries(qar_qar_adapter_session PUBLIC
+  qar_ogre_adapter::capi
+  qar_ogre_adapter::qar_ar_core
+)
+
 qar_adapter_component(qar_qar_adapter_render render
   src/qar_capi_render_sender_adapter.cpp
-  # SDK-free geodetic -> ECEF math and env-var parsing, kept separate so they are unit
-  # testable without a live QarSession (qar_qar_adapter/test).
+  # SDK-free geodetic -> ECEF math, kept separate so it is unit testable without a
+  # live QarSession (qar_qar_adapter/test).
   src/geo_anchor.cpp
-  src/env_config.cpp
 )
 target_link_libraries(qar_qar_adapter_render PUBLIC
   qar_ogre_adapter::capi
+  qar_ogre_adapter::session
   qar_ogre_adapter::qar_ar_core
   qar_ogre_adapter::qar_ogre_streaming
 )

@@ -128,8 +128,9 @@ TEST(EnvConfig, TickMsRejectsGarbageAndAbsurdValues)
 
 TEST(LogSeverityParse, EnumValuesMatchTheVendorHeaderOrder)
 {
-  // qar_streaming.h: TRACE=0 DEBUG=1 INFO=2 WARN=3 ERROR=4 FATAL=5. The adapter also
-  // static_asserts this against the real header; this pins the SDK-free copy.
+  // qar_streaming.h: TRACE=0 DEBUG=1 INFO=2 WARN=3 ERROR=4 FATAL=5. The session
+  // owner converts between the two enums by number, so this test is what pins the
+  // SDK-free copy to the vendor header's order.
   EXPECT_EQ(static_cast<int>(LogSeverity::kTrace), 0);
   EXPECT_EQ(static_cast<int>(LogSeverity::kDebug), 1);
   EXPECT_EQ(static_cast<int>(LogSeverity::kInfo), 2);

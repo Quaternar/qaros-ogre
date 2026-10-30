@@ -8,7 +8,7 @@ The code of this repository is three modules, each in a folder of its own, plus 
 |---|---|
 | `qar_ar_core/` | the Qt-free core: headers in `qar_ar_core/include/qar_ar_core/`, sources in `qar_ar_core/src/`, tests in `qar_ar_core/test/` |
 | `qar_ogre_streaming/` | the Ogre stereo streaming library: headers in `qar_ogre_streaming/include/qar_ogre_streaming/`, sources in `qar_ogre_streaming/src/`, tests in `qar_ogre_streaming/test/`, and the header-only test doubles in `qar_ogre_streaming/test_support/` |
-| `qar_qar_adapter/` | the QarOS C API adapter in five components: headers in `qar_qar_adapter/include/qar_qar_adapter/`, sources in `qar_qar_adapter/src/` (with one private header), tests in `qar_qar_adapter/test/` |
+| `qar_qar_adapter/` | the QarOS C API adapter in six components: headers in `qar_qar_adapter/include/qar_qar_adapter/`, sources in `qar_qar_adapter/src/` (with one private header), tests in `qar_qar_adapter/test/` |
 | `examples/ogre_standalone_streaming_sample/` | the headless sample, which needs no QarOS SDK |
 | `examples/qaros_live_stream/` | the live example, which streams the scene of the sample to a QarOS Visualizer |
 | `third_party/qar/` | the vendored QarOS header, its licence, and a README that names where both come from |

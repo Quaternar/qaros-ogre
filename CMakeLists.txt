@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 #
 # qar_ogre_adapter: the QarOS integration layer for Ogre applications - qar_ar_core,
-# qar_ogre_streaming and the QarOS C API adapter components capi, render, panels, url, gestures.
+# qar_ogre_streaming and the QarOS C API adapter components capi, session, render, panels, url,
+# gestures.
 cmake_minimum_required(VERSION 3.22)
 project(qar_ogre_adapter VERSION 0.1.0
   DESCRIPTION "QarOS integration layer for Ogre applications"
@@ -48,7 +49,7 @@ endif()
 qar_install_enabled(_qar_install)
 if(_qar_install)
   install(TARGETS qar_ar_core qar_ogre_streaming
-      qar_qar_adapter_capi qar_qar_adapter_render qar_qar_adapter_panels
+      qar_qar_adapter_capi qar_qar_adapter_session qar_qar_adapter_render qar_qar_adapter_panels
       qar_qar_adapter_url qar_qar_adapter_gestures
     EXPORT qar_ogre_adapterTargets
     ARCHIVE DESTINATION lib

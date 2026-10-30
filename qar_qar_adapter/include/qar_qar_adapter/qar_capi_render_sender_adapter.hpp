@@ -9,8 +9,9 @@
 //  IQarRenderSenderAdapter / IQarRenderSenderFactory seam, backed by the QAR
 //  streaming C API (qar_streaming.h). It calls only QAR C functions
 //  (qar_render_sender_begin_frame -> per-view pose/FOV; qar_render_sender_frame_
-//  opengl + qar_render_sender_show_frame to submit; lifecycle library_init ->
-//  runtime_create -> create_session -> session_join -> peer_subscribe_updates).
+//  opengl + qar_render_sender_show_frame to submit). The session itself belongs
+//  to a QarSessionOwner, which joins the QAROS Hub and reports the render targets;
+//  the factory borrows its session and builds one sender per target.
 //
 //  qar_ogre_streaming (the reusable library) has NO knowledge of this class or
 //  of the QAR runtime binary — it talks to QAR only through the abstract
@@ -30,6 +31,7 @@
 // Warning-suppressed include of the vendored QAR C header, which defines the
 // OpenGL producer path natively (via QAR_ENABLE_OPENGL, set in the wrapper).
 // types.hpp brings the library-internal GlVideoTexture/GlFrameSync types.
+#include "qar_ar_core/common_name.hpp"
 #include "qar_ar_core/qar_streaming_c.hpp"
 #include "qar_ar_core/pointing_ray.hpp"
 #include "qar_ar_core/spatial_frames.hpp"
@@ -39,6 +41,7 @@
 #include "qar_qar_adapter/frame_stall_probe.hpp"
 #include "qar_qar_adapter/log_time.hpp"
 #include "qar_qar_adapter/qar_capi_session_owner.hpp"
+#include "qar_qar_adapter/qar_session_owner.hpp"
 
 namespace qar_qar_adapter
 {
@@ -267,99 +270,33 @@ private:
   std::unique_ptr<RenderTimingState> timing_;
 };
 
-/// @brief A device type that can be invited into the session.
+/// @brief Factory that mints one QarCApiRenderSenderAdapter per render target via
+/// qar_render_sender_create_async.
 ///
-/// The SDK builds one connection string per device *type*
-/// (`qar_session_invite_connection_string_*`), and `qar_session_invite_peer` then
-/// invites it. Inviting a real device this way is strictly better than waiting for it
-/// to onboard itself: the invite returns the peer id, so the device lands in our
-/// allow-list and is admitted exactly (no timing heuristic needed).
-///
-/// Only HoloLens takes a parameter — its `hostname`, which is also the only way we
-/// can name *which* physical device to invite. Everything else is parameterless, which
-/// is why a second Visualizer cannot be requested (see
-/// docs/QAROS_INTEGRATION_NOTES.md#peers-invites-and-admission).
-enum class PeerKind
-{
-  kVisualizer,  ///< The desktop Visualizer (the Hub's own window). Parameterless.
-  kHoloLens,    ///< HoloLens 2, addressed by device hostname.
-  kQuest,       ///< Meta Quest. Parameterless.
-  kZed          ///< ZED stereo camera; joins as a camera-visualizer peer.
-};
-
-/// @brief Lower-case name (`visualizer`, `hololens`, `quest`, `zed`).
-const char * to_string(PeerKind kind);
-/// @brief Parse one of the names above (case-insensitive). @return false if unknown.
-bool parse_peer_kind(const std::string & text, PeerKind & out);
-/// @brief True if @ref PeerKind::kHoloLens, i.e. a non-empty hostname is required.
-bool peer_kind_needs_hostname(PeerKind kind);
-
-/// @brief Which peers surfaced by `qar_peer_subscribe_updates` get a render stream.
-///
-/// A session's peer subscription surfaces **everything** that joins: the invited
-/// Visualizer(s) *and* internal runtime apps; one invited Visualizer can show up
-/// as five distinct peer ids. Building a render sender for an
-/// internal peer mismatches app ids (the runtime then rejects the Visualizer's own
-/// frames) and multiplies GUI-thread render work, so the set must be filtered.
-///
-/// Our own peer id (from `qar_session_get_my_spec`) is excluded under every policy —
-/// we never stream to ourselves.
-enum class PeerAdmission
-{
-  /// Only peers WE invited via `qar_session_invite_peer`. Safe default: exact ids,
-  /// no guessing. It admits every Visualizer this producer spawned, so N invites =>
-  /// N peers, but it cannot admit a Visualizer that joined the session on its own
-  /// (e.g. from another machine, using the serialized invite).
-  kInvitedOnly,
-
-  /// Every peer except ourselves. Use to DISCOVER what a real peer set looks like —
-  /// it will also admit the runtime's internal peers, which is exactly the failure
-  /// mode kInvitedOnly exists to avoid. Diagnostic, not a production setting.
-  kAny,
-
-  /// Invited peers, plus any peer whose `qar_peer_spec_get_display_name` contains
-  /// @ref QarCApiSenderFactory::Config::admission_name_filter (case-insensitive).
-  ///
-  /// **Unusable in practice**: display names are
-  /// auto-generated *and change between updates for the same peer id* — one peer
-  /// reported `clever_darwin`, then `competent_tesla`, then `determined_tesla`. Kept
-  /// only in case a future SDK gives peers stable names.
-  kInvitedOrNamed,
-
-  /// Invited peers, plus any peer that first appears **after** the connect settle
-  /// window (@ref QarCApiSenderFactory::Config::baseline_settle_ms).
-  ///
-  /// **This is the policy for a demo with real onboarded peers** (HoloLens, METALENSE
-  /// 2, Quest, Android, or a Visualizer on another machine). Those join through
-  /// QAROS *onboarding* — a pairing code or a push invite from the Hub — never
-  /// through `qar_session_invite_peer`, so @ref kInvitedOnly would silently refuse
-  /// them and the headset would see nothing.
-  ///
-  /// It works on timing, which is the only signal the SDK leaves us: the runtime's
-  /// own internal peers are all present within moments of the session coming up,
-  /// whereas a human onboarding a headset takes far longer. Everything seen during
-  /// the window becomes the baseline and is refused; anything new afterwards is a
-  /// consumer and is admitted. With nothing new joining it behaves exactly like
-  /// @ref kInvitedOnly.
-  ///
-  /// A heuristic, and labelled as one — it exists because the SDK exposes no peer
-  /// role/kind field (see docs/QAROS_INTEGRATION_NOTES.md#peers-invites-and-admission).
-  /// Replace it the moment one is available.
-  kInvitedOrNew
-};
-
-/// @brief Factory that bootstraps the QAR runtime/session and mints one
-/// QarCApiRenderSenderAdapter per peer via qar_render_sender_create.
-///
-/// On construction it runs the minimal real-QAR lifecycle (library_init ->
-/// runtime_create -> create_session -> session_join) and subscribes to peer-spec
-/// updates (qar_peer_subscribe_updates, the push form of qar_query_peer_specs). New
-/// peers (the viewer's "Add user") surface through poll_new_peer_requests(), which
-/// drains its queue; closed peers (the viewer's "Delete user") through
-/// poll_closed_peers(), which consumes nothing: it lists a closed peer on every call
+/// The QAROS session is not the factory's: a QarSessionOwner joins the Hub and keeps the list of
+/// targets (the headsets and Visualizer receivers that show content). The factory borrows the
+/// owner's session once the owner is ready (attach()), hears about targets through
+/// ITargetListener, and hands them to the producer: new targets through
+/// poll_new_peer_requests(), which drains its queue; targets that left, and streams QAR reported
+/// closed, through poll_closed_peers(), which consumes nothing: it lists a peer on every call
 /// until forget() is called for it. The producer polls both on its render thread.
+///
+/// A factory must be owned by a std::shared_ptr: attach() registers a weak reference to it as the
+/// owner's target listener.
+///
+/// The factory does not own the session owner: it keeps a weak reference, so the last reference to
+/// the owner is never dropped by a factory, whichever thread releases the factory. The program
+/// keeps the owner alive for as long as it uses a factory; a factory that outlives its owner sees
+/// ready() false and detaches without a call.
+///
+/// No call of the consumer thread waits for the Hub. The app volume, the first read of its
+/// placement, the placement subscription and the world anchor are QarOS calls that run on the
+/// thread that owns the session (QarSessionOwner::post_session_task); the factory keeps what they
+/// found in a state of its own that both threads read.
 class QarCApiSenderFactory : public qar_ogre_streaming::IQarRenderSenderFactory,
-  public IQarSessionOwner
+  public IQarSessionOwner,
+  public ITargetListener,
+  public std::enable_shared_from_this<QarCApiSenderFactory>
 {
 public:
   struct Config
@@ -376,113 +313,26 @@ public:
     /// Visualizer expects.
     float depth_scale = 1.0f;
 
-    /// @brief Folder the QAR runtime spawns app binaries (the Visualizer) from,
-    /// set as QarRuntimeInit.runtime_binaries_folder_path. Should be
-    /// `<QAR_SDK_ROOT>/bin`. Empty => leave the QAR default (cwd, with
-    /// a runtime warning). The factory keeps a copy alive for the C string.
-    std::string runtime_binaries_folder_path;
-
     /// @brief GL submit mode (see @ref GlSubmitMode) propagated to every per-peer adapter.
     GlSubmitMode submit_mode = kDefaultGlSubmitMode;
 
     /// @brief Optional render-into copy hook (see IQarGlTextureCopyHook); null ok.
     std::shared_ptr<IQarGlTextureCopyHook> copy_hook;
 
-    /// @brief Restrict streaming to peers we invited ourselves.
-    ///
-    /// Arms the allow-list BEFORE qar_peer_subscribe_updates, so the runtime's own
-    /// internal peers (which surface immediately and in numbers — a single Visualizer
-    /// can show up as 5 ids) are dropped instead of being handed a sender.
-    /// Without it the first sender gets built for whichever internal peer arrives
-    /// first and the real consumer's frames are app-id-rejected.
-    ///
-    /// This is INDEPENDENT of whether we auto-invite anything (@ref
-    /// auto_invite_visualizers): a session that invites nothing at connect still
-    /// needs the filter, because peers invited later from the panel must be the only
-    /// ones admitted. Keep it on for every run.
-    bool invite_flow_admission = true;
-
-    /// @brief Real devices to invite right after the session comes up, as
-    /// `kind[:hostname]` entries separated by commas — e.g.
-    /// `hololens:HOLOLENS-A2B3,hololens:HOLOLENS-C4D5,quest`.
-    ///
-    /// Preferred over waiting for a device to onboard itself: `qar_session_invite_peer`
-    /// returns the peer id, so the device joins our allow-list and is admitted exactly,
-    /// with no need for the timing heuristic of @ref PeerAdmission::kInvitedOrNew.
-    /// A failing entry is logged and skipped — one unreachable headset must not stop
-    /// the session or the other devices.
-    std::string invite_peers;
-
-    /// @brief How many Visualizer peers to invite automatically at connect.
-    ///
-    /// DEFAULT 0 — connecting to QarOS opens the session and nothing else. Visualizers
-    /// are spawned on demand from the panel ("Invite peer"), because the real use case
-    /// is often real devices only, with no Visualizer window at all; and because
-    /// inviting one is a blocking call we should not force into every connect.
-    ///
-    /// One QAR Visualizer == one physical client head (a pair of eye cameras), so N
-    /// simultaneous users means N Visualizers, each with its own stereo stream. Each
-    /// invite yields a distinct peer id, all added to the admission allow-list.
-    uint32_t auto_invite_visualizers = 0;
-
-    /// @brief Payload appended to the Visualizer connection string ("visualizer:").
-    ///
-    /// The SDK's qar_session_invite_connection_string_visualizer() builds a BARE
-    /// "visualizer:" — the payload slot after the colon is left empty, which is why
-    /// every such invite resolves to the same peer id and a second Visualizer cannot
-    /// be opened on one machine. The other builders show the slot is real: HoloLens
-    /// puts a hostname there. QarOS launches one mixer process per GUID (see
-    /// %TEMP%\quaternar\mixerAndTargetApp_<guid>_stdout.log), so naming a distinct
-    /// GUID is the vendor-suggested way to address a distinct instance.
-    ///
-    /// DEFAULT "auto" = mint a fresh UUID per invite, which is what makes inviting
-    /// and streaming to several Visualizers at once work (two independent
-    /// instances, each with its own stream; one can crash and recover without
-    /// disturbing the other). Empty restores the stock
-    /// behaviour where every invite collapses onto a single peer. Anything else is
-    /// used verbatim. An explicit hostname passed to invite_peer() takes precedence,
-    /// so the panel's host field can carry a specific GUID.
-    std::string visualizer_conn_suffix = "auto";
-
-    /// @brief Which subscription peers get a render stream (see @ref PeerAdmission).
-    PeerAdmission admission = PeerAdmission::kInvitedOnly;
-
-    /// @brief Substring matched against a peer's display name under
-    /// @ref PeerAdmission::kInvitedOrNamed (case-insensitive). Empty => that policy
-    /// degrades to kInvitedOnly rather than admitting everything.
-    std::string admission_name_filter;
-
-    /// @brief How long after the session comes up peers still count as "already
-    /// there" under @ref PeerAdmission::kInvitedOrNew.
-    ///
-    /// Long enough that every internal runtime peer has surfaced (they arrive within
-    /// moments of `qar_peer_subscribe_updates`), short enough that a human cannot
-    /// have onboarded a headset yet. 5 s is comfortably both.
-    uint32_t baseline_settle_ms = 5000;
-
-    /// @brief Hard ceiling on concurrently streamed peers (default 8). Extra
-    /// peers are refused with a logged warning instead of quietly overloading the
-    /// render tick — every peer costs four scene renders per frame (color and depth, two eyes).
+    /// @brief Hard ceiling on concurrently streamed peers (default 8), on top of the
+    /// owner's cap on served targets. Extra peers are refused with a logged warning instead
+    /// of quietly overloading the render tick — every peer costs four scene renders per frame
+    /// (color and depth, two eyes).
     uint32_t max_peers = 8;
 
-    /// @brief JSON object handed to the launcher via
-    /// `QarSessionCreateInit.launcher_config_json` (the runtime spawns and configures
-    /// the launcher itself; do NOT start `qar-runtime-launcher.exe` by hand).
-    ///
-    /// Vendor guidance: `{"enableMixer": false}` disables the mixer
-    /// and gives a **direct RViz -> Visualizer** connection, which is the recommended
-    /// starting point for debugging. Default is `enableMixer: true` on the QAR side.
-    /// Empty => pass NULL (runtime default).
-    std::string launcher_config_json = R"({"enableMixer": true})";
-
-    /// @brief Create ONE app volume at connect and key every render
+    /// @brief Get ONE app volume at attach() and key every render
     /// stream to it (`QarRenderSenderInit.app_volume_id`).
     ///
     /// The app volume is the mixer's unit of work: it is the named box in the room
     /// that reserves the region our content renders into, and the mixer composites
     /// each incoming stream into the volume its `app_volume_id` names.
     ///
-    /// **Turning this off does not give a working stream.** The 2026-09-21 SDK
+    /// **Turning this off does not give a working stream.** The installed header
     /// documents `app_volume_id` as Required and rejects NULL (which is what
     /// `qar_render_sender_init_default()` leaves) with
     /// `QAR_STATUS_APP_VOLUME_INVALID_ID`, so with this off `create_sender()`
@@ -494,8 +344,12 @@ public:
     /// @brief `QarAppVolumeInit.display_name` for the volume we create.
     std::string app_volume_name = "RViz Scene";
 
-    /// @brief Log the app volume's gesture configuration read-back at connect
-    /// time.
+    /// @brief The program, instance and host that the stable ASCII common name of the app volume
+    /// is made from (qar_ar_core::make_volume_common_name). The same name finds the same volume
+    /// again at the next start.
+    qar_ar_core::NameScope name_scope;
+
+    /// @brief Log the app volume's gesture configuration read-back at attach time.
     ///
     /// `QarAppVolumeInit.gesture_configuration` is ALWAYS left NULL: the volume
     /// then gets the runtime's own default
@@ -505,8 +359,7 @@ public:
     /// `QAR_APP_VOLUME_CONTROLLER_RAY_LINE_STYLE_NONE`, i.e. an invisible ray.
     /// This flag only controls whether we then read the configuration back
     /// from the runtime and log it for diagnostics. Off saves that one read-
-    /// back round trip at connect time; it does not change what the volume
-    /// does.
+    /// back round trip; it does not change what the volume does.
     bool app_volume_pick_gestures = true;
 
     /// @brief Volume extent in ROOM meters: the cuboid reserving the region our
@@ -523,9 +376,8 @@ public:
     float app_volume_height_m = 10.0f;
 
     /// @brief Height of the box CENTRE above the origin of room space (y = 0), in
-    /// meters; the QAR C API header does not say whether y = 0 is the floor or the
-    /// height of the eyes. The volume pose is the cuboid centre, so at 0 the lower
-    /// half of the box lies below y = 0.
+    /// meters. The volume pose is the cuboid centre, so at 0 the lower half of the box
+    /// lies below y = 0, and the QAR C API header does not call y = 0 the floor.
     float app_volume_center_y_m = 1.0f;
 
     /// @brief Room-meters per app-meter (`QarAppVolumeInit.app_scale`). 1.0 renders
@@ -538,64 +390,81 @@ public:
     /// taste, but remember it costs feature legibility, not just room.
     float app_volume_scale = 1.0f;
 
-    /// @brief Folder for the QAR library's own log files
-    /// (`QarLibraryInit.log_folder_path`). Empty => `%TEMP%/quaternar` is used.
-    /// The vendor wants full TRACE-level library logs with any bug report.
+    /// @brief Folder for the per-frame trace files of the senders (QAR_ADAPTER_FRAME_TRACE).
+    /// Empty => `%TEMP%/quaternar`. The library's own log folder is
+    /// SessionOwnerConfig::log_folder_path.
     std::string log_folder_path;
-
-    /// @brief Severity for the QAR library log. The vendor wants TRACE with bug reports.
-    ///
-    /// The factory ALSO exports this as the QAR_LOG_SEVERITY environment variable
-    /// before `qar_library_init`, because the vendor library reads the variable in
-    /// preference to `QarLibraryInit.log_severity` — a stale `trace` in the environment
-    /// otherwise beats a requested `warn` (see
-    /// `resolve_library_logging` in env_config.hpp, which the panel uses to fill this and
-    /// @ref enable_console_logging).
-    QarLogSeverity log_severity = QAR_LOG_SEVERITY_TRACE;
-
-    /// @brief `QarLibraryInit.enable_console_logging`: duplicate every library log line to
-    /// stdout (RViz's stdout). True keeps
-    /// the vendor's bug-report profile; the quiet profile turns it off so a run does not
-    /// write the same lines twice. The file under @ref log_folder_path is unaffected.
-    bool enable_console_logging = true;
-
-    /// @brief Absolute path of the QAR implementation DLL to load at runtime when the
-    /// header is compiled with `QAR_ENABLE_DYNAMIC_LOADING` (vendor-recommended: the
-    /// app links NO import lib and resolves `qar_impl_*` from the DLL itself). Empty =>
-    /// `<runtime_binaries_folder_path>/qar-streaming-c.dll`.
-    std::string sdk_library_path;
   };
 
-  explicit QarCApiSenderFactory(const Config & config = {});
+  /// @param owner The session owner whose session this factory borrows (not owned: see the class
+  ///        comment); the factory detaches in its destructor.
+  QarCApiSenderFactory(std::shared_ptr<QarSessionOwner> owner, const Config & config);
   ~QarCApiSenderFactory() override;
 
   QarCApiSenderFactory(const QarCApiSenderFactory &) = delete;
   QarCApiSenderFactory & operator=(const QarCApiSenderFactory &) = delete;
 
-  /// @brief True if the QAR runtime/session bootstrap succeeded.
-  bool ready() const override { return ready_; }
-  const std::string & last_error() const { return last_error_; }
+  /// @brief Where the attach is.
+  enum class AttachState { kIdle, kPending, kAttached, kFailed };
 
-  /// @brief The QarOS session, borrowed — null until @ref ready.
+  /// @brief Starts the attach: the app volume's get-or-create, the first placement read and the
+  /// placement subscription run on the thread that owns the session, and the factory registers
+  /// as the owner's target listener there. Consumer thread; it does not wait for the volume.
+  /// @return false, with @ref last_error, when the owner is not ready or the factory is not owned
+  /// by a std::shared_ptr. Calling it in kFailed retries.
+  bool begin_attach();
+
+  /// @brief Where the attach is. Consumer thread; poll it on every tick while it is kPending.
+  /// kFailed comes with @ref last_error.
+  AttachState attach_state() const;
+
+  /// @brief begin_attach() and a wait until attach_state() leaves kPending. BLOCKS for as long as
+  /// the volume takes (seconds): for console programs only, never on a GUI thread.
+  /// @return false, with @ref last_error, when the attach did not succeed.
+  bool attach();
+
+  /// @brief Stops listening and lets go of the volume. Call on the consumer thread, after every
+  /// sender is destroyed and before the owner disconnects. Returns after a delivery of a target
+  /// change that is running has ended, so the factory can be released right after it. A render
+  /// sender whose creation is still in flight is destroyed when its result arrives.
+  void detach();
+
+  /// @brief True once the attach succeeded and detach() was not called.
+  bool attached() const;
+
+  /// @brief True while the owner's session is up (the owner's own answer).
+  bool ready() const override
+  {
+    const std::shared_ptr<QarSessionOwner> owner = owner_.lock();
+    return owner != nullptr && owner->ready();
+  }
+  /// @brief The reason of the last failure (a copy: the thread that owns the session writes it).
+  std::string last_error() const;
+
+  /// @brief The owner's QarOS session, borrowed — null until the owner is ready.
   ///
   /// Exposed for the GUI-panel path (QarCApiPanelSenderFactory), which is
   /// REQUIRED to share this session rather than create its own:
   /// QarGuiPanelStreamIdExt only accepts a stream id from a video sender owned
   /// by the same session as the panel. Callers must not destroy it.
-  QarSession * session() const override { return session_; }
+  QarSession * session() const override
+  {
+    const std::shared_ptr<QarSessionOwner> owner = owner_.lock();
+    return owner != nullptr ? owner->session() : nullptr;
+  }
 
-  /// @brief The app volume this factory created at connect, if it created one.
+  /// @brief Queues @p task on the owner's thread (see IQarSessionOwner::post_session_task).
+  /// @return false when the owner is gone or no session is running.
+  bool post_session_task(
+    const char * name, SessionTask task, std::function<void()> dropped = {}) override;
+
+  /// @brief The app volume this factory got at attach(), if it did.
   ///
   /// The spatial gesture source needs it: `qar_app_volumes_subscribe_gesture_events`
   /// is per-volume, and this is the only volume we own. False when the volume
-  /// was not created (`Config::create_app_volume` off, or the create call
-  /// failed) — the caller then simply has no gestures to subscribe to.
-  bool app_volume(QarAppVolumeId & out_id) const
-  {
-    if (!has_app_volume_) { return false; }
-    out_id = app_volume_;
-    return true;
-  }
+  /// was not made (`Config::create_app_volume` off, or the call failed) — the caller
+  /// then simply has no gestures to subscribe to.
+  bool app_volume(QarAppVolumeId & out_id) const;
 
   /// @brief Where QarOS is displaying our scene RIGHT NOW, and at what size.
   ///
@@ -610,7 +479,8 @@ public:
   /// those two fields — the QarOS session log publishes
   /// `qar/storage/appVolume/appPose/updated/<our id>` and
   /// `.../appScale/updated/<our id>` — and our creation-time numbers are a
-  /// guess that gets staler every time the operator touches the scene.
+  /// guess that gets staler every time the operator touches the scene. A volume
+  /// that existed already keeps the placement it had.
   ///
   /// Reading them back keeps the diagnostic honest, and is the right model for
   /// anything genuinely stated in room metres. Gesture points, view poses and
@@ -618,14 +488,21 @@ public:
   /// (see docs/QAROS_INTEGRATION_NOTES.md#app-content-space and
   /// qar_ar_core/spatial_frames.hpp), so the pick path never applies it.
   ///
-  /// Cheap enough to call per Qt tick (three getters on a handle we look up by
-  /// id), and deliberately NOT cached: a cached placement is the same stale
-  /// guess with extra steps.
+  /// ## Why it is a cache
   ///
-  /// @return false when there is no volume, or when any accessor
-  ///         refused — @p out is then left untouched, and a caller
-  ///         keeps whatever placement it already had rather than silently
-  ///         reverting to identity.
+  /// Every read of the placement from the runtime is a query that waits for the Hub, and on the
+  /// installed QAROS one query takes about 2 seconds. So this copies the last placement that was
+  /// seen and never calls QarOS: the attach reads it once, the runtime's update subscription
+  /// (qar_app_volumes_subscribe_updates) replaces it when the volume changes, and a cache that is
+  /// older than a second is refreshed with the "latest" getters on the thread that owns the
+  /// session. The value is as fresh as the last of those.
+  ///
+  /// While nothing is known (the attach could not read the placement) it also asks the owner's
+  /// thread for a new read, at most once every ten seconds, so the cache fills once a read works.
+  ///
+  /// @return false when there is no volume or nothing was read yet - @p out is then left
+  ///         untouched, and a caller keeps whatever placement it already had rather than
+  ///         silently reverting to identity.
   bool scene_placement(qar_ar_core::ScenePlacement & out) const;
 
   /// @brief Where every stream this factory builds publishes the AR pointing
@@ -658,52 +535,37 @@ public:
   /// @brief Drain peer ids the viewer requested a stream for (thread-safe).
   void poll_new_peer_requests(std::vector<QarPeerId> & out);
 
-  /// @brief Append the ids of the peers whose stream QAR reported closed (thread-safe).
+  /// @brief Append the ids of the peers whose stream is over (thread-safe): the target
+  /// left the session, or QAR reported the stream closed.
   ///
   /// Not a drain: nothing is consumed, so every call lists the same peers again until
-  /// @ref forget is called for each of them. A peer is listed while the factory still
-  /// holds its entry and its adapter is alive and closed.
+  /// @ref forget is called for each of them.
   void poll_closed_peers(std::vector<QarPeerId> & out);
 
-  /// @brief Forget a peer's adapter bookkeeping once its stream is destroyed. The peer
+  /// @brief Forget a peer's bookkeeping once its stream is destroyed. The peer
   /// stops being listed by @ref poll_closed_peers, and its place under max_peers is free.
+  /// A request still queued for the peer is dropped, so a producer that queued it again for a
+  /// peer that left is not asked for it every tick. A target that is still here is requested
+  /// again, so a stream that QAR closed is rebuilt.
   void forget(const QarPeerId & peer_id);
 
-  // Called by the QAR peer-update callback (on the QAR runtime's thread), and by the
-  // producer to RE-QUEUE a peer whose stream creation must be retried next tick.
-  // Applies the admission policy and de-duplicates against the pending queue.
-  // @param display_name The peer's display name when known (peer-update callback),
-  //        null on the re-queue path.
-  void on_render_request(const QarPeerId & peer_id, const char * display_name = nullptr);
+  /// @brief Queue a peer for a stream. The producer calls it to RE-QUEUE a peer whose stream
+  /// creation must be retried next tick. A peer already queued is not queued twice.
+  void on_render_request(const QarPeerId & peer_id);
 
-  /// @brief Invite one more peer into the QarOS session.
-  ///
-  /// Adds its peer id to the invited allow-list, so it is admitted under every policy
-  /// and gets its own stereo stream. This is how a physical client head is added after
-  /// the session is already running.
-  ///
-  /// @param kind      Device type to invite.
-  /// @param hostname  Required for @ref PeerKind::kHoloLens (the device's hostname),
-  ///                  ignored for the other kinds.
-  /// @param[out] out_peer Receives the invited peer id on success.
-  /// @return empty on success, else a human-readable reason (not ready, missing
-  ///         hostname, at the max_peers ceiling, or the QAR call failed).
-  std::string invite_additional_peer(
-    PeerKind kind, const std::string & hostname, QarPeerId & out_peer);
+  // ITargetListener: called on a QAR thread; both only queue.
+  void on_target_up(const TargetInfo & target) override;
+  void on_target_down(const QarPeerId & id, QarPeerPresence presence) override;
 
-  /// @brief `invite_additional_peer(PeerKind::kVisualizer, "", out_peer)`.
-  /// With the default `visualizer_conn_suffix` ("auto") every call opens a new
-  /// Visualizer; with it empty, repeat invites return the peer that already exists
-  /// (docs/QAROS_INTEGRATION_NOTES.md#peers-invites-and-admission).
-  std::string invite_additional_visualizer(QarPeerId & out_peer);
+  /// @brief Number of peers that have a stream or are queued for one (diagnostics).
+  std::size_t served_peer_count() const;
 
-  /// @brief Peer ids we have invited so far (thread-safe copy).
-  std::vector<QarPeerId> invited_peers() const;
+  /// @brief The outcome of the last anchor change that ran, once. Consumer thread.
+  /// @return true when one arrived; @p out_error is empty for success.
+  bool take_geo_anchor_result(std::string & out_error);
 
-  /// @brief Number of peers admitted by the policy so far (diagnostics).
-  std::size_t admitted_peer_count() const;
-
-  /// @brief Georeference our app volume from a WGS84 geodetic fix.
+  /// @brief Georeference our app volume from a WGS84 geodetic fix. Queues the change for the
+  /// thread that owns the session; the outcome arrives through take_geo_anchor_result().
   ///
   /// This is how ROS geolocation reaches QarOS. The SDK anchors a volume with a
   /// @c QarGeoAnchorFrame — an ECEF WGS84 origin plus the three unit axes of the
@@ -716,7 +578,8 @@ public:
   /// @param longitude_deg WGS84 longitude, degrees, east positive.
   /// @param altitude_m    Height above the WGS84 ellipsoid, metres. NavSatFix is
   ///                      specified as ellipsoidal height, NOT height above MSL.
-  /// @return Empty on success, otherwise a human-readable reason.
+  /// @return Empty when the change was queued, otherwise why not (no session, no volume, a bad
+  /// fix).
   std::string set_geo_anchor_wgs84(
     double latitude_deg, double longitude_deg, double altitude_m);
 
@@ -726,91 +589,68 @@ public:
   /// ECEF: pass its translation as the origin and its rotation's basis vectors as
   /// the axes, and no geodetic conversion is needed or wanted.
   ///
-  /// Axes must be unit length and right-handed. @return empty on success.
+  /// Axes must be unit length and right-handed. @return empty when the change was queued.
   std::string set_geo_anchor_ecef(
     const double origin_xyz[3],
     const double axis_x[3], const double axis_y[3], const double axis_z[3]);
 
-  /// @brief Drop the volume's world anchor (back to un-georeferenced).
+  /// @brief Drop the volume's world anchor (back to un-georeferenced). Queued like the setters.
   std::string clear_geo_anchor();
 
-  /// @brief Whether a world anchor is currently set on our volume.
-  bool has_geo_anchor() const { return has_geo_anchor_; }
+  /// @brief Whether a world anchor is currently set on our volume (the last change that ran).
+  bool has_geo_anchor() const;
 
 private:
+  friend struct QarCApiSenderFactoryTestAccess;
+
   Config config_;
-  bool ready_ = false;
-  std::string last_error_;
+  std::weak_ptr<QarSessionOwner> owner_;
 
-  QarRuntime * runtime_ = nullptr;
-  QarSessionInvite * invite_ = nullptr;  ///< created-session invite (host side)
-  QarSession * session_ = nullptr;
+  /// What the thread that owns the session and the consumer thread share: the outcome of the
+  /// attach, the volume, the placement cache and the anchor requests. Defined in the .cpp. The
+  /// tasks hold it by shared_ptr, never the factory, so the factory is released on the consumer
+  /// thread only. A detach hands it to nobody new: the factory gets a fresh one.
+  struct CrossThread;
+  struct AttachJob;
+  struct PlacementSubscription;
+  std::shared_ptr<CrossThread> shared_;
 
-  /// Guards pending_requests_, adapters_, invited_peers_ and admitted_peers_, which
-  /// the QAR runtime's callback thread and the render thread both touch. Mutable so
-  /// the const diagnostics accessors can lock it.
+  // The tasks. Each runs on the thread that owns the session.
+  static void run_attach(QarSession * session, const AttachJob & job);
+  static void run_placement_refresh(
+    QarSession * session, const std::shared_ptr<CrossThread> & shared);
+  static void run_placement_unsubscribe(const std::shared_ptr<CrossThread> & shared);
+  static void run_geo_anchor(QarSession * session, const std::shared_ptr<CrossThread> & shared);
+  /// The runtime calls this on a library thread when an app volume changed.
+  static void placement_update_trampoline(QarAppVolume * handle, void * user_state);
+  /// One query for the placement of @p volume. Blocks for as long as the Hub takes.
+  static bool read_placement_by_query(
+    QarSession * session, const QarAppVolumeId & volume, qar_ar_core::ScenePlacement & out);
+
+  std::string queue_geo_request(bool clear, const QarGeoAnchorFrame * frame);
+  void set_error(const std::string & text);
+
   /// The session's one AR pointing ray, written by whichever stream is
   /// rendering and read by the spatial gesture seam. See @ref pointing_ray_slot.
   std::shared_ptr<qar_ar_core::PointingRaySlot> pointing_ray_slot_ =
     std::make_shared<qar_ar_core::PointingRaySlot>();
 
+  /// Guards pending_requests_, adapters_, served_peers_ and closed_peers_, which the QAR
+  /// threads (the owner's target callbacks) and the render thread both touch. Mutable so the
+  /// const diagnostics accessors can lock it. Nobody may end a QAR subscription while holding it.
   mutable std::mutex mutex_;
   std::vector<QarPeerId> pending_requests_;
 
-  // In the invite-a-Visualizer flow the peer subscription surfaces MANY
-  // peers (internal runtime apps AND every invited Visualizer). Creating senders for
-  // the internal peers builds them with the wrong app id (the runtime then rejects
-  // the Visualizer's frames) and multiplies GUI-thread render work, so admission is
-  // filtered — see PeerAdmission and admit_locked().
-  //
-  // invite_flow_ is set (invite mode) BEFORE subscribing, so on_render_request
-  // drops every subscription peer until at least one invited Visualizer id is known.
-  // Without this, internal peers that surface during setup get queued before the
-  // invited ids exist (a race) and the first sender is built for the wrong app id.
-  bool invite_flow_ = false;
-  /// Peers we invited ourselves — always admitted. One entry per physical client head.
-  std::vector<QarPeerId> invited_peers_;
-  /// Our own peer id (qar_session_get_my_spec); never admitted.
-  QarPeerId self_peer_{};
-  bool has_self_peer_ = false;
+  /// Peers that have a stream or are queued for one (max_peers accounting, de-duplication).
+  std::vector<QarPeerId> served_peers_;
+  /// Peers that left the session while the producer may still hold a stream for them.
+  std::vector<QarPeerId> closed_peers_;
 
-  /// The single app volume every render stream is keyed to (@ref
-  /// Config::create_app_volume). Created once at connect, after the session is
-  /// joined and BEFORE any sender exists, because create_sender() must be able to
-  /// point QarRenderSenderInit::app_volume_id at it. Stays valid for the whole
-  /// session; the runtime retires it when the session ends.
+  /// The id of the app volume that streams are keyed to, as create_sender() copied it: the
+  /// runtime reads QarRenderSenderInit::app_volume_id through a pointer, so the id has a place
+  /// that lives as long as the factory. The volume itself is found at the attach (see
+  /// Config::create_app_volume) and persists in the Hub after this program ends.
   QarAppVolumeId app_volume_{};
-  bool has_app_volume_ = false;
-  /// Whether a QarGeoAnchorFrame is currently attached to app_volume_.
-  bool has_geo_anchor_ = false;
-  /// Peers the policy has admitted at least once (dedupe + max_peers accounting).
-  std::vector<QarPeerId> admitted_peers_;
-
-  /// Peers already present when the session came up — the runtime's own internal
-  /// apps. Used only by @ref PeerAdmission::kInvitedOrNew, which admits what is NOT
-  /// in here. Frozen once baseline_settle_ms has elapsed since ready_.
-  std::vector<QarPeerId> baseline_peers_;
-  std::chrono::steady_clock::time_point connected_at_{};
-  bool connected_at_set_ = false;
-  /// One-shot log line when the baseline freezes, so the log shows what was in it.
-  bool baseline_logged_ = false;
-
-  /// Apply the admission policy. Caller must hold mutex_. @p display_name may be null
-  /// (unknown), in which case the name policy cannot match.
-  bool admit_locked(const QarPeerId & peer_id, const char * display_name);
-
-  /// True once the settle window has elapsed, i.e. baseline_peers_ is complete and
-  /// later arrivals count as consumers. Logs the baseline once, on the transition.
-  /// Caller must hold mutex_.
-  bool baseline_frozen_locked();
-
-  /// Invite ONE peer of @p kind and record its id. Caller must NOT hold mutex_.
-  /// Returns an empty string on success, else the failure text.
-  std::string invite_one_peer_locked_free(
-    PeerKind kind, const std::string & hostname, QarPeerId & out_peer);
-  /// True when THIS factory performed the dynamic qar_library_load() (so the dtor
-  /// unloads it again). Only meaningful with QAR_ENABLE_DYNAMIC_LOADING.
-  bool loaded_library_ = false;
 
   /// WGL handles latched by capture_gl_context() (HDC / HGLRC, Win32 only). Held as
   /// void* so this header stays free of <windows.h>. The Ogre render context lives
@@ -870,7 +710,7 @@ private:
   void * create_shared_gl_context();
 
   // QAR calls these on its internal graphics thread (QarOpenGlContextCallbacks, one
-  // shared struct for all three context types since the 2026-09-21 SDK). They bind
+  // shared struct for all three context types). They bind
   // that sender's own context and resolve GL functions there.
   // user_state = the sender's GlSenderContext*.
   //
@@ -904,10 +744,14 @@ private:
     /// Written by the QAR callback thread, read by the render tick — hence atomics.
     std::atomic<bool> done{false};
     std::atomic<bool> failed{false};
+    /// Set by detach(): nobody polls this creation, so whoever finds the stream
+    /// destroys it.
+    std::atomic<bool> abandoned{false};
     /// The number of the thread that ran the callback (thread_number()), published before
     /// `done`; the render tick prints it, the callback itself prints nothing.
     std::atomic<unsigned long long> callback_thread{0};
-    QarRenderSender * stream = nullptr;   ///< valid only once `done` is true
+    /// Valid only once `done` is true. Whoever takes it (exchange to null) owns it.
+    std::atomic<QarRenderSender *> stream{nullptr};
     std::chrono::steady_clock::time_point started{};
     bool warned = false;                  ///< "still pending" logged once
     /// The init block and its chained OpenGL params MUST outlive the async call, so
@@ -923,6 +767,10 @@ private:
   /// Trampoline for qar_render_sender_create_async: runs on a QAR thread.
   static void sender_created_trampoline(
     QarResult status, QarRenderSender * stream, void * user_state);
+
+  /// Gives up a creation: a stream that arrived already is destroyed now, one that arrives later
+  /// is destroyed by the trampoline.
+  static void abandon_pending(PendingSender & pending);
 
   /// How long a pending creation may sit before we log it as stuck. Not a hard
   /// cancel — the SDK owns the wait — but it turns an invisible hang into a

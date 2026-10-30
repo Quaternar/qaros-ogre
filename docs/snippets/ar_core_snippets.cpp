@@ -57,7 +57,7 @@ void snippet_pointing_ray(
   // [qar-snippet:pointing_ray]
   // The eye pose of this frame and the hands of the device give the aim: the eye through the index tip.
   qar_ar_core::PointingRayInputs inputs = qar_ar_core::pointing_ray_inputs_from_hands(
-    hands, QAR_HAND_RIGHT, qar_ar_core::HandRayJoint::IndexTip);
+    hands, QAR_HANDEDNESS_RIGHT, qar_ar_core::HandRayJoint::IndexTip);
   inputs.has_eye = true;
   inputs.eye_position = eye_position;
   const qar_ar_core::PointingRay ray = qar_ar_core::pointing_ray_from(inputs);

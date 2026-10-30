@@ -131,6 +131,8 @@ struct EyeView
 struct QarFrameInfo
 {
   uint64_t frame_index = 0;
+  /// When the frame is expected on the display: nanoseconds since the Unix epoch (UTC)
+  /// in `QarTimePoint::unix_ns`.
   QarTimePoint predicted_display_time{};
   EyeView left_eye{};
   EyeView right_eye{};

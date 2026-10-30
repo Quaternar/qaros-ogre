@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "qar_ar_core/panel_types.hpp"
 
@@ -26,7 +27,9 @@ enum class PanelCloseOutcome
   AlreadyClosedInAr,
   /// `qar_gui_panels_close_panel` ran and returned an error. See
   /// PanelCloseReport::panel_message. The sender is destroyed regardless.
-  Failed
+  Failed,
+  /// The close was handed to the session's thread; its steps are logged when they run.
+  Queued
 };
 
 /// @brief "none" / "ran" / "skipped (closed in AR)" / "FAILED" — for logs.
@@ -45,6 +48,8 @@ to_string(PanelCloseOutcome outcome)
       return "skipped (closed in AR)";
     case PanelCloseOutcome::Failed:
       return "FAILED";
+    case PanelCloseOutcome::Queued:
+      return "queued";
   }
   return "none";
 }
@@ -69,7 +74,7 @@ struct PanelCloseReport
 /// qar_qt_streaming talks to QarOS ONLY through this interface, mirroring
 /// qar_ogre_streaming's IQarRenderSenderAdapter. One implementation lives in
 /// `qar_qar_adapter` (QarCApiPanelSenderAdapter, wrapping QarVideoSender +
-/// qar_gui_panels_add_panel); a recording test double stands in for
+/// qar_gui_panels_get_or_create); a recording test double stands in for
 /// unit tests.
 ///
 /// Per-tick contract, all on the Qt GUI thread:
@@ -78,6 +83,10 @@ struct PanelCloseReport
 /// documented as non-blocking and reports `ready == false` whenever no receiver
 /// has a destination reserved. That is the entire back-pressure story, and it is
 /// why this path can run on the GUI thread without ever stalling it.
+///
+/// set_placement, set_state, close and detach may only queue the call for the thread that owns
+/// the QarOS session; a return of true then means "accepted", and the outcome arrives through
+/// drain_results().
 class IQarPanelSenderAdapter
 {
 public:
@@ -136,6 +145,18 @@ public:
   ///         (everything false / NoPanel) and touches nothing.
   virtual PanelCloseReport close(bool panel_closed_in_ar) = 0;
 
+  /// @brief Let go of the video sender and of the click/hover subscription and leave the QarOS
+  /// panel exactly as it is, so the next session finds it under its common name and reattaches
+  /// it. Used for a resize that swaps the stream of the same panel, and at the end of a session
+  /// after `set_state(QAR_GUI_PANEL_STATE_HIDDEN)`. Idempotent; the adapter is finished after it.
+  ///
+  /// The default closes the panel (`close(false)`): a sender that cannot detach has nothing
+  /// else to do. See @ref supports_detach.
+  virtual void detach() { close(false); }
+
+  /// @brief True when @ref detach leaves the QarOS panel in place. The default is false.
+  virtual bool supports_detach() const { return false; }
+
   /// @brief close(false): the panel is still open on the AR side.
   ///
   /// Not virtual — it only names the common case, so the callers that have no AR
@@ -158,6 +179,14 @@ public:
   /// widget it is about means byte-comparing a UUID against a mangled id dump.
   /// See the note on retirement in qar_qt_streaming's QtPanelStreamManager.
   virtual std::string stream_id_text() const { return std::string(); }
+
+  /// @brief True while the panel is still being made. The default is false (made at once).
+  virtual bool pending() const { return false; }
+
+  /// @brief Moves the outcomes of queued calls since the last call into @p out (appends).
+  /// The default has none: an implementation that calls QarOS synchronously reports through what
+  /// its calls give back. Call it on every tick.
+  virtual void drain_results(std::vector<PanelOpResult> & out) { (void)out; }
 };
 
 /// @brief Factory that creates one IQarPanelSenderAdapter per panel.

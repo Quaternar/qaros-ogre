@@ -7,6 +7,8 @@
 # its targets.
 
 add_executable(qar_ar_core_tests
+  common_name_tests.cpp
+  panel_attach_tests.cpp
   panel_input_source_tests.cpp
   pointing_ray_tests.cpp
   spatial_frames_tests.cpp

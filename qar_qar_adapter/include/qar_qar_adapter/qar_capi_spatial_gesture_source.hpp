@@ -73,10 +73,9 @@ struct SpatialGestureStats
 ///          the seam's own mapping)
 ///         -> this queue -> drained on the Qt thread -> submitSpatialSample
 ///
-/// The 2026-09-21 drop renamed `_subscribe_gesture_updates` to
-/// `_subscribe_gesture_events` and made the event an opaque
-/// `QarAppVolumeGesture*` read through accessors. This class takes every kind on
-/// ONE reader — mirroring the GUI panel path's
+/// The runtime delivers each gesture as an opaque `QarAppVolumeGesture*` read
+/// through accessors, via `qar_app_volumes_subscribe_gesture_events`. This class
+/// takes every kind on ONE reader — mirroring the GUI panel path's
 /// `qar_gui_panels_subscribe_all_gesture_events` — rather than one per-kind
 /// subscription for CLICK and one for HOVER: the header recommends this
 /// whenever a consumer wants more than one kind, because several per-kind
@@ -89,8 +88,8 @@ struct SpatialGestureStats
 /// the class keeps working.
 ///
 /// These gestures carry a phase, so the full Started / Updated / Ended /
-/// Canceled stream survives the trip — and since the 2026-09-21 drop the PANEL
-/// path carries one too, which is what makes AR drag possible.
+/// Canceled stream survives the trip — and the PANEL path carries one too, which
+/// is what makes AR drag possible.
 ///
 /// Same threading and lifetime rules, same slot arena, for the same reason.
 class QarCApiSpatialGestureSource : public qar_ar_core::IQarPanelInputSource
@@ -116,9 +115,9 @@ public:
 
   /// @brief Where to read the FALLBACK AR pointing ray from.
   ///
-  /// Since the drop after the minimum drop the gesture itself carries an aim - its
-  /// start point (the hand) through its action point (what the aim intersected) - and
-  /// that is what a sample normally gets; see
+  /// The gesture itself carries an aim - its start point (the hand) through its
+  /// action point (what the aim intersected) - and that is what a sample normally
+  /// gets; see
   /// `qar_ar_core::pointing_ray_from_gesture_points`. The runtime reports
   /// the two as one and the same point when it intersected NOTHING, which is
   /// legal and expected for an aim into empty space, and two of the three pick
@@ -197,7 +196,7 @@ private:
       bool valid = false;
       bool has_eye = false;
       QarVector3 eye{0.0f, 0.0f, 0.0f};
-      /// Indexed by `QarHand` (0 = left, 1 = right).
+      /// Indexed by `QarHandedness` (0 = left, 1 = right).
       bool tracked[2] = {false, false};
       bool has_index_tip[2] = {false, false};
       QarVector3 index_tip[2] = {};
@@ -209,12 +208,12 @@ private:
       /// hand, with which joint it was. -1 when nothing was tracked.
       float nearest_joint_m = -1.0f;
       std::uint32_t nearest_joint_id = 0;
-      QarHand nearest_hand = QAR_HAND_RIGHT;
+      QarHandedness nearest_hand = QAR_HANDEDNESS_RIGHT;
       /// Metres from the action point to the INDEX TIP, reported separately
       /// because that is the joint the wearer believes they are pointing with.
       /// -1 when no index tip was tracked.
       float index_tip_m = -1.0f;
-      QarHand index_tip_hand = QAR_HAND_RIGHT;
+      QarHandedness index_tip_hand = QAR_HANDEDNESS_RIGHT;
     };
     HandTrace hands;
     /// Why it was dropped; empty when it was queued.

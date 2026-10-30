@@ -1,16 +1,15 @@
 # Vendored: the QarOS C header
 
-- What the folder holds: `include/qar_streaming.h`, the C header of the QarOS SDK, and `LICENSE`.
-- Origin of the header: `include/qar_streaming.h` is the header of the QarOS SDK drop of 2026-09-28, the drop
-  against which this repository was built, tested and run. It is copied from that drop without a change.
-  SHA-256: `5223B56251F3085B376A8BDE5ECEFCF661D6E8F8B800F6AA46414ADC1F4DB6EA`.
+- What the folder holds: `include/qar_streaming.h`, the C header of QAROS, and `LICENSE`.
+- Origin of the header: `include/qar_streaming.h` is the header of the installed QAROS 0.9.0-dev.3008+65dc9aeb
+  (`C:\Program Files\Quaternar\QAROS\include\qar_streaming.h`), the runtime against which this repository was built,
+  tested and run. It is copied without a change.
+  SHA-256: `55E6E3F48D940CA29331F0528FE475C1B7230FB19A59C31D5525C6E90B097F6C`.
 - Origin of the licence: `LICENSE` is the MIT licence of the public QarOS repository,
-  <https://github.com/Quaternar/qaros>, which publishes `qar_streaming.h` in `qar-streaming-c/include`. The SDK drop
+  <https://github.com/Quaternar/qaros>, which publishes `qar_streaming.h` in `qar-streaming-c/include`. The installed QAROS
   ships no licence file for the header, and the header holds no licence text.
-- Later headers: at the time of writing, the public QarOS repository <https://github.com/Quaternar/qaros> publishes a
-  later generation of the C API. This stack does not build against it: the session set-up (create, serialise, join
-  and invite), the hand of a gesture, the time points and the init structures of volumes and panels would have to be
-  ported.
+- Later headers: the public QarOS repository <https://github.com/Quaternar/qaros> publishes the header of its
+  releases. This stack builds against the header of the installed QAROS named above.
 
 ## Why it is here
 
@@ -20,5 +19,5 @@ repository.
 
 ## Updating it
 
-`scripts/update_qar_headers.ps1` copies the header of another SDK drop and leaves `LICENSE` as it is. Which drops
-the stack supports and what to check after a change are in `docs/SDK_COMPATIBILITY.md`.
+`scripts/update_qar_headers.ps1` copies the header of another installed QAROS and leaves `LICENSE` as it is. Which
+version the stack supports and what to check after a change are in `docs/SDK_COMPATIBILITY.md`.

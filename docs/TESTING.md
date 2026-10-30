@@ -22,17 +22,16 @@ ctest --preset vs2019-x64
 ```text
 Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
         Start   1: check_layering_qar_ar_core
-  1/331 Test   #1: check_layering_qar_ar_core ................................................................   Passed    0.10 sec
+  1/610 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.13 sec
         Start   2: check_layering_qar_ogre_streaming
-  2/331 Test   #2: check_layering_qar_ogre_streaming .........................................................   Passed    0.08 sec
+  2/610 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.11 sec
         Start   3: check_layering_qar_qar_adapter
-  3/331 Test   #3: check_layering_qar_qar_adapter ............................................................   Passed    0.10 sec
+  3/610 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.22 sec
         Start   4: check_layering_examples
-  4/331 Test   #4: check_layering_examples ...................................................................   Passed    0.06 sec
 ...
-100% tests passed, 0 tests failed out of 331
+100% tests passed, 0 tests failed out of 610
 
-Total Test time (real) =   2.60 sec
+Total Test time (real) = 117.38 sec
 ```
 
 The last lines are the summary: how many tests passed, and the names of those that failed. A test that is skipped is reported as skipped and does not count as a failure.
@@ -55,11 +54,9 @@ Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
   Test   #6: StereoStreamConfig.DefaultsAreValid
   Test   #7: StereoStreamConfig.RejectsZeroDimensions
 ...
-  Test #329: RenderTiming.AFailedSubmitIsRecordedWithOkZero
-  Test #330: RenderTiming.ASubmitWithoutAConsumedFrameWritesNothingAndANullStateIsInert
-  Test #331: RenderTiming.ATryBeginCallThatItselfBlocksIsFlaggedAsASlowPoll
+  Test #610: HubModeRule.AnExplicitRequestWinsAndAutoLooksAtThePairingAndTheInstall
 
-Total Tests: 331
+Total Tests: 610
 ```
 
 ```powershell
@@ -68,18 +65,18 @@ ctest --preset vs2019-x64 -R check_layering_selftest
 ```text
 Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
     Start 5: check_layering_selftest
-1/1 Test #5: check_layering_selftest ..........   Passed    0.05 sec
+1/1 Test #5: check_layering_selftest ..........   Passed    0.06 sec
 
 100% tests passed, 0 tests failed out of 1
 
-Total Test time (real) =   0.07 sec
+Total Test time (real) =   0.09 sec
 ```
 
 Use `-R` with a part of a suite name to run one suite, and add `-j` followed by a number to run tests in parallel. When a test fails, its output is printed by the preset; add the option `--rerun-failed` to the command to run only the tests that failed in the last run.
 
 ## What the tests cover
 
-The unit tests are three GoogleTest executables, one for each module that has tests, and the layering guard adds its own tests. The list command above prints every registered test by name, with the number of tests at the end.
+The unit tests are four GoogleTest executables, `qar_ar_core_tests`, `qar_ogre_streaming_tests`, `qar_qar_adapter_tests` and `qar_qar_adapter_session_tests`, and the layering guard adds its own tests. The last one runs the session owner on a fake of the QarOS function tables and links only the component `session`, so it builds without Ogre. The list command above prints every registered test by name, with the number of tests at the end.
 
 | Executable | Suites | What the tests assert |
 |---|---|---|
@@ -87,8 +84,12 @@ The unit tests are three GoogleTest executables, one for each module that has te
 | `qar_ar_core_tests` | `GestureRay`, `PointingRay`, `PointingRaySlot`, `HandJointsProbe`, `NearestHandJointTest`, `HandJointDistance` | the pointing ray: it runs from the start point of a gesture through its action point, equal points mean no intersection and not a zero ray, bad input is refused with an explanation, and a ray from the eye through the hand needs a tracked hand |
 | `qar_ar_core_tests` | `SpatialFrames`, `ScenePlacementTest`, `GesturePointsAreInAppSpace` | the change of axes between the QarOS space and the ROS world (up, forward, right, anchor yaw, height and stand-off, round trips) and the placement of the scene |
 | `qar_ar_core_tests` | `ResolvePickPoint`, `PointPickSession`, `PosePickSession`, `AreaPick`, `AreaPickSessionTest`, `PlaneBasis`, `NavGoal`, `SpatialPointerFromSample`, `YawQuaternion`, `AreaPickSession` | the resolution of a pick ray against a plane or at a depth, the state machines of point, pose and area picks (press, update, release, cancel; a hover never commits) and navigation goals |
+| `qar_ar_core_tests` | `CommonName` | the stable ASCII common names of the panels and of the app volume: the sanitized labels, the hash of the unsanitized key, the length limits |
+| `qar_ar_core_tests` | `PanelAttach`, `PanelSeams`, `HandIndex` | the decision about a panel that `qar_gui_panels_get_or_create` returned (new, reused, taken by another content type, closed, the suffix walk) and the defaults of the panel seams |
 | `qar_ar_core_tests` | `TimingSink`, `TimingLog` | the timing CSV writer: header, row width, bounded queue, concurrent appenders, an unwritable folder, and the opt-in environment variable |
 | `qar_ogre_streaming_tests` | `StereoStreamConfig`, `PeerId`, `ManagerConstruction`, `ManagerBookkeeping`, `ManagerRenderTick` | the validation of a stream configuration (zero size, zero frame rate and a layout that is not separated textures are rejected), peer identifiers, and the manager: null seams are rejected, streams are created, looked up and destroyed, a failing sender factory surfaces, and a render tick off the render thread is refused |
+| `qar_ogre_streaming_tests` | `ManagerSenderWait` | what the manager logs while a sender factory returns null: one Error line for the first null and one summary line when the wait ends |
+| `qar_ogre_streaming_tests` | `MockFrameSource`, `MockSender`, `MockFactory`, `ImmediateExecutor`, `StereoStreamEyePoses` | the test doubles themselves and the eye poses that a stream keeps for its last accepted frame |
 | `qar_ogre_streaming_tests` | `Scheduler`, `RenderBudget` | the batch: one render lock around the whole batch, no lock for an empty tick, the frame-rate gate, the time budget that sheds optional frames and protects the frame-rate floor, and the cap on streams for each tick |
 | `qar_ogre_streaming_tests` | `EyeRenderParams`, `StereoFrameAssembly`, `StereoStreamLifecycle`, `StereoStreamSkipReason`, `SenderFrameSource` | the per-eye camera parameters, the assembly of a stereo frame (eye labels, textures, views), the early-outs of a stream, and the skip reasons, which are named and add up |
 | `qar_ogre_streaming_tests` | `PoseConversion`, `Projection` | the conversion of a QarOS pose and field of view into an Ogre camera, and projection matrices that equal the standard perspective and the Ogre frustum |
@@ -98,6 +99,11 @@ The unit tests are three GoogleTest executables, one for each module that has te
 | `qar_qar_adapter_tests` | `GeoAnchor`, `GeoFixMoved`, `RenderTiming` | the conversion of a geodetic fix to ECEF and the local east, north and up axes, the threshold for re-anchoring, and the stage-timing CSV of the 3D stream |
 | `qar_qar_adapter_tests` | `FrameStall`, `SenderStartLines` | a gap of two seconds between two frames is a stall and is reported once, with the mean colour of the first frame after it, and the words of the lines that a sender prints when it starts |
 | `qar_qar_adapter_tests` | `PanelStateLog`, `RuntimeRecord`, `RuntimeRecordLog`, `PanelLines`, `LogTime`, `LogOnce`, `ThreadNumber` | the line of a change of the state of a panel, the record that the runtime keeps of a panel (a stream that is ours reads match and another one MISMATCH, a change of state, stream or size is a change and nothing else is, the numbering, and the bounded queue), the stamp of a line, and a guard that lets exactly one of many threads through |
+| `qar_qar_adapter_tests` | `RenderFactoryQueue`, `RenderFactoryAttach`, `RenderFactoryLifetime`, `RenderFactoryPending`, `RenderFactoryAsync` | the render sender factory on the session owner, which runs on the fake library: the queues of new and closed peers, the attach and its states, the weak reference to the owner, the pending creations and the asynchronous results |
+| `qar_qar_adapter_tests` | `PanelSender`, `UrlPanel`, `PanelStateGuard`, `PanelStateDecision`, `PanelStatePoll` | the panel adapters on the thread of the owner: the queued create, place, state and teardown tasks, the results that `drain_results` hands out, the reattach of a panel, and the decision to ask a panel for its state again, over scripted times |
+| `qar_qar_adapter_session_tests` | `SessionOwnerLocal`, `SessionOwnerRemote`, `SessionOwnerMode`, `SessionOwnerConfigure`, `SessionOwnerRefusedStart` | joining the Hub of this PC and of another PC on the fake library: the approval, the pairing with a code, the rejoin, the choice of the mode and the settings that are kept for the next connect |
+| `qar_qar_adapter_session_tests` | `SessionOwnerTargets`, `SessionOwnerListener`, `SessionOwnerInvites`, `SessionOwnerTasks`, `SessionOwnerHandOver`, `SessionOwnerTeardown` | the table of targets and the cap of served targets, the listener, the invite of a device, the tasks of the owner thread with the drop rules, the hand-over of the session to the consumer and the bounded teardown |
+| `qar_qar_adapter_session_tests` | `GuiCallGuard`, `IdentityStore`, `OnboardingStatus`, `TargetRule`, `HubModeRule` | the timer of QarOS calls, the identity file and its folder, the plain-words texts of the status codes, the rule that selects the render targets and the rule that selects the Hub mode |
 | `qar_qar_adapter_tests` | `RenderConfigDefaults`, `GlSenderContextHandles`, `CopyHookDefaults` | the default app volume is a cube of ten metres whose centre is one metre up; a sender binds its own context on the device context that it was created on and a missing handle binds nothing; a hook without read-back reports no colour |
 
 ## Test doubles
@@ -112,13 +118,13 @@ The tests replace the collaborators of the library with small stand-ins that run
 | `RecordingRenderLock` | the render lock of the host: it records locking, so a test can assert that a batch takes the lock exactly once |
 | `ImmediateRenderThreadExecutor` | the render-thread executor of the host: it runs posted work at once and reports that the caller is the render thread |
 
-There is no stand-in for the QarOS SDK or for its C API. The tests that exercise the adapter cover its pure units only. The code that calls the C API has no automated test: the check `--connect-only` of the live example runs its bootstrap against the real runtime, and the rest of it was exercised only in the live checks of qar_rviz_plugin on the desktop Visualizer, with a build that differs from this release only in comments and the text of one tool tip.
+The tests of the session owner, the render sender factory and the panel adapters run against a fake of the QarOS function tables, `fake_qar_api.cpp`: the fake fills the entries that the owner can reach, fires the result callbacks of the asynchronous calls exactly once on a thread of its own, and lets a test script the outcomes. No test loads the real library. What the fake cannot tell is what the real runtime and Hub do: the check `--connect-only` of the live example joins the real Hub, and the rest was exercised only in the live checks of qar_rviz_plugin on the desktop Visualizer.
 
 ## What the automated tests do not cover
 
-- **Calls to QarOS.** Only the parts of the adapter that need no session are unit tested: the geodetic arithmetic, the parsing of environment values and the stage-timing writer. The session bootstrap, invitations, sender creation, panels, URL panels and gestures need a live QarOS session. Where logic of the adapter is worth testing, move it out of the class that is bound to the session into free functions over plain values, as the geodetic arithmetic and the parsing of the environment were, and test that; do not try to fake the SDK.
+- **The real runtime and Hub.** The fake follows the contract that the header documents, so a test cannot show that the real runtime answers the same way. The approval by a person, the pairing with the Hub of another PC, the invite of a device, sender creation against a real receiver, panels as the Visualizer draws them and gestures from a real hand need a live QarOS session. Where logic of the adapter is worth testing, move it out of the class that is bound to the session into free functions over plain values, as the target rule and the panel state decision were, and test that.
 - **Ogre and the GL hand-off.** The tests never call a real Ogre function, because a unit test has no GL context. The test executable of `qar_ogre_streaming` therefore delay-loads `OgreMain.dll`, which lets it run from a plain shell. Ogre render targets and the extraction of GL textures are checked by running the headless sample, and the copy of the textures into the ones of QarOS needs the runtime, which the live example is meant to check.
-- **A live session with a viewer.** What the QarOS Visualizer shows and how depth and poses look there cannot be tested without a Visualizer. They are Level 2 checks of [Verification](VERIFICATION.md#desktop-visualizer-checks-level-2) with the live example, and the authors of qar_ogre_adapter have not run that example with a Visualizer. The example invites one Visualizer, so the behaviour with several peers is not part of it. The libraries ran with two Visualizers in the live sessions of qar_rviz_plugin, and [What the live sessions showed](VERIFICATION.md#what-the-live-sessions-showed) says what those sessions showed.
+- **A live session with a viewer.** What the QarOS Visualizer shows and how depth and poses look there cannot be tested without a Visualizer. They are Level 2 checks of [Verification](VERIFICATION.md#desktop-visualizer-checks-level-2) with the live example, and the authors of qar_ogre_adapter have not run that example with a Visualizer. The example streams to the first target that comes up, so the behaviour with several targets is not part of it. [What the live sessions showed](VERIFICATION.md#what-the-live-sessions-showed) says what the live sessions of qar_rviz_plugin showed.
 
 ## The layering guard
 
@@ -146,9 +152,9 @@ The commands call the interpreter of the virtual environment, which is optional 
 & "$env:QAR_VENV\Scripts\python.exe" scripts\check_layering.py --all
 ```
 ```text
-check_layering qar_ar_core: OK (17 files)
+check_layering qar_ar_core: OK (23 files)
 check_layering qar_ogre_streaming: OK (54 files)
-check_layering qar_qar_adapter: OK (23 files)
+check_layering qar_qar_adapter: OK (50 files)
 check_layering examples: OK (7 files)
 ```
 
@@ -173,7 +179,7 @@ For this repository the guard checks four modules: `qar_ar_core`, `qar_ogre_stre
 
 - `qar_ar_core` includes only the standard library, one platform header and its own headers, and it calls no function of the QarOS C API. Only its wrapper header includes the vendored C header.
 - `qar_ogre_streaming` includes Ogre and `qar_ar_core`, and it reaches the C types through the wrapper header only.
-- `qar_qar_adapter` includes `qar_ar_core` and the two seam headers of `qar_ogre_streaming`, and only the component `render` may include them. Each of the five components includes only its own headers and those of the components that it may use.
+- `qar_qar_adapter` includes `qar_ar_core` and the two seam headers of `qar_ogre_streaming`, and only the component `render` may include them. Each of the six components includes only its own headers and those of the components that it may use.
 - Every folder under `examples` has its own entry. The headless sample may include `qar_ogre_streaming` and `qar_ar_core`; the live example may in addition include the headers of the component `render`.
 
 No module of this repository includes a Qt, ROS or RViz header.

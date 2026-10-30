@@ -21,6 +21,7 @@
 #include <string>
 #include <vector>
 
+#include "qar_ar_core/panel_types.hpp"
 #include "qar_ar_core/qar_streaming_c.hpp"
 
 namespace qar_ar_core
@@ -57,13 +58,19 @@ struct UrlPanelDesc
   UrlPanelPlacement placement;
   /// The peers that see the panel (`QarGuiPanelInit::visible_to_peers`). Empty = every peer.
   std::vector<QarPeerId> visible_to_peers;
+  /// The stable ASCII name QarOS derives the panel's id from (`QarGuiPanelInit::common_name`);
+  /// built by the host with `make_panel_common_name` (common_name.hpp). Empty is refused.
+  std::string common_name;
 };
 
 /// @brief Narrow adapter over ONE QarOS URL panel.
 ///
 /// Lifetime is create -> N x (navigate / set_placement / set_state) -> close.
 /// Every call is expected on the host's GUI thread; none of the underlying C
-/// calls streams anything, so none is paced or back-pressured.
+/// calls streams anything, so none is paced or back-pressured. navigate, set_placement,
+/// set_state, close and detach may only queue the call for the thread that owns the QarOS
+/// session; a return of true then means "accepted", and the outcome arrives through
+/// drain_results().
 class IQarUrlPanelAdapter
 {
 public:
@@ -81,8 +88,24 @@ public:
   /// @brief Close the QarOS panel. Idempotent.
   virtual void close() = 0;
 
+  /// @brief Let go of the adapter and leave the QarOS panel as it is, so the next session finds
+  /// it under its common name and reattaches it. Used at the end of a session after
+  /// `set_state(QAR_GUI_PANEL_STATE_HIDDEN)`. The default closes the panel.
+  virtual void detach() { close(); }
+
+  /// @brief True when @ref detach leaves the QarOS panel in place. The default is false.
+  virtual bool supports_detach() const { return false; }
+
   /// @brief Reason for the most recent failure; empty when healthy.
   virtual const std::string & last_error() const = 0;
+
+  /// @brief True while the panel is still being made. The default is false (made at once).
+  virtual bool pending() const { return false; }
+
+  /// @brief Moves the outcomes of queued calls since the last call into @p out (appends).
+  /// The default has none: an implementation that calls QarOS synchronously reports through what
+  /// its calls give back. Call it on every tick.
+  virtual void drain_results(std::vector<PanelOpResult> & out) { (void)out; }
 };
 
 /// @brief Creates one IQarUrlPanelAdapter per panel.

@@ -54,7 +54,7 @@ struct Result
 /// @brief Where and how big a GUI panel sits in the AR room.
 ///
 /// Both members are real Qar ABI types, so this struct feeds
-/// `qar_gui_panels_add_panel` / `_update_pose` / `_change_size` unchanged.
+/// `qar_gui_panels_get_or_create` / `_update_pose` / `_change_size` unchanged.
 struct PanelPlacement
 {
   /// The panel's pose in room space, in QarOS PANEL SPACE: the origin is the
@@ -69,8 +69,8 @@ struct PanelPlacement
 /// @brief Everything a factory needs to mint one panel stream.
 struct PanelDesc
 {
-  /// The manager's key for this panel — the same string that `add_panel` of
-  /// qar_qt_streaming's QtPanelStreamManager was given, and the one a
+  /// The manager's key for this panel: the same string that
+  /// qar_qt_streaming's QtPanelStreamManager was given when the panel was added, and the one a
   /// `PanelPointerSample::panel_key` must carry to come back to
   /// it. An adapter that subscribes to QarOS pointer events needs it to
   /// translate a `QarGuiPanelId` back into something the library knows; nothing
@@ -80,6 +80,11 @@ struct PanelDesc
 
   /// Shown by QarOS as the panel's title. Not an identifier.
   std::string display_name;
+
+  /// The stable ASCII name QarOS derives the panel's id from (`QarGuiPanelInit::common_name`):
+  /// the same name finds the same panel again in the next session. Built by the host from the
+  /// key with `make_panel_common_name` (common_name.hpp). The adapters refuse an empty one.
+  std::string common_name;
 
   /// Pixel dimensions of the CPU buffer we will hand over every frame. Fixed
   /// for the sender's lifetime — QarOS allocates the receiver from this layout,
@@ -125,7 +130,28 @@ enum class PanelNotReadyCause
   NoActiveTransfers,
   /// The runtime answered STREAM_IS_RECONNECTING (603): a receiver was attached, lost the stream
   /// and is connecting again.
-  Reconnecting
+  Reconnecting,
+  /// The runtime answered STREAM_IS_PAUSED (602): the receiver paused the stream, so nothing
+  /// is wanted until it resumes. The sender is fine; "paused by the receiver".
+  Paused,
+  /// The panel and its video sender are still being made on the session's thread. Nothing is
+  /// wrong and nobody is waiting for a frame yet.
+  Creating
+};
+
+/// @brief The outcome of one queued call on a panel, handed back by drain_results() of
+/// IQarPanelSenderAdapter and IQarUrlPanelAdapter.
+struct PanelOpResult
+{
+  enum class Op { Create, Placement, State, Navigate, VisibleTo, Close, Detach };
+  Op op = Op::Create;
+  bool ok = true;
+  /// Op::State: the state that was asked for.
+  QarGuiPanelState state = QAR_GUI_PANEL_STATE_VISIBLE;
+  /// Op::Create: the panel of an earlier session was found again.
+  bool reattached = false;
+  /// The runtime's words when !ok.
+  std::string error;
 };
 
 /// @brief Rolling accounting for one panel stream.

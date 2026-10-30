@@ -12,6 +12,8 @@
 # it never needs the SDK DLL or the dynamic-loading tables). Enforced by the layering guard.
 
 add_library(qar_ar_core STATIC
+  src/common_name.cpp
+  src/panel_attach.cpp
   src/panel_types.cpp
   src/spatial_frames.cpp
   src/spatial_pick.cpp

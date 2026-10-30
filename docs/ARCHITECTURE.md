@@ -2,13 +2,14 @@
 
 ## Layers and components
 
-The code is three modules of static libraries. `qar_ar_core` is the core that every other library builds on, `qar_ogre_streaming` renders an Ogre scene as stereo frames, and `qar_qar_adapter` is the only code that calls the QarOS C API, split into five components. Each arrow of the diagram is a link dependency. Nothing in this repository depends on Qt, ROS or RViz.
+The code is three modules of static libraries. `qar_ar_core` is the core that every other library builds on, `qar_ogre_streaming` renders an Ogre scene as stereo frames, and `qar_qar_adapter` is the only code that calls the QarOS C API, split into six components. Each arrow of the diagram is a link dependency. Nothing in this repository depends on Qt, ROS or RViz.
 
 ```mermaid
 flowchart BT
   core["qar_ar_core"]
   ogre["qar_ogre_streaming"]
   capi["capi"]
+  session["session"]
   render["render"]
   panels["panels"]
   url["url"]
@@ -18,7 +19,9 @@ flowchart BT
   ogre --> core
   ogre --> ogrelib
   capi --> core
+  session --> capi
   render --> capi
+  render --> session
   render --> ogre
   panels --> capi
   url --> capi
@@ -30,8 +33,9 @@ flowchart BT
 |---|---|---|---|
 | `qar_ar_core` | `qar_ogre_adapter::qar_ar_core` | the types of the panel and pointer seams, the pointing ray, the spatial frames and the pick model, the timing log, and the one wrapper of the QarOS header | `panel_types.hpp`, `panel_input_source.hpp`, `pointing_ray.hpp`, `spatial_frames.hpp`, `spatial_pick.hpp`, `timing_log.hpp`, `qar_streaming_c.hpp` |
 | `qar_ogre_streaming` | `qar_ogre_adapter::qar_ogre_streaming` | the stream manager, the batched render scheduler, the render budget, the eye render targets, the pose conversion, the scene lighting and the diagnostics | `ogre_qar_streaming_manager.hpp`, `ogre_qar_render_scheduler.hpp`, `render_budget.hpp`, `qar_pose_conversion.hpp`, `qar_scene_lighting.hpp`, `diagnostics.hpp`, `types.hpp` |
-| `capi` | `qar_ogre_adapter::capi` | the program's one loader of the QarOS library, the arena of callback slots and the interface of the session owner; every other component links it | `qar_capi_session_owner.hpp`, `qar_capi_input_slots.hpp` |
-| `render` | `qar_ogre_adapter::render` | the 3D stereo streams and the session bootstrap, `QarCApiSenderFactory` and `QarCApiRenderSenderAdapter`, with the geo anchor, the environment helpers and the stage timing; it is the only component that needs Ogre | `qar_capi_render_sender_adapter.hpp`, `geo_anchor.hpp`, `env_config.hpp`, `render_timing.hpp` |
+| `capi` | `qar_ogre_adapter::capi` | the program's one loader of the QarOS library, the arena of callback slots, the interface of the session owner and the timer of QarOS calls; every other component links it | `qar_capi_session_owner.hpp`, `qar_capi_input_slots.hpp`, `gui_call_guard.hpp` |
+| `session` | `qar_ogre_adapter::session` | the session owner: it loads the library, creates the runtime and joins the QAROS Hub on its own thread, keeps the table of targets and the stored pairing, and runs the QAROS calls of its consumer in order | `qar_session_owner.hpp`, `identity_store.hpp`, `onboarding_status.hpp`, `target_rule.hpp` |
+| `render` | `qar_ogre_adapter::render` | the 3D stereo streams, `QarCApiSenderFactory`, which borrows the session of the owner, and `QarCApiRenderSenderAdapter`, with the geo anchor, the environment helpers and the stage timing; it is the only component that needs Ogre | `qar_capi_render_sender_adapter.hpp`, `geo_anchor.hpp`, `env_config.hpp`, `render_timing.hpp` |
 | `panels` | `qar_ogre_adapter::panels` | the sender of a GUI panel that streams pixels, and the input of a panel | `qar_capi_panel_sender_adapter.hpp`, `qar_capi_panel_input_source.hpp` |
 | `url` | `qar_ogre_adapter::url` | the GUI panel whose content is a URL | `qar_capi_url_panel_adapter.hpp` |
 | `gestures` | `qar_ogre_adapter::gestures` | the gestures of an app volume | `qar_capi_spatial_gesture_source.hpp` |
@@ -95,38 +99,45 @@ Why QarOS owns the textures and why the copy is a blit are in [Render-into and t
 
 ## Session bootstrap and peers
 
-`QarCApiSenderFactory` runs the whole bootstrap in its constructor and blocks until it is done, so a host with a window constructs it on a worker thread. A failure is not thrown: `ready()` tells whether the bootstrap worked and `last_error()` says what failed. The constructor makes these calls, in this order; [Session bootstrap](QAROS_INTEGRATION_NOTES.md#session-bootstrap) says why each is there.
+The session belongs to a `QarSessionOwner`, which runs on a thread of its own, so that the consumer, a GUI thread or the main thread of a console program, never blocks on QAROS to connect. The consumer makes the owner, calls `connect()` and polls its events; `QarCApiSenderFactory` is made from the owner and borrows its session once the owner is ready. A failure is not thrown: the owner reports it as the state `kFailed` with a cause in plain words, and the factory reports a failed attach through `last_error()`. The owner makes these calls, in this order, on its own thread; [Session bootstrap](QAROS_INTEGRATION_NOTES.md#session-bootstrap) says why each is there.
 
-1. `qar_library_load` for `<runtime_binaries_folder_path>/qar-streaming-c.dll`, or for `Config::sdk_library_path`, unless the library is already loaded.
-2. `qar_library_init` with the folder, the severity and the console setting of the log. Before it, the factory exports the severity as `QAR_LOG_SEVERITY`, and it starts the logger of the transport when `QAR_ZENOH_LOG` asks for it and the severity is trace or debug.
-3. `qar_runtime_create` with the runtime binaries folder.
-4. `qar_runtime_create_session` with a unique session id and the launcher configuration, then `qar_session_invite_serialize` and `qar_session_join` on that invite, which yield the session.
-5. `qar_session_get_my_spec`, to learn the own peer id, which no admission policy ever admits.
-6. `qar_app_volumes_add_volume`, which creates the one app volume that every stream is keyed to. A failure is not fatal for the connection, but no stream can be created without the volume.
-7. `qar_peer_subscribe_updates`, so that peers that join are reported to the factory.
-8. `qar_session_invite_peer` for the Visualizers of `Config::auto_invite_visualizers`, none by default, and for the devices named in `Config::invite_peers`, in the form `kind[:hostname]` separated by commas.
+1. `qar_library_load`, with no path unless the configuration names a library file, so that the installed QAROS is found.
+2. `qar_library_init` with the folder, the severity and the console setting of the log. Before it, the owner exports the severity as `QAR_LOG_SEVERITY`, and it starts the logger of the transport when `QAR_ZENOH_LOG` asks for it and the severity is trace or debug.
+3. `qar_runtime_create`, with the runtime binaries folder left empty.
+4. `qar_runtime_onboard_async` with the mode extension of the Hub mode: `QarOnboardLocalAppExt` for a source app on the PC of the Hub, where the Hub asks the person at the PC to allow the program, or `QarOnboardCodeExt` with the host, the onboarding port and the pairing code of the Hub of another PC. A program that paired before calls `qar_runtime_rejoin_async` with the stored onboarding id instead. The owner is in the state `kWaitingForApproval`, `kPairing` or `kRejoining` while the call runs.
+5. `qar_session_get_my_spec`, to learn the own peer id, which is never a target, and `qar_peer_subscribe_updates`, so that the peers of the session are reported to the owner.
 
-Then `ready()` is true, and the settle window of the admission policy `kInvitedOrNew` starts, 5 s by default.
+Then the state is `kRunning`, and the first `poll()` that hands out the event makes `ready()` true for the consumer. When the Hub stops answering, the state becomes `kReconnecting` after a grace of 3 seconds and the session stays valid; a Hub that is busy is asked again after 1.5 seconds.
+
+The factory then attaches, on the thread of the owner: it gets or creates the one app volume that every stream is keyed to under its stable common name, reads its placement once, subscribes to changes of the placement and registers itself as the listener of targets. A failure of the volume is not fatal for the session, but no stream can be created without the volume.
 
 From then on the host runs a loop on its render thread:
 
 - `capture_gl_context()` latches the OpenGL context that is current on the thread, because a sender can be created only once a context is known;
-- `poll_new_peer_requests()` lists the peers that the policy has admitted, and the host calls `create_stream` for each; the factory then creates the sender of that peer, asynchronously: the first calls return no sender, and `qar_render_sender_create_async` delivers the result on a QarOS thread. The host asks again with `on_render_request` until the sender exists, and the factory logs once that a creation is still pending after 5 seconds.
-- `poll_closed_peers()` lists the peers whose stream QarOS closed. It does not consume them, so the host calls `forget` for each, which also frees the place of the peer under the limit on concurrent peers.
+- `poll_new_peer_requests()` lists the targets that the owner serves, and the host calls `create_stream` for each; the factory then creates the sender of that target, asynchronously: the first calls return no sender, and `qar_render_sender_create_async` delivers the result on a QarOS thread. The host asks again with `on_render_request` until the sender exists, and the factory logs once that a creation is still pending after 5 seconds.
+- `poll_closed_peers()` lists the peers whose stream is over. It does not consume them, so the host calls `forget` for each, which also frees the place of the peer under the limit on concurrent peers.
 
-A peer gets a stream only if the admission policy admits it. The default policy, `kInvitedOnly`, admits only the peers that the factory invited itself, never more than `Config::max_peers`, 8 by default. With `Config::invite_flow_admission` off every peer except the own one is admitted. [Peers, invites and admission](QAROS_INTEGRATION_NOTES.md#peers-invites-and-admission) describes the other policies and why they exist.
+A target gets a stream when it is a render target (role target, presence online or unknown, never the own peer) and the owner serves it, never more than `SessionOwnerConfig::max_targets`, 8 by default, and `Config::max_peers` of the factory. A target over the cap is listed as not served and is promoted when a served target goes away. [Peers, invites and admission](QAROS_INTEGRATION_NOTES.md#peers-invites-and-admission) describes the rule.
 
-A host that opens its own session does not use this factory: it implements `IQarSessionOwner` over its session, and the factories of `panels` and `url` borrow that ([Component capi](API.md#component-capi)).
+A host that opens its own session does not use the owner: it implements `IQarSessionOwner` over its session, and the factories of `panels` and `url` borrow that ([Component capi](API.md#component-capi)).
+
+### Work that can wait for the Hub
+
+A QarOS call that can wait for the Hub, such as a query, a change of a panel or a subscription, does not run on a GUI thread: the consumer hands it to `post_session_task`, and the owner thread runs the tasks one at a time, in the order they were posted, between its other messages. The owner thread checks its timers after every task. A task is dropped, and its `dropped` function runs instead, when the session it was posted for is gone, which the owner tells by an epoch that it raises each time the session is released, or when the drain budget of 8 seconds after a disconnect has run out. The timer of QarOS calls reports a call that waits too long: on the GUI thread above 20 milliseconds, and on the owner thread at 500 milliseconds or more.
+
+### The identity and the two ways to join
+
+A program on the PC of the Hub joins as a local source app: the Hub asks once, and nothing is stored. A program that pairs with the Hub of another PC with a code stores the onboarding id, the host and the port in `identity.txt` of its identity folder, `%LOCALAPPDATA%\Quaternar\QarOS-ROS\<program>`, and the next start rejoins without a code. `forget()` erases the pairing in the runtime and deletes the file. In the auto mode a stored pairing selects the remote mode, an installed QAROS the local mode.
 
 ## GUI panels, URL panels and input
 
 A GUI panel reaches QarOS by one of two routes. The component `panels` streams pixels, which a library of the stack captures from a widget. The component `url` opens a panel on a URL that a program serves, and QarOS renders the page itself.
 
-**The streaming route.** `QarCApiPanelSenderFactory` borrows the session of an `IQarSessionOwner` and makes one `QarCApiPanelSenderAdapter` for each panel. The adapter builds the panel in three calls and fails the creation when one of them fails:
+**The streaming route.** `QarCApiPanelSenderFactory` borrows the session of an `IQarSessionOwner` and makes one `QarCApiPanelSenderAdapter` for each panel. The adapter builds the panel in three calls, in a task on the thread that owns the session, and fails the creation when one of them fails:
 
 1. `qar_video_sender_create` makes a CPU video sender whose layout is one texture and one colour view without an eye, with the size of the buffer that the host captures;
 2. `qar_video_sender_stream_id` reads the identity of its stream;
-3. `qar_gui_panels_add_panel` makes the panel, with a `QarGuiPanelStreamIdExt` that names the stream. Without that extension QarOS would make a website panel.
+3. `qar_gui_panels_get_or_create` gets or creates the panel under its stable common name, with a `QarGuiPanelStreamIdExt` that names the stream. Without that extension QarOS would make a website panel. A panel of that name that an earlier session left behind is reused: `decide_panel_attach` swaps its content, fits its size and shows it, and a name taken by a panel that cannot be reused is tried again with `-v2` or with `-r1` to `-r8`.
 
 Each tick of the host is `try_begin_frame` and, when it reports a free destination, `submit_frame`, which copies the rows of the buffer into the frame of QarOS and shows it. A sender that nothing has attached to yet answers the status 604 (no active transfer), and one whose receiver is reconnecting answers 603; the adapter reports both as "not ready", not as failures. The size of the buffer is fixed for the life of a sender, so a resized widget needs a new adapter.
 
@@ -134,11 +145,11 @@ Each tick of the host is `try_begin_frame` and, when it reports a free destinati
 
 The callback of QarOS reads everything from the gesture handle at its top, because the handle is valid only for the duration of the call, converts the content pixel into a position `(u, v)` on the panel, and pushes a `PanelPointerSample` into a queue. It touches nothing else. The host drains the queue on its GUI thread with `drain()`. The conversion adds half a pixel, divides by the content size that the adapter was given, flips no axis and applies no `content_scale`, and clamps a position outside the content to its edge. Each hand of each peer is a pointer of its own: the pointer id is a hash of the peer id and the hand. A lifecycle that stays silent for 0.75 s, three of the 250 ms heartbeats of QarOS, is cancelled by the source, which recovers a producer that died in the middle of a drag.
 
-**Closing a panel.** `close(panel_closed_in_ar)` cancels the input subscriptions first, then closes the GUI panel unless the operator already did, and destroys the video sender last, whatever the second step did. A second call does nothing. [Ownership and teardown](#ownership-and-teardown) gives the reasons.
+**Closing a panel.** `close(panel_closed_in_ar)` cancels the input subscriptions first, then closes the GUI panel unless the operator already did, and destroys the video sender last, whatever the second step did. A second call does nothing. `detach()` does the first and the last step and leaves the QarOS panel as it is, so that the next session finds it under its common name. [Ownership and teardown](#ownership-and-teardown) gives the reasons.
 
-**The URL route.** `QarCApiUrlPanelFactory` makes a `QarCApiUrlPanelAdapter`, which adds a panel with a `QarGuiPanelUrlExt` that carries the URL and can then navigate it, move and resize it, show, minimise or hide it, and close it. There is no video sender and no frame loop, and the adapter subscribes to no gestures: the page handles pointer input itself and reports it over its own connection.
+**The URL route.** `QarCApiUrlPanelFactory` makes a `QarCApiUrlPanelAdapter`, which gets or creates a panel with a `QarGuiPanelUrlExt` that carries the URL and can then navigate it, move and resize it, show, minimise or hide it, and close it. There is no video sender and no frame loop, and the adapter subscribes to no gestures: the page handles pointer input itself and reports it over its own connection.
 
-**Callbacks only enqueue.** All QarOS callbacks of this repository follow one rule: convert, queue and return, without blocking and without calling a subscribe function. The state that a callback may reach lives in a slot of a process-lifetime arena in `capi`. A slot is never freed or reused. Retiring a subscription cancels its token, disowns the slot under the mutex of the slot, and only then destroys the token handle; once that returns, no callback is inside the owner and none ever will be again. One subscription is the exception: the subscription to peer updates of `QarCApiSenderFactory` passes the factory itself as the state of its callback, with no cancel token and no slot. What keeps that callback from reaching a freed factory is the destruction of the session and then of the library in the destructor of the factory. The header does not say whether a callback that is running has returned when those calls return, so this stack assumes it.
+**Callbacks only enqueue.** All QarOS callbacks of this repository follow one rule: convert, queue and return, without blocking and without calling a subscribe function. The state that a callback may reach lives in a slot of a process-lifetime arena in `capi`. A slot is never freed or reused. Retiring a subscription cancels its token, disowns the slot under the mutex of the slot, and only then destroys the token handle; once that returns, no callback is inside the owner and none ever will be again. One subscription is the exception: the subscription to peer updates of `QarSessionOwner` passes the owner itself as the state of its callback, with no slot. What keeps that callback from reaching a freed owner is that its teardown releases the session first and the runtime and the library after it, on the thread of the owner. The header does not say whether a callback that is running has returned when those calls return, so this stack assumes it.
 
 ## Spatial gestures and the pointing ray
 
@@ -171,11 +182,11 @@ All Ogre and OpenGL work happens on one thread, the render thread of the host, a
 | render thread of the host | `render_tick`, the creation of eye targets, `capture_gl_context`, `create_sender`, `begin_frame` and `submit_opengl_stereo_frame`, the polling of the hands, `poll_new_peer_requests` and `poll_closed_peers` | the only thread that touches Ogre and GL; the scheduler refuses to run elsewhere |
 | graphics thread of QarOS | reads the textures of a sender, with the WGL context that the factory created for that sender | the factory only supplies the context and its four callbacks; it never makes the context current on the render thread |
 | callback threads of QarOS | the peer updates, the gestures of panels and of the app volume, the result of the asynchronous sender creation | convert, queue and return; they never block and never subscribe |
-| GUI thread of the host | the panel and URL panel adapters, the subscribe and unsubscribe calls, `drain` of the input sources | the adapters are not thread-safe and are called from one thread |
-| worker thread of the host, optional | the construction of `QarCApiSenderFactory`, which blocks for seconds | the host decides; the factory is not usable before `ready()` |
+| GUI thread of the host | the calls of the panel and URL panel adapters, `drain_results` and `drain` of the input sources, `poll` of the owner | the adapters are not thread-safe and are called from one thread; none of the calls waits for the Hub |
+| thread of the session owner | the library load, the runtime, the join, the subscriptions, and every task that a consumer posted with `post_session_task` | the only thread that makes a QarOS call that can wait for the Hub; it runs the tasks one at a time, in order |
 | writer of the timing log | the formatting and writing of the CSV files | started only when the timing folder is set; hooks only append numbers to an in-memory buffer |
 
-Three details are worth knowing. The factory is shared between threads under one mutex that guards the peer queues, the invited and admitted lists and the adapter list, because the callback threads and the render thread both touch them. The pointing ray crosses from the render thread to the gesture thread through a one-value slot: the last writer wins and a reader gets a copy, so a reader never blocks a frame. And the sender is created asynchronously exactly so that the render thread never waits for it: a creation could take arbitrarily long with an SDK drop earlier than that of 2026-09-28, and a call that waited would stop every other stream.
+Three details are worth knowing. The factory is shared between threads under one mutex that guards the peer queues and the lists of served and closed peers, because the callback threads and the render thread both touch them. The pointing ray crosses from the render thread to the gesture thread through a one-value slot: the last writer wins and a reader gets a copy, so a reader never blocks a frame. And the sender is created asynchronously exactly so that the render thread never waits for it: a creation could take arbitrarily long with a QAROS runtime earlier than the verified version, and a call that waited would stop every other stream.
 
 ## Ownership and teardown
 
@@ -184,8 +195,8 @@ Three details are worth knowing. The factory is shared between threads under one
 | `Ogre::Root`, the scene manager | the host | the library holds a pointer to the scene manager and never creates or destroys it |
 | the eye cameras and render textures of a peer | `OgreQarStereoStream`, through `OgreStereoRenderTarget` | created on the first frame, destroyed with the stream |
 | the lights of the lighting rig | `QarSceneLighting` | strictly additive; `shutdown()` restores the ambient colour and the visibility of the light that it hid |
-| the QarOS library, the runtime, the invite, the session | `QarCApiSenderFactory` | the factory loads the library only if it is not loaded yet and unloads it only if it loaded it |
-| the app volume | the session, created by the factory | every render sender names it |
+| the QarOS library, the runtime, the session | `QarSessionOwner` | the owner loads the library and unloads it at the end of its teardown, after the runtime and the library are destroyed |
+| the app volume | the Hub, found or made by the factory at the attach | every render sender names it; it persists in the Hub after the program ends, and the next start finds it under its common name |
 | a render sender | `QarCApiRenderSenderAdapter` | created by the factory and shared with its stream; the factory keeps a weak reference per peer |
 | a GL context for QarOS | `QarCApiSenderFactory` | one for each sender, shared with the Ogre context, never current on the render thread; deleted after the library is destroyed |
 | the GL fence of a stream | `OgreQarStereoStream` | at most one is outstanding; a new one replaces and deletes the old one |
@@ -193,12 +204,12 @@ Three details are worth knowing. The factory is shared between threads under one
 | the callback slots | the arena in `capi` | never freed and never reused |
 | a URL panel | `QarCApiUrlPanelAdapter` | closed by `close` or by the destructor |
 
-The session is the owner that the panel factories borrow, so the factory of the session must outlive every adapter, sender and subscription. The destroy order that the code follows is:
+The session is the owner that the panel factories borrow, so the owner must outlive every adapter, sender and subscription. The destroy order that the code follows is:
 
 1. **Streams first.** The host destroys the manager, and with it every stream and its sender. A stream first releases a frame handle that was fetched and not used, and then destroys the sender.
 2. **A panel in three steps.** Cancel the input subscriptions of the panel, close the GUI panel unless the operator already closed it in AR, and destroy the video sender whatever the second step did. Cancelling first matters because the runtime republishes a panel that is being closed as closed, and with the subscription still live that echo would look like the operator closing it; the sender goes last because the panel is its consumer.
 3. **A subscription** is retired by cancelling its token, so that QarOS stops delivering, then giving up its callback slot, so that a callback that is already running finds nothing to touch, and only then destroying the token handle.
-4. **The factory last.** Its destructor destroys the session, then the invite handle, then the runtime, and then, when the library is loaded, calls `qar_library_destroy`; the GL contexts of the senders are deleted only after that, so that no context is deleted while a thread of QarOS may still have it current, and the library is unloaded at the very end.
+4. **The factory, then the owner.** The factory detaches first: it stops listening and lets go of the app volume, and a render sender whose creation is still in flight is destroyed when its result arrives. The owner then releases the session, destroys the runtime, calls `qar_library_destroy` and unloads the library, in this order, on its own thread, after the tasks that were posted before the disconnect have run or been dropped. The GL contexts of the senders are deleted only after the library is destroyed, so that no context is deleted while a thread of QarOS may still have it current.
 
 The header documents no order of teardown, so this order is a choice of this repository, and what the runtime does with a stream that is destroyed while a receiver is attached is a [known limitation](QAROS_INTEGRATION_NOTES.md#known-sdk-limitations).
 
@@ -244,7 +255,7 @@ The texture holds one of two encodings, chosen by `QAR_DEPTH_ENCODING`:
 
 The scale applies to the metric encoding only, must be greater than 0, and a malformed value keeps metres. Both variables are read once for each process, when the first depth target is created.
 
-The encoding matters because, with an SDK drop earlier than that of 2026-09-28, the QarOS Visualizer read the depth texture as the raw window-space value and inverted it itself. Metric data then showed as nothing up close and as one saturated colour for the rest, and neither `depth_scale` nor `rendered_near_far` changed that, so set `ndc` for the Visualizer. The SDK does not document what any other peer does with the depth values. [Depth encoding](QAROS_INTEGRATION_NOTES.md#depth-encoding) has the details.
+The encoding matters because, with a QAROS runtime earlier than the verified version, the QarOS Visualizer read the depth texture as the raw window-space value and inverted it itself. Metric data then showed as nothing up close and as one saturated colour for the rest, and neither `depth_scale` nor `rendered_near_far` changed that, so set `ndc` for the Visualizer. The SDK does not document what any other peer does with the depth values. [Depth encoding](QAROS_INTEGRATION_NOTES.md#depth-encoding) has the details.
 
 Two properties of the window-space value follow from its curve. It is reciprocal in distance, so a far plane that is much wider than the content leaves little of the range for the near surfaces. And everything beyond the far plane is clipped away. The far distance is `Config::near_far` of the factory, 500 m by default, and the adapter reports it, with the near distance and the `depth_scale` of 1.0, with every frame it shows.
 
@@ -267,7 +278,7 @@ Hiding the headlight is a separate, optional step: `suppress_light_name` names a
 
 ## Geo anchor
 
-An app volume can be pinned to the Earth, and the factory offers three calls for it. `set_geo_anchor_wgs84(latitude, longitude, altitude)` takes a geodetic fix, `set_geo_anchor_ecef(origin, axis_x, axis_y, axis_z)` takes a frame that is already in ECEF, and `clear_geo_anchor()` removes the anchor; `has_geo_anchor()` tells whether one is set. All three need the volume that the factory created, and the setters return an empty string on success and a reason otherwise.
+An app volume can be pinned to the Earth, and the factory offers three calls for it. `set_geo_anchor_wgs84(latitude, longitude, altitude)` takes a geodetic fix, `set_geo_anchor_ecef(origin, axis_x, axis_y, axis_z)` takes a frame that is already in ECEF, and `clear_geo_anchor()` removes the anchor; `has_geo_anchor()` tells whether one is set. All three need the volume that the factory got, and the setters queue the change for the thread that owns the session and return an empty string when it was queued and a reason otherwise; the outcome of the change that ran arrives once through `take_geo_anchor_result()`.
 
 The arithmetic is separate from the session so that it can be tested: `geodetic_to_ecef_enu` in `geo_anchor.hpp` converts latitude, longitude and the height above the WGS84 ellipsoid to the ECEF origin and to the east, north and up axes at that point, and the factory takes those axes as the +X, +Y and +Z axes of the anchor, which is the ROS convention (REP 103). The height is the ellipsoidal height that the ROS message `NavSatFix` carries, not the height above mean sea level, and the two differ by tens of metres.
 
@@ -305,6 +316,18 @@ This section explains the parts of Ogre that the library uses, for a reader who 
 - **Two OpenGL render systems.** Ogre 1.12 has a legacy OpenGL render system, named "OpenGL Rendering Subsystem", and a GL3+ one, named "OpenGL 3+ Rendering Subsystem". RViz2 on the Windows distribution runs the legacy one. The library accepts any render system whose name contains "OpenGL" and refuses a Direct3D, Metal or null backend; the sample prefers the legacy system and falls back to GL3+.
 - **One context for each thread.** An OpenGL context is current on one thread at a time. The context of Ogre is permanently current on the render thread, so QarOS cannot use it and the factory gives each sender a second context that shares the textures of Ogre ([Render-into and the GL context](QAROS_INTEGRATION_NOTES.md#render-into-and-the-gl-context)).
 - **The native texture id.** To hand an Ogre texture to QarOS the library needs the OpenGL name of the texture. [Native GL texture id extraction](#native-gl-texture-id-extraction) shows how it gets it.
+
+## Feature details
+
+The README names each feature in one line. This section describes each feature in full.
+
+- **A core that calls no QarOS function.** The module `qar_ar_core` holds the Qt-free panel and pointer types, the input seam through which AR pointer samples enter, the seam to QarOS for browser-backed (URL) panels, the pointing-ray model, the spatial frames and the pick model, an opt-in timing log, and the one wrapper of the vendored QarOS C header.
+- **An Ogre stereo stream for every peer.** The module `qar_ogre_streaming` renders an Ogre scene into a colour and a depth render texture for each eye, takes the pose and the field of view of each eye from QarOS, renders the peers that are due in one batch under a render budget, can light the scene with a world-fixed rig while it streams, and writes depth either as the window-space value or as metric distance. It reaches QarOS only through the narrow seam of `IQarRenderSenderAdapter` and `IQarRenderSenderFactory`.
+- **The QarOS C API adapter, in six components.** The module `qar_qar_adapter` builds `capi` (the program's one loader of the QAROS library, the callback-slot arena and the interface of the session owner that panels borrow), `session` (the session owner: it loads the library, joins the QAROS Hub as a local app or with a pairing code on its own thread, keeps the list of targets and the stored pairing, and runs the QAROS calls of its consumer in order), `render` (the factory that borrows the owner's session, the app volume, asynchronous creation of senders, and the copy of the rendered textures into the textures of QarOS through a shared WGL context), `panels`, `url` and `gestures`.
+- **Geo anchor.** A WGS84 fix or an ECEF frame can georeference the app volume.
+- **Diagnostics.** Streams report why a frame was skipped, and opt-in switches write a per-frame trace and stage timings as CSV files; a panel sender can hide and show its panel without closing it, and says why it has no destination, and the adapters print the state of every panel and the start of every stream with the time of day.
+- **A headless sample and a live example.** The sample renders the same Ogre scene for synthetic in-process peers, needs no QAROS and writes stereo image pairs; the example joins the QAROS Hub and streams that scene to the first target that comes up. The libraries ran in the live sessions of qar_rviz_plugin, and [What the live sessions showed](VERIFICATION.md#what-the-live-sessions-showed) says what those sessions showed.
+- **Known limitations.** What the QarOS SDK does not document or does not do is listed in [Known SDK limitations](QAROS_INTEGRATION_NOTES.md#known-sdk-limitations), and the symptoms of the limits that you may meet are in [Troubleshooting](TROUBLESHOOTING.md#qaros-stream-problems).
 
 ## Design notes
 
@@ -350,19 +373,19 @@ The header says that the line from the start point to the action point is the ra
 
 ### QarOS library logging: the environment wins over the init struct
 
-The library obeys the environment variable `QAR_LOG_SEVERITY` in preference to the field `log_severity` of its init structure, in both directions, and it reads the variable through the environment table of the C runtime, so that a bare Win32 write is not seen and `_putenv_s` is needed. A severity that was exported into a shell earlier therefore overrides a quieter request in the struct. The adapter makes its request on both channels, the struct and the exported variable before `qar_library_init`, and `enable_console_logging = false` removes the copy on the standard output and keeps the file. The logger of the transport is started only at the severities trace and debug, because at debug it writes thousands of lines a minute.
+The library obeys the environment variable `QAR_LOG_SEVERITY` in preference to the field `log_severity` of its init structure, in both directions, and it reads the variable through the environment table of the C runtime, so that a bare Win32 write is not seen and `_putenv_s` is needed. A severity that was exported into a shell earlier therefore overrides a quieter request in the struct. The session owner makes its request on both channels, the struct and the exported variable before `qar_library_init`, and `enable_console_logging = false` removes the copy on the standard output and keeps the file. The logger of the transport is started only at the severities trace and debug, because at debug it writes thousands of lines a minute.
 
 ### The render-into GL submit mode
 
 `GlSubmitMode::kRenderIntoQarTextures` is the default, and `kSupplyOwnTextureIds` cannot work against the SDK: `qar_render_sender_frame_opengl` takes an output parameter, QarOS owns the textures and hands out their ids to be written into, and supplied ids are overwritten, so the frames arrive and the scene is black. Render-into is complete only together with the copy hook. [Render-into and the GL context](QAROS_INTEGRATION_NOTES.md#render-into-and-the-gl-context) has the rest: the flush before QarOS reads, the blit and its reasons, and one shared context for each sender.
 
-### Peer admission: the subscription surfaces many peers
+### Targets: the Hub says what a peer is
 
-`qar_peer_subscribe_updates` reports everything that joins, the invited Visualizers and the internal peers of the runtime alike, and a sender that is built for an internal peer has the wrong app id. Admission is therefore filtered; `kInvitedOrNamed` is unusable because the display names change between updates, `kInvitedOrNew` works on timing, and the bare Visualizer connection string collapses every invite onto one peer, which `Config::visualizer_conn_suffix` avoids by naming a distinct GUID. [Peers, invites and admission](QAROS_INTEGRATION_NOTES.md#peers-invites-and-admission) has the details.
+`qar_peer_subscribe_updates` reports every peer of the session, and the description of a peer carries its role and its presence, so the stack renders only for the peers whose role is target and whose presence is online or unknown, and never for its own peer. It needs no admission heuristic and no timing window. A Visualizer is such a peer once an operator has added a receiver in it. [Peers, invites and admission](QAROS_INTEGRATION_NOTES.md#peers-invites-and-admission) has the details.
 
 ### Asynchronous sender creation
 
-Creating a sender negotiates a transfer with the receiver, and with an SDK drop earlier than that of 2026-09-28 that could take arbitrarily long or never finish. A synchronous call from a thread that also drives a window would freeze the host, so `create_sender` starts `qar_render_sender_create_async`, answers "not yet" while the QarOS thread works, and picks up the result on a later tick; a creation that is still pending after 5 seconds is logged once.
+Creating a sender negotiates a transfer with the receiver, and with a QAROS runtime earlier than the verified version that could take arbitrarily long or never finish. A synchronous call from a thread that also drives a window would freeze the host, so `create_sender` starts `qar_render_sender_create_async`, answers "not yet" while the QarOS thread works, and picks up the result on a later tick; a creation that is still pending after 5 seconds is logged once.
 
 ### The pick-feedback overlay is not used by the other repositories
 

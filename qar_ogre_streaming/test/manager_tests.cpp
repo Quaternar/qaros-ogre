@@ -7,12 +7,15 @@
 
 #include <memory>
 #include <stdexcept>
+#include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
 #include "qar_ogre_streaming/ogre_qar_streaming_manager.hpp"
 #include "qar_ogre_streaming/ogre_qar_stereo_stream.hpp"
 #include "qar_ogre_streaming_test_support/immediate_render_thread_executor.hpp"
+#include "qar_ogre_streaming_test_support/manual_clock.hpp"
 #include "qar_ogre_streaming_test_support/mock_qar_render_sender_adapter.hpp"
 #include "test_helpers.hpp"
 
@@ -32,6 +35,41 @@ public:
     ++count;
   }
   int count = 0;
+};
+
+// Diagnostics sink that keeps every line.
+class RecordingSink : public qos::OgreQarDiagnosticsSink
+{
+public:
+  struct Line
+  {
+    qos::DiagnosticSeverity severity;
+    std::string message;
+    std::string peer;
+  };
+
+  void on_message(
+    qos::DiagnosticSeverity severity, const std::string &, const std::string & message,
+    const std::string & peer) override
+  {
+    lines.push_back({severity, message, peer});
+  }
+
+  // The lines about the wait for a sender (the start line and the end line).
+  std::vector<Line> sender_lines() const
+  {
+    std::vector<Line> out;
+    for (const Line & line : lines) {
+      if (line.message.find("sender factory returned") != std::string::npos ||
+        line.message.find("sender wait") != std::string::npos)
+      {
+        out.push_back(line);
+      }
+    }
+    return out;
+  }
+
+  std::vector<Line> lines;
 };
 
 struct ManagerFixture
@@ -186,6 +224,188 @@ TEST(ManagerBookkeeping, SenderFactoryFailureSurfaces)
   s.peer_id = qos::test::make_peer_id(5);
   EXPECT_EQ(mgr.create_stream(s).status, qos::Status::InvalidState);
   EXPECT_EQ(mgr.stream_count(), 0u);
+}
+
+namespace
+{
+
+struct WaitFixture
+{
+  std::shared_ptr<qos::test_support::ImmediateRenderThreadExecutor> executor =
+    std::make_shared<qos::test_support::ImmediateRenderThreadExecutor>();
+  std::shared_ptr<qos::test_support::MockQarRenderSenderFactory> factory =
+    std::make_shared<qos::test_support::MockQarRenderSenderFactory>();
+  std::shared_ptr<qos::test_support::ManualClock> clock =
+    std::make_shared<qos::test_support::ManualClock>(10.0);
+  RecordingSink sink;
+
+  WaitFixture() { factory->set_fail_creation(true); }
+
+  qos::OgreQarStreamingConfig make_config()
+  {
+    qos::OgreQarStreamingConfig cfg;
+    cfg.scene_manager = qos::test::fake_scene_manager();
+    cfg.render_thread_executor = executor;
+    cfg.qar_sender_factory = factory;
+    cfg.diagnostics = &sink;
+    cfg.clock = clock;
+    return cfg;
+  }
+};
+
+bool contains(const std::string & text, const std::string & part)
+{
+  return text.find(part) != std::string::npos;
+}
+
+}  // namespace
+
+TEST(ManagerSenderWait, ManyNullsThenASenderAreTwoLines)
+{
+  WaitFixture f;
+  qos::OgreQarStreamingManager mgr(f.make_config());
+  qos::StereoStreamConfig s;
+  s.peer_id = qos::test::make_peer_id(3);
+
+  for (int i = 0; i < 5; ++i) {
+    // Every null keeps its result and its last error; only the log is quiet.
+    const qos::Result r = mgr.create_stream(s);
+    EXPECT_EQ(r.status, qos::Status::InvalidState);
+    EXPECT_EQ(r.message, "sender factory returned null for peer");
+    EXPECT_EQ(mgr.diagnostics_snapshot().last_error, "sender factory returned null for peer");
+    f.clock->advance(0.05);
+  }
+  ASSERT_EQ(f.sink.sender_lines().size(), 1u);
+  const RecordingSink::Line start = f.sink.sender_lines()[0];
+  EXPECT_EQ(start.severity, qos::DiagnosticSeverity::Error);
+  EXPECT_EQ(start.message.rfind("sender factory returned null for peer", 0), 0u);
+  EXPECT_EQ(start.peer, qos::peer_id_to_hex(s.peer_id));
+
+  f.factory->set_fail_creation(false);
+  EXPECT_TRUE(mgr.create_stream(s).ok());
+  const auto lines = f.sink.sender_lines();
+  ASSERT_EQ(lines.size(), 2u);
+  EXPECT_EQ(lines[1].severity, qos::DiagnosticSeverity::Info);
+  EXPECT_TRUE(contains(lines[1].message, "after 5 null results in 250 ms")) << lines[1].message;
+  EXPECT_EQ(lines[1].peer, qos::peer_id_to_hex(s.peer_id));
+
+  // The wait is over: a duplicate create adds nothing of this kind.
+  EXPECT_EQ(mgr.create_stream(s).status, qos::Status::AlreadyExists);
+  EXPECT_EQ(f.sink.sender_lines().size(), 2u);
+}
+
+TEST(ManagerSenderWait, ASingleNullThenASenderCountsOne)
+{
+  WaitFixture f;
+  qos::OgreQarStreamingManager mgr(f.make_config());
+  qos::StereoStreamConfig s;
+  s.peer_id = qos::test::make_peer_id(4);
+  EXPECT_EQ(mgr.create_stream(s).status, qos::Status::InvalidState);
+  f.factory->set_fail_creation(false);
+  EXPECT_TRUE(mgr.create_stream(s).ok());
+  const auto lines = f.sink.sender_lines();
+  ASSERT_EQ(lines.size(), 2u);
+  EXPECT_TRUE(contains(lines[1].message, "after 1 null result in 0 ms")) << lines[1].message;
+}
+
+TEST(ManagerSenderWait, ANewWaitAfterAnEndStartsANewCount)
+{
+  WaitFixture f;
+  qos::OgreQarStreamingManager mgr(f.make_config());
+  qos::StereoStreamConfig s;
+  s.peer_id = qos::test::make_peer_id(6);
+  for (int i = 0; i < 4; ++i) {
+    mgr.create_stream(s);
+  }
+  f.factory->set_fail_creation(false);
+  ASSERT_TRUE(mgr.create_stream(s).ok());
+  ASSERT_TRUE(mgr.destroy_stream(s.peer_id).ok());
+  ASSERT_EQ(f.sink.sender_lines().size(), 2u);
+
+  f.factory->set_fail_creation(true);
+  mgr.create_stream(s);
+  mgr.create_stream(s);
+  f.factory->set_fail_creation(false);
+  ASSERT_TRUE(mgr.create_stream(s).ok());
+  const auto lines = f.sink.sender_lines();
+  ASSERT_EQ(lines.size(), 4u);
+  EXPECT_EQ(lines[2].severity, qos::DiagnosticSeverity::Error);
+  EXPECT_TRUE(contains(lines[3].message, "after 2 null results")) << lines[3].message;
+}
+
+TEST(ManagerSenderWait, TwoPeersWaitIndependently)
+{
+  WaitFixture f;
+  qos::OgreQarStreamingManager mgr(f.make_config());
+  qos::StereoStreamConfig a;
+  a.peer_id = qos::test::make_peer_id(1);
+  qos::StereoStreamConfig b;
+  b.peer_id = qos::test::make_peer_id(2);
+  mgr.create_stream(a);
+  mgr.create_stream(b);
+  mgr.create_stream(a);
+  EXPECT_EQ(f.sink.sender_lines().size(), 2u);  // one start line for each peer
+  f.factory->set_fail_creation(false);
+  ASSERT_TRUE(mgr.create_stream(a).ok());
+  const auto lines = f.sink.sender_lines();
+  ASSERT_EQ(lines.size(), 3u);
+  EXPECT_TRUE(contains(lines[2].message, "after 2 null results")) << lines[2].message;
+  EXPECT_EQ(lines[2].peer, qos::peer_id_to_hex(a.peer_id));
+}
+
+TEST(ManagerSenderWait, ThePeerRemovedEndsTheWaitWithAWarning)
+{
+  WaitFixture f;
+  qos::OgreQarStreamingManager mgr(f.make_config());
+  qos::StereoStreamConfig s;
+  s.peer_id = qos::test::make_peer_id(8);
+  mgr.create_stream(s);
+  mgr.create_stream(s);
+  mgr.create_stream(s);
+  f.clock->advance(1.5);
+  EXPECT_EQ(mgr.destroy_stream(s.peer_id).status, qos::Status::NotFound);
+  const auto lines = f.sink.sender_lines();
+  ASSERT_EQ(lines.size(), 2u);
+  EXPECT_EQ(lines[1].severity, qos::DiagnosticSeverity::Warning);
+  EXPECT_TRUE(contains(lines[1].message, "ended without a sender")) << lines[1].message;
+  EXPECT_TRUE(contains(lines[1].message, "(stream destroyed)")) << lines[1].message;
+  EXPECT_TRUE(contains(lines[1].message, "after 3 null results in 1500 ms")) << lines[1].message;
+
+  // A second removal finds no wait and says nothing more.
+  EXPECT_EQ(mgr.destroy_stream(s.peer_id).status, qos::Status::NotFound);
+  EXPECT_EQ(f.sink.sender_lines().size(), 2u);
+}
+
+TEST(ManagerSenderWait, ANewSenderFactoryEndsTheWaitWithAWarning)
+{
+  WaitFixture f;
+  qos::OgreQarStreamingManager mgr(f.make_config());
+  qos::StereoStreamConfig s;
+  s.peer_id = qos::test::make_peer_id(9);
+  mgr.create_stream(s);
+  mgr.create_stream(s);
+  mgr.set_sender_factory(std::make_shared<qos::test_support::MockQarRenderSenderFactory>());
+  const auto lines = f.sink.sender_lines();
+  ASSERT_EQ(lines.size(), 2u);
+  EXPECT_EQ(lines[1].severity, qos::DiagnosticSeverity::Warning);
+  EXPECT_TRUE(contains(lines[1].message, "(sender factory replaced)")) << lines[1].message;
+  EXPECT_TRUE(contains(lines[1].message, "after 2 null results")) << lines[1].message;
+}
+
+TEST(ManagerSenderWait, TheManagerDestroyedDropsTheWaitWithoutCallingTheSink)
+{
+  WaitFixture f;  // the sink outlives the manager, so a call from the destructor would be seen
+  {
+    qos::OgreQarStreamingManager mgr(f.make_config());
+    qos::StereoStreamConfig s;
+    s.peer_id = qos::test::make_peer_id(10);
+    for (int i = 0; i < 7; ++i) {
+      mgr.create_stream(s);
+    }
+    EXPECT_EQ(f.sink.sender_lines().size(), 1u);
+    f.sink.lines.clear();  // from here on, any line comes from the destructor
+  }
+  EXPECT_TRUE(f.sink.lines.empty());
 }
 
 TEST(ManagerRenderTick, ThreadAffinity)

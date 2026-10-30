@@ -8,10 +8,54 @@
 #include <cstdlib>
 #include <string>
 
+#ifdef _WIN32
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  include <windows.h>
+#endif
+
 namespace qar_qar_adapter
 {
 namespace
 {
+
+#ifdef _WIN32
+std::wstring utf8_to_wide(const std::string & utf8)
+{
+  if (utf8.empty()) {
+    return std::wstring();
+  }
+  const int size = MultiByteToWideChar(
+    CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), nullptr, 0);
+  if (size <= 0) {
+    return std::wstring();
+  }
+  std::wstring out(static_cast<std::size_t>(size), L'\0');
+  MultiByteToWideChar(
+    CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), &out[0], size);
+  return out;
+}
+
+std::string wide_to_utf8(const std::wstring & wide)
+{
+  if (wide.empty()) {
+    return std::string();
+  }
+  const int size = WideCharToMultiByte(
+    CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
+  if (size <= 0) {
+    return std::string();
+  }
+  std::string out(static_cast<std::size_t>(size), '\0');
+  WideCharToMultiByte(
+    CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()), &out[0], size, nullptr, nullptr);
+  return out;
+}
+#endif
 
 std::string to_lower(const char * value)
 {
@@ -36,6 +80,44 @@ std::string trimmed_lower(const char * value)
 }
 
 }  // namespace
+
+std::string read_environment(const char * name)
+{
+  if (name == nullptr) {
+    return std::string();
+  }
+#ifdef _WIN32
+  // The wide variant, converted to UTF-8: the narrow one is in the account's code page, and a
+  // folder such as TEMP can hold letters outside it.
+  const std::wstring wide_name = utf8_to_wide(name);
+  const DWORD size = GetEnvironmentVariableW(wide_name.c_str(), nullptr, 0);
+  if (size == 0) {
+    return std::string();
+  }
+  std::wstring value(static_cast<std::size_t>(size), L'\0');
+  const DWORD written = GetEnvironmentVariableW(wide_name.c_str(), &value[0], size);
+  value.resize(written);
+  return wide_to_utf8(value);
+#else
+  const char * value = std::getenv(name);
+  return value != nullptr ? std::string(value) : std::string();
+#endif
+}
+
+bool environment_is_set(const char * name)
+{
+  if (name == nullptr) {
+    return false;
+  }
+#ifdef _WIN32
+  SetLastError(ERROR_SUCCESS);
+  const std::wstring wide_name = utf8_to_wide(name);
+  const DWORD size = GetEnvironmentVariableW(wide_name.c_str(), nullptr, 0);
+  return size != 0 || GetLastError() != ERROR_ENVVAR_NOT_FOUND;
+#else
+  return std::getenv(name) != nullptr;
+#endif
+}
 
 bool parse_bool_env(const char * value, bool default_value)
 {

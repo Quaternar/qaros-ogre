@@ -255,10 +255,10 @@ TEST(ResolvePickPoint, TheActionPointTargetKeepsTheDepthTheRuntimeResolved)
 }
 
 // ---------------------------------------------------------------------------
-// The ActionPoint target GATES on the scene-hit flag. The header of the drop after
-// the minimum drop says the action point is "the start point when nothing was
-// intersected" -- the operator's hand -- so publishing a non-hit verbatim would put
-// the marker on the hand.
+// The ActionPoint target GATES on the scene-hit flag. The installed runtime's
+// header says the action point is "the start point when nothing was intersected"
+// -- the operator's hand -- so publishing a non-hit verbatim would put the marker
+// on the hand.
 // ---------------------------------------------------------------------------
 
 TEST(ResolvePickPoint, TheActionPointTargetPublishesASceneHitVerbatim)
