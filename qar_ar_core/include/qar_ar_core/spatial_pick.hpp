@@ -11,7 +11,7 @@
 /// ## One input seam, two kinds of interaction
 ///
 /// `panel_input_source.hpp` is THE way an AR pointer enters this library, and
-/// qar_qt_streaming's `panel_hit_test.hpp` is the maths that lands it on a panel pixel.
+/// the hit test of a panel library is the maths that lands it on a panel pixel.
 /// This header is that seam's other consumer: the same
 /// @ref PanelPointerSample, with the same @ref PointerPhase lifecycle, resolved
 /// against the **3D scene** instead of a panel rectangle. Nothing here invents a
@@ -157,7 +157,7 @@ struct SpatialPointer
 ///
 /// A sample carrying only a resolved panel (u, v) is not a spatial interaction
 /// and comes back `valid == false`: that pointer is on a panel, and
-/// qar_qt_streaming's `panel_hit_test.hpp` owns it.
+/// the panel hit test owns it.
 SpatialPointer spatial_pointer_from_sample(
   const PanelPointerSample & sample, const RoomToRosTransform & transform);
 

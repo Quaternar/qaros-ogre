@@ -5,8 +5,7 @@
 #define QAR_AR_CORE__QAR_URL_PANEL_HPP_
 
 /// @file qar_url_panel.hpp
-/// @brief The seam TO QarOS for browser-backed panels — the URL sibling of
-/// IQarPanelSenderAdapter (qar_panel_sender.hpp), the seam of the streamed panels.
+/// @brief The seam TO QarOS for browser-backed panels.
 ///
 /// A web panel is a QarOS GUI panel whose content is a URL rendered by the
 /// runtime's own browser (`QAR_GUI_PANEL_CONTENT_TYPE_WEBSITE_URI`,
@@ -21,7 +20,7 @@
 #include <string>
 #include <vector>
 
-#include "qar_ar_core/panel_types.hpp"
+#include "qar_ar_core/panel_op_result.hpp"
 #include "qar_ar_core/qar_streaming_c.hpp"
 
 namespace qar_ar_core

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 //
 // The app-volume (spatial, 3D scene) gesture source: QarOS app-volume gesture events behind
-// the IQarPanelInputSource seam. Component `gestures`. Separate from
+// the IPanelInputSource seam. Component `gestures`. Separate from
 // qar_capi_panel_input_source.hpp (component `panels`), with which it shares only the
 // callback-slot arena of the base component `capi`.
 
@@ -92,7 +92,7 @@ struct SpatialGestureStats
 /// is what makes AR drag possible.
 ///
 /// Same threading and lifetime rules, same slot arena, for the same reason.
-class QarCApiSpatialGestureSource : public qar_ar_core::IQarPanelInputSource
+class QarCApiSpatialGestureSource : public qar_ar_core::IPanelInputSource
 {
 public:
   explicit QarCApiSpatialGestureSource(QarSession * session);

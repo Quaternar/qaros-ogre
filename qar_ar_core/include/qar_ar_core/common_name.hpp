@@ -25,7 +25,7 @@ namespace qar_ar_core
 /// Every member is already sanitized (see @ref make_name_scope).
 struct NameScope
 {
-  std::string program_tag;  ///< Which program: "rviz2-plugin", "qt-panel-example", ...
+  std::string program_tag;  ///< Which program: "host-plugin", "qt-panel-example", ...
   std::string instance;     ///< Optional second copy of the same program; empty for none.
   std::string host;         ///< The DNS host name of this PC.
 };

@@ -1,11 +1,11 @@
 # Copyright 2026 QuaternAR
 # SPDX-License-Identifier: MIT
 #
-# qar_ar_core — the Qt-free core every QarOS integration layer shares: the GUI-panel
-# seam types (panel_types, qar_panel_sender), the pointer-input seam
-# (panel_input_source), the AR pointing ray, room/scene/ROS frames, the spatial pick
-# model, the per-frame timing log, the URL-panel seam, and THE one wrapper of the
-# vendored QarOS C header (qar_streaming_c.hpp).
+# qar_ar_core — the Qt-free core every QarOS integration layer shares: the panel decisions
+# (the naming rule, the attach decision, the panel state guard, the outcome of a panel
+# operation), the pointer-input vocabulary (pointer_input, panel_input_source), the AR
+# pointing ray, room/scene/ROS frames, the spatial pick model, the per-frame timing log, the
+# URL-panel seam, and THE one wrapper of the vendored QarOS C header (qar_streaming_c.hpp).
 #
 # Plain CMake. The C++17 standard library and the vendored qar_streaming.h only: no Qt,
 # Ogre, ROS or RViz, and no call into the QarOS C API (it uses the C API's TYPES only, so
@@ -14,7 +14,6 @@
 add_library(qar_ar_core STATIC
   src/common_name.cpp
   src/panel_attach.cpp
-  src/panel_types.cpp
   src/spatial_frames.cpp
   src/spatial_pick.cpp
 )

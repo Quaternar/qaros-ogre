@@ -68,9 +68,9 @@ TEST(CommonName, Fnv1aMatchesTheReferenceVectors)
 TEST(CommonName, ScopeIsSanitizedAndCapped)
 {
   const NameScope scope = make_name_scope(
-    "RViz2 Plugin", "Second Copy Of It, Really",
+    "Host Plugin", "Second Copy Of It, Really",
     "PC-\xC3\xA9-01.with.a.very.long.host.name.example");
-  EXPECT_EQ(scope.program_tag, "rviz2-plugin");
+  EXPECT_EQ(scope.program_tag, "host-plugin");
   EXPECT_EQ(scope.instance.size(), 16u);
   EXPECT_EQ(scope.instance, "second-copy-of-i");
   EXPECT_EQ(scope.host.size(), 24u);
@@ -79,17 +79,17 @@ TEST(CommonName, ScopeIsSanitizedAndCapped)
 
 TEST(CommonName, PanelNameHasTheDocumentedShape)
 {
-  const NameScope scope = make_name_scope("rviz2-plugin", "", "devpc");
+  const NameScope scope = make_name_scope("host-plugin", "", "devpc");
   const std::string key = "hidden:Displays";
   const std::string name = make_panel_common_name(key, scope);
   char hash[9] = {0};
   std::snprintf(hash, sizeof(hash), "%08x", static_cast<unsigned>(fnv1a32(key)));
-  EXPECT_EQ(name, "hidden-displays-" + std::string(hash) + ".rviz2-plugin.devpc.qaros-ros");
+  EXPECT_EQ(name, "hidden-displays-" + std::string(hash) + ".host-plugin.devpc.qaros-ros");
 
-  const NameScope with_instance = make_name_scope("rviz2-plugin", "B", "devpc");
+  const NameScope with_instance = make_name_scope("host-plugin", "B", "devpc");
   EXPECT_EQ(
     make_panel_common_name(key, with_instance),
-    "hidden-displays-" + std::string(hash) + ".rviz2-plugin.b.devpc.qaros-ros");
+    "hidden-displays-" + std::string(hash) + ".host-plugin.b.devpc.qaros-ros");
 }
 
 TEST(CommonName, TheHashKeepsKeysThatSanitizeAlikeApart)
