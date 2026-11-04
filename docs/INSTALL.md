@@ -82,7 +82,7 @@ All install commands use `winget`, the Windows package manager that ships with W
 
 ### Why Visual Studio 2019 and the v142 toolset
 
-The ROS 2 Humble distribution of this documentation and the Qt 5.15.2 kit `msvc2019_64` are compiled with the Visual Studio 2019 toolset (v142). C++ classes cross DLL boundaries in this stack, between our code and Ogre, RViz and Qt, and the compiled layout of those classes and the C++ runtime they use must match the toolset that built the binaries. The stack therefore pins the toolset that built them instead of trying a newer one: the presets select the generator `Visual Studio 16 2019`, and the scripts find only a Visual Studio 16.x installation that has the C++ x64 tools. Visual Studio 2022 or 2026 may be installed next to it; they are ignored. Always build `RelWithDebInfo` or `Release`: the ROS 2 and Qt binaries are release builds, and a debug C runtime in the same process crashes on load.
+The ROS 2 Humble distribution of this documentation and the Qt 5.15.2 kit `msvc2019_64` are compiled with the Visual Studio 2019 toolset (v142). C++ classes cross DLL boundaries in this stack, between our code and Ogre, RViz and Qt, and the compiled layout of those classes and the C++ runtime they use must match the toolset that built the binaries. The stack therefore pins the toolset that built them instead of trying a newer one: the presets select the generator Visual Studio 16 2019, and the scripts find only a Visual Studio 16.x installation that has the C++ x64 tools. Visual Studio 2022 or 2026 may be installed next to it; they are ignored. Always build `RelWithDebInfo` or `Release`: the ROS 2 and Qt binaries are release builds, and a debug C runtime in the same process crashes on load.
 
 ### Visual Studio 2019 Build Tools
 
@@ -325,7 +325,7 @@ How a program joins the QAROS Hub is described by QuaternAR: [Onboarding and ses
 
 ### Clone this repository
 
-The next steps use the scripts and the `requirements.txt` of this repository, so clone it first. The command takes the default branch of the repository. This documentation describes version 0.1.0 of the three repositories of this stack; the version of a clone is the number after the word VERSION in the project command of the file `CMakeLists.txt` in its root.
+The next steps use the scripts and the `requirements.txt` of this repository, so clone it first.
 
 ```powershell
 git clone https://github.com/Quaternar/qaros-ogre "$env:QAR_ROOT\src\qar_ogre_adapter"
@@ -343,8 +343,9 @@ Set-Location "$env:QAR_ROOT\src\qar_ogre_adapter"
 
 ### Create the virtual environment
 
-The virtual environment holds the Python tools of the build in one folder that you can delete. It is created from the Python 3.10 interpreter of the toolchain section and filled from the pinned list `requirements.txt` of the repository. The list contains, among other packages, `aqtinstall`, which installs Qt, and `colcon-common-extensions`, which builds ROS 2 packages; every repository ships the same list.
-This repository uses neither of the two tools, and the environment is optional for it: the layering guard that its tests run needs only the Python standard library and runs with the Python 3 interpreter (version 3.8 or newer) that CMake finds, not with this environment. Only the commands in this documentation that run `scripts\check_layering.py` by hand call the interpreter of the environment; if you skip the environment, run them with another Python 3 interpreter. The commands of this section create and check the environment and change nothing else.
+The virtual environment holds the Python tools of the build in one folder that you can delete. It is created from the Python 3.10 interpreter of the toolchain section and filled from the pinned list `requirements.txt` of the repository.
+The list contains, among other packages, `aqtinstall`, which installs Qt.
+This repository does not use `aqtinstall`, and the environment is optional for it: the layering guard that its tests run needs only the Python standard library and runs with the Python 3 interpreter (version 3.8 or newer) that CMake finds, not with this environment. Only the commands in this documentation that run `scripts\check_layering.py` by hand call the interpreter of the environment; if you skip the environment, run them with another Python 3 interpreter. The commands of this section create and check the environment and change nothing else.
 
 ```powershell
 & "$env:ProgramFiles\Python310\python.exe" -m venv $env:QAR_VENV
@@ -354,19 +355,17 @@ This repository uses neither of the two tools, and the environment is optional f
 & "$env:QAR_VENV\Scripts\python.exe" -m pip install --disable-pip-version-check -r requirements.txt
 ```
 ```text
-...
-Successfully installed PyYAML-6.0.3 Pygments-2.20.0 aqtinstall-3.3.0 backports.zstd-1.6.0 beautifulsoup4-4.15.0 brotli-1.2.0 bs4-0.0.2 catkin-pkg-1.1.0 certifi-2026.6.17 charset-normalizer-3.4.9 colcon-cmake-0.2.30 colcon-common-extensions-0.3.0 colcon-core-0.21.0 colcon-defaults-0.2.9 colcon-devtools-0.3.0 colcon-library-path-0.2.1 colcon-metadata-0.2.5 colcon-notification-0.3.1 colcon-output-0.2.14 colcon-package-information-0.4.1 colcon-package-selection-0.2.10 colcon-parallel-executor-0.4.0 colcon-pkg-config-0.1.0 colcon-powershell-0.5.0 colcon-python-setup-py-0.2.9 colcon-recursive-crawl-0.2.3 colcon-ros-0.5.0 colcon-test-result-0.3.8 colorama-0.4.6 coloredlogs-15.0.1 coverage-7.15.0 defusedxml-0.7.1 distlib-0.4.3 docutils-0.23 empy-4.2.1 exceptiongroup-1.3.1 humanfriendly-10.0 humanize-4.16.0 idna-3.18 inflate64-1.0.4 iniconfig-2.3.0 lark-1.3.1 multivolumefile-0.2.3 netifaces-0.11.0 numpy-2.2.6 opencv-python-5.0.0.93 packaging-26.2 patch-ng-1.19.1 pluggy-1.6.0 psutil-7.2.2 py7zr-1.1.3 pybcj-1.0.7 pycryptodomex-3.23.0 pyparsing-3.3.2 pyppmd-1.3.1 pyreadline3-3.5.6 pytest-9.1.1 pytest-cov-7.1.0 pytest-repeat-0.9.4 pytest-rerunfailures-16.4 python-dateutil-2.9.0.post0 pywin32-312 requests-2.34.2 semantic-version-2.10.0 six-1.17.0 soupsieve-2.8.4 texttable-1.7.0 tomli-2.4.1 typing_extensions-4.16.0 urllib3-2.7.0 vcstool-0.3.0
+Successfully installed Pygments-2.20.0 aqtinstall-3.3.0 backports.zstd-1.6.0 beautifulsoup4-4.15.0 brotli-1.2.0 bs4-0.0.2 certifi-2026.6.17 charset-normalizer-3.4.9 colorama-0.4.6 coverage-7.15.0 defusedxml-0.7.1 exceptiongroup-1.3.1 humanize-4.16.0 idna-3.18 inflate64-1.0.4 iniconfig-2.3.0 multivolumefile-0.2.3 packaging-26.2 patch-ng-1.19.1 pluggy-1.6.0 psutil-7.2.2 py7zr-1.1.3 pybcj-1.0.7 pycryptodomex-3.23.0 pyppmd-1.3.1 pytest-9.1.1 pytest-cov-7.1.0 pytest-repeat-0.9.4 pytest-rerunfailures-16.4 requests-2.34.2 semantic-version-2.10.0 soupsieve-2.8.4 texttable-1.7.0 tomli-2.4.1 typing_extensions-4.16.0 urllib3-2.7.0
 ```
 
-Check that the pinned tools are installed; this repository uses neither of the two that the command lists, so the check only confirms the environment.
+Check that the pinned tool is installed; this repository does not use it, so the check only confirms the environment.
 
 ```powershell
-& "$env:QAR_VENV\Scripts\python.exe" -m pip list --format=freeze | Select-String -Pattern '^(aqtinstall|colcon-common-extensions)=='
+& "$env:QAR_VENV\Scripts\python.exe" -m pip list --disable-pip-version-check --format=freeze | Select-String -Pattern '^aqtinstall=='
 ```
 ```text
+
 aqtinstall==3.3.0
-colcon-common-extensions==0.3.0
-...
 ```
 
 ## ROS 2 Humble for Windows
@@ -408,13 +407,13 @@ set(PACKAGE_VERSION "1.12.1")
 set(PACKAGE_VERSION "${PACKAGE_VERSION} (${installedBits}bit)")
 ```
 
-What you build here uses the distribution as it is; it needs none of the repairs that other repositories of this stack apply, so the reminder about repair scripts at the end of the output of the script above does not concern this repository. The repair scripts in the folder `scripts` serve qar_rviz_plugin.
+What you build here uses the distribution as it is; it needs none of the repairs that other repositories of this stack apply, so the reminder about repair scripts at the end of the output of the script above does not concern this repository. The repair scripts are part of qar_rviz_plugin.
 
 ## Build and install qar_ogre_adapter
 
 This repository is the one you cloned in [Python environment](#python-environment). The commands below build it from its clone.
 
-Configure with the preset of the repository. The preset selects the generator `Visual Studio 16 2019` for x64, the build folder `build\vs2019-x64` inside the clone and the configuration `RelWithDebInfo`, and it reads the location variables of the layout. Configuring downloads GoogleTest 1.14.0 as an archive from `github.com` and checks its SHA256, so this step needs network access; without it, pass `-DFETCHCONTENT_SOURCE_DIR_GOOGLETEST` with the path of an extracted GoogleTest 1.14.0 folder.
+Configure with the preset of the repository. The preset selects the generator Visual Studio 16 2019 for x64, the build folder `build\vs2019-x64` inside the clone and the configuration `RelWithDebInfo`, and it reads the location variables of the layout. Configuring downloads GoogleTest 1.14.0 as an archive from `github.com` and checks its SHA256, so this step needs network access; without it, pass `-DFETCHCONTENT_SOURCE_DIR_GOOGLETEST` with the path of an extracted GoogleTest 1.14.0 folder.
 
 ```powershell
 cmake --preset vs2019-x64
@@ -434,8 +433,8 @@ Preset CMake variables:
 ...
 -- qar_qar_adapter: QarOS SDK backend, DYNAMIC loading of C:\Program Files\Quaternar\QAROS/bin/qar-streaming-c.dll (no import lib linked)
 ...
--- Configuring done (10.4s)
--- Generating done (0.2s)
+-- Configuring done (12.8s)
+-- Generating done (0.3s)
 -- Build files have been written to: C:/qar/src/qar_ogre_adapter/build/vs2019-x64
 ```
 
@@ -456,6 +455,11 @@ cmake --build --preset vs2019-x64
   qar_ogre_standalone_streaming_sample.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\examples\ogre_standalone_streaming_sample\RelWithDebInfo\qar_ogre_standalone_streaming_sample.exe
 ...
   qar_ogre_live_stream_example.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\examples\qaros_live_stream\RelWithDebInfo\qar_ogre_live_stream_example.exe
+...
+  qar_ogre_adapter_doc_snippets.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\docs\snippets\RelWithDebInfo\qar_ogre_adapter_doc_snippets.exe
+...
+  qar_qar_adapter_tests.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\qar_qar_adapter\test\RelWithDebInfo\qar_qar_adapter_tests.exe
+  qar_ogre_streaming_tests.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\qar_ogre_streaming\test\RelWithDebInfo\qar_ogre_streaming_tests.exe
 ```
 
 Run the tests of the repository. The tests need no QarOS SDK and open no window; [Testing](TESTING.md) explains what they cover.
@@ -466,16 +470,16 @@ ctest --preset vs2019-x64
 ```text
 Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
         Start   1: check_layering_qar_ar_core
-  1/610 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.11 sec
+  1/576 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.17 sec
         Start   2: check_layering_qar_ogre_streaming
-  2/610 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.10 sec
+  2/576 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.15 sec
         Start   3: check_layering_qar_qar_adapter
-  3/610 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.21 sec
+  3/576 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.21 sec
         Start   4: check_layering_examples
 ...
-100% tests passed, 0 tests failed out of 610
+100% tests passed, 0 tests failed out of 576
 
-Total Test time (real) = 117.66 sec
+Total Test time (real) =  95.12 sec
 ```
 
 Install it into the prefix. The install puts the libraries of the three modules `qar_ar_core`, `qar_ogre_streaming` and `qar_qar_adapter` and the vendored QarOS C header below `$env:QAR_PREFIX`, together with the CMake package that the other repositories of this stack find there.
@@ -487,13 +491,8 @@ cmake --install build\vs2019-x64 --config RelWithDebInfo --prefix $env:QAR_PREFI
 -- Installing: C:\qar\install/lib/qar_ar_core.lib
 -- Installing: C:\qar\install/lib/qar_ogre_streaming.lib
 -- Installing: C:\qar\install/lib/qar_qar_adapter_capi.lib
--- Installing: C:\qar\install/lib/qar_qar_adapter_session.lib
--- Installing: C:\qar\install/lib/qar_qar_adapter_render.lib
--- Installing: C:\qar\install/lib/qar_qar_adapter_panels.lib
--- Installing: C:\qar\install/lib/qar_qar_adapter_url.lib
--- Installing: C:\qar\install/lib/qar_qar_adapter_gestures.lib
--- Installing: C:\qar\install/include
 ...
+-- Installing: C:\qar\install/include/qar_qar_adapter/target_rule.hpp
 -- Installing: C:\qar\install/include/qar_streaming.h
 -- Installing: C:\qar\install/share/qar_ogre_adapter/LICENSE.qar_streaming_header
 -- Installing: C:\qar\install/share/qar_ogre_adapter/LICENSE
@@ -505,11 +504,11 @@ cmake --install build\vs2019-x64 --config RelWithDebInfo --prefix $env:QAR_PREFI
 
 ## Install smoke test
 
-The folder `docs/snippets/consumer` of the repository holds a small project that uses the installed package the way your own project does. It is not part of the repository build; it configures on its own against `QAR_PREFIX`. It asks for the version 0.1.0 of the package and for the components `qar_ar_core`, `qar_ogre_streaming`, `render`, `panels`, `url` and `gestures`, and it links their targets. The installed headers are UTF-8 text without a byte order mark, and some comments contain characters outside ASCII; compile your own code with `/utf-8`, as this repository does.
+The folder `docs/snippets/consumer` of the repository holds a small project that uses the installed package the way your own project does. It is not part of the repository build; it configures on its own against `QAR_PREFIX`. It asks for the version 0.2.0 of the package and for the components `qar_ar_core`, `qar_ogre_streaming`, `render`, `url` and `gestures`, and it links their targets. The installed headers are UTF-8 text without a byte order mark, and some comments contain characters outside ASCII; compile your own code with `/utf-8`, as this repository does.
 
 ```cmake
-find_package(qar_ogre_adapter 0.1.0 CONFIG REQUIRED
-  COMPONENTS qar_ar_core qar_ogre_streaming render panels url gestures)
+find_package(qar_ogre_adapter 0.2.0 CONFIG REQUIRED
+  COMPONENTS qar_ar_core qar_ogre_streaming render url gestures)
 ```
 
 Its program prints the version of the package that `find_package` found and the targets that it was linked with, and it calls three functions that touch neither Ogre nor the QarOS SDK: the check whether the QarOS library is loaded, which the wrapper header of `qar_ar_core` declares and the component `capi` defines, the text of a status from `qar_ogre_streaming`, and the parser of a boolean text from `render`. The program therefore needs neither at run time.
@@ -520,7 +519,8 @@ Configure the project against the install prefix, build it, and run it.
 cmake -S docs\snippets\consumer -B build\consumer -G "Visual Studio 16 2019" -A x64 "-DCMAKE_PREFIX_PATH=$env:QAR_PREFIX"
 ```
 ```text
--- Found rviz_ogre_vendor: 11.2.25 (C:/qar/deps/ros2_humble/ros2-windows/share/rviz_ogre_vendor/cmake)
+-- Selecting Windows SDK version 10.0.22621.0 to target Windows 10.0.26200.
+-- The CXX compiler identification is MSVC 19.29.30151.0
 ...
 -- Configuring done (2.1s)
 -- Generating done (0.0s)
@@ -538,8 +538,8 @@ cmake --build build\consumer --config RelWithDebInfo
 .\build\consumer\RelWithDebInfo\qar_ogre_adapter_consumer.exe
 ```
 ```text
-qar_ogre_adapter 0.1.0
-targets: qar_ogre_adapter::qar_ar_core qar_ogre_adapter::qar_ogre_streaming qar_ogre_adapter::render qar_ogre_adapter::panels qar_ogre_adapter::url qar_ogre_adapter::gestures
+qar_ogre_adapter 0.2.0
+targets: qar_ogre_adapter::qar_ar_core qar_ogre_adapter::qar_ogre_streaming qar_ogre_adapter::render qar_ogre_adapter::url qar_ogre_adapter::gestures
 QarOS library loaded: no
 status text: Ok
 parse_bool_env("on"): true
@@ -554,7 +554,7 @@ The installation changes your machine in a few places. This section lists every 
 | Change | Made by | Where it lives | How to undo it |
 |---|---|---|---|
 | The toolchain: Visual Studio 2019 Build Tools, CMake, Git, PowerShell 7, Python 3.10 | the installers of [Toolchain](#toolchain) | the Windows installation and `C:\Program Files` | Uninstall each program in Windows Settings, or with `winget uninstall` and the package id used to install it. |
-| Seven environment variables of your user | the block of [Directory layout and environment variables](#directory-layout-and-environment-variables) | the user environment of Windows | The second block below removes them. |
+| The environment variables of the layout, set for your user | the block of [Directory layout and environment variables](#directory-layout-and-environment-variables) | the environment of your Windows account | The second block below removes them. |
 | The layout folders: the dependencies, the virtual environment, the clones, the install prefix | the steps of this document | `C:\qar` | Delete the folder; the second block below does it. The ROS 2 distribution and the downloads are inside it. |
 | The QarOS SDK | [The QarOS SDK](#the-qaros-sdk) | the installed QAROS, whose folder `QAR_SDK_ROOT` names when you set it | No block below removes it; the paragraph below the table says how to remove it. |
 | The results of the headless sample | `scripts\run_ogre_sample.ps1` | the folder `qar_ogre_sample` in `%TEMP%`, or the folder that you gave as `-OutDir` | Delete the folder. |
@@ -597,7 +597,7 @@ Remove-Item -LiteralPath $full -Recurse -Force -WhatIf
 >
 > This block changes nothing and prints your own folders, so no output is shown here.
 
-The second block deletes the folder that `QAR_ROOT` names and then the seven variables, and nothing else. It leaves the QarOS SDK, the other items of the table and the programs of the toolchain alone. If you gave `QAR_DEPS_ROOT`, `ROS2_INSTALL_ROOT`, `QAR_QT_ROOT`, `QAR_VENV` or `QAR_PREFIX` a value outside the folder of `QAR_ROOT`, delete those folders yourself: the first block prints them. Run the second block when the first one shows the folder that you want to remove:
+The second block deletes the folder that `QAR_ROOT` names and then the variables of the layout, and nothing else. It leaves the QarOS SDK, the other items of the table and the programs of the toolchain alone. If you gave `QAR_DEPS_ROOT`, `ROS2_INSTALL_ROOT`, `QAR_QT_ROOT`, `QAR_VENV` or `QAR_PREFIX` a value outside the folder of `QAR_ROOT`, delete those folders yourself: the first block prints them. Run the second block when the first one shows the folder that you want to remove:
 
 ```powershell
 $folder = $env:QAR_ROOT
@@ -617,7 +617,7 @@ foreach ($name in 'QAR_ROOT', 'QAR_DEPS_ROOT', 'ROS2_INSTALL_ROOT', 'QAR_QT_ROOT
 }
 ```
 
-> Success: the command prints nothing and ends without an error. Afterwards the folder `C:\qar` is gone and the seven variables are deleted from the environment of your Windows user: a new PowerShell 7 window shows them as empty, while a window that was already open keeps the values it had. The QarOS SDK is still there.
+> Success: the command prints nothing and ends without an error. Afterwards the folder `C:\qar` is gone and the variables of the layout are deleted from the environment of your Windows user: a new PowerShell 7 window shows them as empty, while a window that was already open keeps the values it had. The QarOS SDK is still there.
 >
 > This command changes your machine, so no output is shown here.
 

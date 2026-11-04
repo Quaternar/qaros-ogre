@@ -7,8 +7,8 @@ This page lists the public headers of the three modules, the types and functions
 A consumer finds the package with `find_package`, names the components that it needs and links their imported targets. Each component is a static library, so a program links only what it uses:
 
 ```cmake
-find_package(qar_ogre_adapter 0.1.0 CONFIG REQUIRED
-  COMPONENTS qar_ar_core qar_ogre_streaming render panels url gestures)
+find_package(qar_ogre_adapter 0.2.0 CONFIG REQUIRED
+  COMPONENTS qar_ar_core qar_ogre_streaming render url gestures)
 ```
 
 The target that compiles the code of this page links all of them in the same way:
@@ -18,7 +18,6 @@ target_link_libraries(qar_ogre_adapter_doc_snippets PRIVATE
   qar_ogre_adapter::qar_ar_core
   qar_ogre_adapter::qar_ogre_streaming
   qar_ogre_adapter::render
-  qar_ogre_adapter::panels
   qar_ogre_adapter::url
   qar_ogre_adapter::gestures
 )
@@ -31,13 +30,12 @@ target_link_libraries(qar_ogre_adapter_doc_snippets PRIVATE
 | `capi` | `qar_ogre_adapter::capi` | `qar_ar_core` and the compile definition `QAR_ENABLE_DYNAMIC_LOADING` |
 | `session` | `qar_ogre_adapter::session` | `capi` and `qar_ar_core` |
 | `render` | `qar_ogre_adapter::render` | `capi`, `session`, `qar_ar_core` and `qar_ogre_streaming` |
-| `panels` | `qar_ogre_adapter::panels` | `capi` and `qar_ar_core` |
 | `url` | `qar_ogre_adapter::url` | `capi` and `qar_ar_core` |
 | `gestures` | `qar_ogre_adapter::gestures` | `capi` and `qar_ar_core` |
 
 Include a header by its path below the `include` folder of its module, for example `qar_ogre_streaming/types.hpp`. Include the QarOS C header only through `qar_ar_core/qar_streaming_c.hpp`: the vendored header has one include guard, so its first inclusion fixes which optional parts exist, and the wrapper defines `QAR_ENABLE_OPENGL` before it.
 
-The code is in the namespaces `qar_ar_core`, `qar_ogre_streaming` and `qar_qar_adapter`. The first two define a `Status` and a `Result` each, and the types are not interchangeable: `qar_ogre_streaming::Status` has `RenderThreadRequired`, and `qar_ar_core::Status` has `GuiThreadRequired` and `SenderFailed`.
+The code is in the namespaces `qar_ar_core`, `qar_ogre_streaming` and `qar_qar_adapter`. `qar_ogre_streaming` defines a `Status` and a `Result`, with the status `RenderThreadRequired`.
 
 ## Header map
 
@@ -48,12 +46,13 @@ Every public header of the repository, by module. The sections below describe th
 | Header | What it declares |
 |---|---|
 | `qar_streaming_c.hpp` | the one include of the vendored QarOS header |
-| `panel_types.hpp` | `Status`, `Result`, `PanelDesc`, `PanelPlacement`, `PanelPixels`, `PanelNotReadyCause`, `not_ready_split_text`, the diagnostics records of a panel host and `PanelDiagnosticsSink` |
-| `qar_panel_sender.hpp` | the seam of a panel that streams pixels: `IQarPanelSenderAdapter`, `IQarPanelSenderFactory`, `PanelCloseReport` |
+| `pointer_input.hpp` | the vocabulary of AR pointer input: `PointerGesture`, `PointerHand`, `PointerPhase`, `PanelPointerSample`, the interface `IPanelInputSource` and the queue `QueuedPanelInputSource` |
+| `panel_op_result.hpp` | `PanelOpResult`: the outcome of one queued call on a panel |
+| `panel_state_guard.hpp` | `PanelStateGuard`: the decision that keeps a panel in the state that was asked for |
 | `qar_url_panel.hpp` | the seam of a panel whose content is a URL: `IQarUrlPanelAdapter`, `IQarUrlPanelFactory`, `UrlPanelDesc` |
 | `common_name.hpp` | the stable ASCII common names of the QarOS panels and of the app volume: `NameScope`, `make_name_scope`, `make_panel_common_name`, `make_volume_common_name` |
 | `panel_attach.hpp` | the decision about a panel that `qar_gui_panels_get_or_create` returned: `PanelProbe`, `PanelAttachDecision`, `decide_panel_attach` |
-| `panel_input_source.hpp` | the pointer seam: `PanelPointerSample`, `IQarPanelInputSource`, `QueuedPanelInputSource`, the mapping from the QarOS enumerations |
+| `panel_input_source.hpp` | the mapping from the QarOS enumerations and gesture fields to the vocabulary of `pointer_input.hpp` |
 | `pointing_ray.hpp` | the aim of the operator: `PointingRay`, its builders, `HandJointsProbe` and `PointingRaySlot` |
 | `spatial_frames.hpp` | the change between the room frame and the ROS world: `RoomToRosTransform`, `ScenePlacement` and the conversion functions |
 | `spatial_pick.hpp` | spatial selection: `PickTarget`, `resolve_pick_point`, the point, pose and area sessions, `make_nav_goal` |
@@ -82,7 +81,7 @@ Every public header of the repository, by module. The sections below describe th
 
 Four more headers belong to the header-only target `qar_ogre_adapter::qar_ogre_streaming_test_support`, which is not part of the shipped library: `immediate_render_thread_executor.hpp`, `manual_clock.hpp`, `mock_qar_render_sender_adapter.hpp` and `recording_render_lock.hpp`. They are test doubles of `IRenderThreadExecutor`, `IClock`, `IQarRenderSenderAdapter` and `IRenderLock`; [Test doubles](TESTING.md#test-doubles) describes them.
 
-**`qar_qar_adapter`**: the QarOS C API side of the seams, in six components.
+**`qar_qar_adapter`**: the QarOS C API side of the seams, in five components.
 
 | Header | Component | What it declares |
 |---|---|---|
@@ -93,17 +92,15 @@ Four more headers belong to the header-only target `qar_ogre_adapter::qar_ogre_s
 | `onboarding_status.hpp` | `session` | `StatusText`, `OnboardingContext`, `describe_status` |
 | `target_rule.hpp` | `session` | `HubMode`, `is_render_target`, `is_gone`, `resolve_hub_mode` |
 | `gui_call_guard.hpp` | `capi` | `GuiCallTimer`, `QAR_CALL`, `QAR_GUI_TIMED`, `mark_gui_thread`, `mark_owner_thread` |
-| `panel_state_guard.hpp` | `panels`, `url` | `PanelStateKeeper`: the decision to ask a panel for its state again |
+| `panel_state_guard.hpp` | `url` | `PanelStateKeeper`: the decision to ask a panel for its state again |
 | `qar_capi_render_sender_adapter.hpp` | `render` | `QarCApiSenderFactory`, `QarCApiRenderSenderAdapter`, `GlSubmitMode`, `IQarGlTextureCopyHook` |
 | `geo_anchor.hpp` | `render` | `geodetic_to_ecef_enu`, `geo_fix_moved` |
 | `env_config.hpp` | `render` | the parsing functions for the text of environment variables |
 | `render_timing.hpp` | `render` | `RenderTimingState`: the stage timing of the 3D stream |
-| `qar_capi_panel_sender_adapter.hpp` | `panels` | `QarCApiPanelSenderAdapter`, `QarCApiPanelSenderFactory` |
-| `qar_capi_panel_input_source.hpp` | `panels` | `QarCApiPanelInputSource`, `PanelInputStats` |
 | `qar_capi_url_panel_adapter.hpp` | `url` | `QarCApiUrlPanelAdapter`, `QarCApiUrlPanelFactory` |
 | `frame_stall_probe.hpp` | `render` | `FrameStallDetector`, `StallReport`, `mean_rgba8`, `format_stall_line`, and the words of the lines that a sender prints when it starts |
-| `panel_state_log.hpp` | `panels`, `url` | the words of the lines about the state of a panel: `PanelRuntimeRecord`, `RuntimeRecordLog`, `runtime_record_line`, `reconnecting_line`, `url_panel_state_line` |
-| `log_time.hpp` | `render`, `panels`, `url` | `wall_clock_hms_ms`, `hms_ms_of`, `thread_number` and `LogOnce` |
+| `panel_state_log.hpp` | `url` | the words of the lines about the state of a panel: `PanelRuntimeRecord`, `RuntimeRecordLog`, `runtime_record_line`, `reconnecting_line`, `url_panel_state_line` |
+| `log_time.hpp` | `render`, `url` | `wall_clock_hms_ms`, `hms_ms_of`, `thread_number` and `LogOnce` |
 | `qar_capi_spatial_gesture_source.hpp` | `gestures` | `QarCApiSpatialGestureSource`, `SpatialGestureStats` |
 
 The vendored `third_party/qar/include/qar_streaming.h` is the QarOS C header; [The vendored header](SDK_COMPATIBILITY.md#the-vendored-header) says how it is used.
@@ -112,54 +109,19 @@ The vendored `third_party/qar/include/qar_streaming.h` is the QarOS C header; [T
 
 The module uses the types of the QarOS C API and calls none of its functions, so linking it needs neither the SDK library nor the loader.
 
-### The panel seam
+### The panel helpers
 
-A library that shows a panel in AR talks to QarOS only through two seams, and `qar_qar_adapter` implements both. `IQarPanelSenderFactory::create_panel_sender` takes a `PanelDesc` and returns an `IQarPanelSenderAdapter`, or null with the reason in `last_error()`. The adapter is driven once for each tick: `try_begin_frame` reports whether QarOS has a destination ready, and only then does `submit_frame` follow. A panel that is not ready is a state to poll again, not an error. The calls that change the panel, `set_placement` and `set_state`, queue their work, and the outcome of each comes back through `drain_results`, which the host calls on every tick.
+The module holds the Qt-free decisions that a library which streams a panel needs, and the interface that brings AR pointer samples in. A library that shows a panel in AR, such as the Qt library of this stack, defines its own panel interfaces; the helpers below do not depend on them.
 
-`PanelDesc` fixes the size of the pixel buffer for the life of the sender, so a size change needs a new sender, and its common name is the stable name under which QarOS finds the panel again (`make_panel_common_name`, made from the key and a `NameScope`). `content_width` and `content_height` name the part of the buffer that the widget paints, and zero means the whole buffer. `PanelPlacement` holds the pose and the `QarGuiPanelSize`; the pose is a QarOS panel-space pose, whose origin is the midpoint of the top edge, so the panel hangs below it. In the code, `factory` is the panel sender factory of the host and `pixels` the captured picture of the widget.
+`decide_panel_attach` decides what to do with the panel that `qar_gui_panels_get_or_create` returned: it is new, it is an earlier panel of the same name and is reused with its content, size and pose brought up to date, or its name is taken by a panel that cannot be reused, and the repeat with `qar_gui_panels_get_or_create` appends `-v2` for a panel of the other content type or `-r1` to `-r8` for a closed one. `PanelProbe` holds what the probe read, `PanelAttachDecision` the decision and the steps it implies, and `plan_visible_to` turns the list of the peers that see a panel into the additions and the removals that bring it to a wanted list.
 
-```cpp
-qar_ar_core::PanelDesc desc;
-desc.key = "status";                                    // the key that the host uses for the panel
-desc.display_name = "Status";                           // the title that QarOS shows
-desc.buffer_width = 1024;                               // the size of the buffer is fixed for the sender
-desc.buffer_height = 768;
-desc.placement.pose.position = QarVector3{0.0f, 1.6f, -1.0f};
-desc.placement.size = QarGuiPanelSize{0.8f, 0.6f, 1.0f};
+`PanelStateGuard` of `panel_state_guard.hpp` keeps a panel in the state that was asked for, against a QarOS that reports the opposite: it decides whether a record of the runtime is a reason to ask for the state again, and it holds the count of the asks. `PanelOpResult` of `panel_op_result.hpp` is the outcome of one queued call on a panel, which an adapter hands back through its `drain_results`. The common names of the panels (`make_panel_common_name`, made from the key and a `NameScope`) are the stable names under which QarOS finds a panel again.
 
-const std::shared_ptr<qar_ar_core::IQarPanelSenderAdapter> sender = factory->create_panel_sender(desc);
-if (!sender) {
-  std::fprintf(stderr, "panel: %s\n", factory->last_error().c_str());
-  return;
-}
-
-// Once for each tick, on the thread of the host that owns the widget.
-bool ready = false;
-if (sender->try_begin_frame(ready) && ready) {
-  qar_ar_core::PanelPixels frame;
-  frame.data = pixels;
-  frame.width = desc.buffer_width;
-  frame.height = desc.buffer_height;
-  frame.stride_bytes = desc.buffer_width * 4u;          // RGBA: four bytes for each pixel
-  sender->submit_frame(frame);                          // copies the pixels; the buffer stays the host's
-}
-
-sender->close();                                        // the one teardown, in a fixed order
-```
-
-An adapter can also hide and show its panel without closing it. `set_state(state)` changes the state of the QarOS panel with `qar_gui_panels_set_state` to `QAR_GUI_PANEL_STATE_VISIBLE`, `QAR_GUI_PANEL_STATE_MINIMIZED` or `QAR_GUI_PANEL_STATE_HIDDEN`, and the panel, its video sender and its subscriptions stay. It returns false, with the reason in `last_error()`, when the state did not change, and `supports_state()` tells whether the adapter can change a state at all. Both answer false by default, so that an implementation without panel states keeps compiling and its caller falls back to a close. Each change that succeeds prints a line, which [Reading the logs](TROUBLESHOOTING.md#the-logs-of-this-repository) describes.
-
-When `try_begin_frame` reports `out_ready == false`, `not_ready_cause()` says why, until the next call. The answer is a `PanelNotReadyCause`: `NoDestination` when the runtime answered success and no frame cycle, `NoActiveTransfers` when it answered status 604 and no receiver is attached to the stream, and `Reconnecting` when it answered status 603 and a receiver that lost the stream connects again; the default is `NoDestination`. The first time a sender that has shown frames hears 603, one line says so, with the number of frames that it has shown.
-
-`close()` is the one teardown, in a fixed order: it cancels the input subscriptions, closes the QarOS panel unless the operator already closed it in AR, and destroys the video sender. The returned `PanelCloseReport` says what each step did, and a second call returns an empty report and touches nothing. `detach()` does the first and the last step and leaves the QarOS panel as it is, so that the next session finds it again under its common name; `supports_detach()` tells whether an adapter can do that. `decide_panel_attach` decides what to do with the panel that `qar_gui_panels_get_or_create` returned: it is new, it is an earlier panel of the same name and is reused with its content, size and pose brought up to date, or its name is taken by a panel that cannot be reused, and the repeat with `qar_gui_panels_get_or_create` appends `-v2` for a panel of the other content type or `-r1` to `-r8` for a closed one.
-
-The URL seam has the same shape without frames: `IQarUrlPanelFactory::create_url_panel` takes a `UrlPanelDesc` and returns an `IQarUrlPanelAdapter` with `navigate`, `set_placement`, `set_state`, `close` and `detach`. QarOS renders the page in its own browser, so nothing is streamed, and the pose goes to QarOS unchanged, as a panel-space pose. `UrlPanelDesc::visible_to_peers` lists the peers that see the panel, and an empty list means every peer; the adapter passes the list to QarOS only when it is not empty. The adapter prints a line for each change of the state of the panel.
-
-`panel_types.hpp` also defines the records that a panel host reports its state in, `PanelStreamDiagnostics` for one panel and `PanelDiagnosticsSnapshot` for all of them, and the sink `PanelDiagnosticsSink`, whose `on_message` must not block. A record says whether the panel is hidden in AR (`ar_hidden`, with the counters `visibility_changes` and `visibility_failures` and the reason of the last failure), whether it is parked (`parked`), how the streak of not-ready ticks divides by cause (`not_ready_streak_no_destination`, `not_ready_streak_no_transfers` and `not_ready_streak_reconnecting`, which `not_ready_split_text` writes as three numbers separated by slashes), and the brightness of the frame most recently measured (`luminance_all`, `luminance_top`, `luminance_rest` and `alpha_mean`, each from 0 to 255 and negative before the first measure). The snapshot counts the hidden panels (`hidden_panels`), the parked panels (`parked_panels`) and the parks and the revivals of the session.
+The URL seam of `qar_url_panel.hpp` is a panel whose content is a URL: `IQarUrlPanelFactory::create_url_panel` takes a `UrlPanelDesc` and returns an `IQarUrlPanelAdapter` with `navigate`, `set_placement`, `set_state`, `close` and `detach`. QarOS renders the page in its own browser, so nothing is streamed, and the pose goes to QarOS unchanged, as a panel-space pose. `UrlPanelDesc::visible_to_peers` lists the peers that see the panel, and an empty list means every peer; the adapter passes the list to QarOS only when it is not empty. The adapter prints a line for each change of the state of the panel.
 
 ### Pointer samples
 
-Every AR pointer enters through one type, `PanelPointerSample`, and one interface, `IQarPanelInputSource`: the consumer calls `drain` on its own thread and gets everything received since the previous call, oldest first. `drain_closed_panels` lists the panels that the operator closed in AR. A sample carries either room-space data (`has_room_point`, `has_room_start_point`, `has_room_ray`) or an already resolved panel coordinate (`has_panel_uv` with the key of the panel, `u` to the right and `v` downwards, from 0 to 1).
+Every AR pointer enters through one type, `PanelPointerSample`, and one interface, `IPanelInputSource`: the consumer calls `drain` on its own thread and gets everything received since the previous call, oldest first. `drain_closed_panels` lists the panels that the operator closed in AR. A sample carries either room-space data (`has_room_point`, `has_room_start_point`, `has_room_ray`) or an already resolved panel coordinate (`has_panel_uv` with the key of the panel, `u` to the right and `v` downwards, from 0 to 1).
 
 `PointerGesture` is a narrowing of the two QarOS kind enumerations to what a widget can act on, and `PointerPhase` mirrors the phases of QarOS one to one:
 
@@ -496,41 +458,13 @@ When the sender factory returns null for a peer, the manager logs one Error line
 
 `geodetic_to_ecef_enu` converts a latitude, a longitude and a height above the WGS84 ellipsoid into an ECEF origin and the East, North and Up axes, and returns false for a fix that is not a number or out of range. `geo_fix_moved` tells whether two fixes are far enough apart to anchor again, and returns true when a fix is unusable.
 
-## Components panels, url and gestures
+## Components url and gestures
 
-All three need only `qar_ar_core` and `capi`: no Ogre and no Qt. The two panel factories take an `IQarSessionOwner`, which must outlive them. A panel factory returns null from `create_panel_sender` or `create_url_panel` when the owner is not ready, and `last_error()` says so.
-
-**`panels`.** `QarCApiPanelSenderFactory` creates a video sender of the session, takes its stream id, and adds a QarOS panel whose content is that stream. The panel and its video sender are made, changed and destroyed by tasks on the thread that owns the session, so the calls of the adapter return at once and `drain_results` reports the outcomes; a panel whose name is taken by an earlier panel is reused (`reattached()`), and `common_name()` says the name it ended up with. When it was given a `QarCApiPanelInputSource`, every panel that it creates subscribes to its gestures at once, and `close()` cancels the subscription first. A panel without input is better than no panel: a failed subscription is logged and the panel still streams. The source drains pointer samples, and the keys of the panels that the operator closed in AR, on the thread of the host. It has one reader for each panel (`qar_gui_panels_subscribe_all_gesture_events`), because separate readers have no order between them. An open gesture that stays silent for `set_lifecycle_timeout` seconds, 0.75 by default, is cancelled with a synthetic sample. The source also follows the record that the runtime keeps of each panel: from the creation of the panel, each change of its state, of the stream that is its content or of its size is read in the callback, queued, and printed by the next `drain`, with `match` or `MISMATCH` against the stream that the sender was built with. In the code, `owner` is an `IQarSessionOwner`.
-
-```cpp
-// One input source serves all panels; the factory hands it to every panel that it creates.
-auto input = std::make_shared<qar_qar_adapter::QarCApiPanelInputSource>(owner->session());
-qar_qar_adapter::QarCApiPanelSenderFactory factory(owner, input);
-
-qar_ar_core::PanelDesc desc;
-desc.key = "status";
-desc.buffer_width = 1024;
-desc.buffer_height = 768;
-desc.content_width = 1000;                           // the part of the buffer that the widget paints;
-desc.content_height = 760;                           // zero means the whole buffer
-const std::shared_ptr<qar_ar_core::IQarPanelSenderAdapter> sender = factory.create_panel_sender(desc);
-if (!sender) {
-  std::printf("panel: %s\n", factory.last_error().c_str());
-  return;
-}
-
-// The panel is subscribed to its gestures. On the GUI thread, once for each tick:
-std::vector<qar_ar_core::PanelPointerSample> samples;
-input->drain(samples);
-std::vector<std::string> closed;
-input->drain_closed_panels(closed);                  // the keys of the panels that the operator closed in AR
-std::printf("%zu samples, %zu closed, %zu subscriptions\n", samples.size(), closed.size(),
-  input->subscription_count());
-```
+Both need only `qar_ar_core` and `capi`: no Ogre and no Qt. The URL panel factory takes an `IQarSessionOwner`, which must outlive it, and returns null from `create_url_panel` when the owner is not ready, and `last_error()` says so.
 
 The adapters keep the state they asked for. When QarOS reports the opposite one, `HIDDEN` for `VISIBLE` or the reverse, within 5 seconds of the change, the adapter asks again after a hold of one second, at most 3 times within 10 seconds, and a confirming report or the adapter's own state restarts the count; a state that the operator sets later in AR, and `MINIMIZED` or `CLOSED`, are never contested. The decision is the pure `PanelStateKeeper` of `panel_state_guard.hpp`, and the guard prints a line for each ask and a warning when QarOS keeps reporting the opposite after the last ask.
 
-**`url`.** `QarCApiUrlPanelFactory` adds a QarOS panel whose content is a URL, which the browser of QarOS loads. It refuses an empty URL and a size that is not positive, and it needs no input source: the page talks to its own server. Its adapter works like the panel adapter: the calls queue their work for the thread that owns the session and `drain_results` reports the outcomes. In the code, `owner` is an `IQarSessionOwner`.
+**`url`.** `QarCApiUrlPanelFactory` adds a QarOS panel whose content is a URL, which the browser of QarOS loads. It refuses an empty URL and a size that is not positive, and it needs no input source: the page talks to its own server. Its adapter queues the work of its calls for the thread that owns the session, and `drain_results` reports the outcomes. In the code, `owner` is an `IQarSessionOwner`.
 
 ```cpp
 qar_qar_adapter::QarCApiUrlPanelFactory factory(owner);
@@ -614,9 +548,7 @@ std::printf("%d %d %.1f %d | %s from %s, console %d, overwrite the variable of Q
 | constructors of `OgreQarStreamingManager` and `QarSceneLighting` | any | none | `std::invalid_argument` |
 | `render_tick`, the phases of a stream, `QarSceneLighting` | the render thread, under the render lock of the host | GL work | a `Result`; `RenderThreadRequired` off the render thread |
 | `QarSpatialPickVisual` | `stage` on any thread, the rest on the render thread | none | a `Result` from `initialize` |
-| calls of `IQarPanelSenderAdapter` and of `IQarUrlPanelAdapter` | the GUI thread of the host | none: the work is queued for the thread of the owner, and `try_begin_frame` does not block | `false` and `last_error()`; the outcome of a queued call arrives through `drain_results`; `close` returns a report |
-| `subscribe_panel`, `unsubscribe_panel` of the panel input source | the thread that owns the session | each can wait for the Hub | `false` and `last_error()` |
-| `drain` of the panel input source | the GUI thread of the host | none | none |
+| calls of `IQarUrlPanelAdapter` | the GUI thread of the host | none: the work is queued for the thread of the owner | `false` and `last_error()`; the outcome of a queued call arrives through `drain_results` |
 | `QueuedPanelInputSource`, `PointingRaySlot`, `TimingSink::append` | any | one short mutex | none |
 | the callbacks of QarOS | a thread of the QarOS library | they only convert and queue, take one lock, and never subscribe | none |
 
@@ -632,9 +564,10 @@ include\qar_streaming.h
 include\qar_ar_core\common_name.hpp
 include\qar_ar_core\panel_attach.hpp
 include\qar_ar_core\panel_input_source.hpp
-include\qar_ar_core\panel_types.hpp
+include\qar_ar_core\panel_op_result.hpp
+include\qar_ar_core\panel_state_guard.hpp
+include\qar_ar_core\pointer_input.hpp
 include\qar_ar_core\pointing_ray.hpp
-include\qar_ar_core\qar_panel_sender.hpp
 include\qar_ar_core\qar_streaming_c.hpp
 include\qar_ar_core\qar_url_panel.hpp
 include\qar_ar_core\spatial_frames.hpp
@@ -668,8 +601,6 @@ include\qar_qar_adapter\onboarding_status.hpp
 include\qar_qar_adapter\panel_state_guard.hpp
 include\qar_qar_adapter\panel_state_log.hpp
 include\qar_qar_adapter\qar_capi_input_slots.hpp
-include\qar_qar_adapter\qar_capi_panel_input_source.hpp
-include\qar_qar_adapter\qar_capi_panel_sender_adapter.hpp
 include\qar_qar_adapter\qar_capi_render_sender_adapter.hpp
 include\qar_qar_adapter\qar_capi_session_owner.hpp
 include\qar_qar_adapter\qar_capi_spatial_gesture_source.hpp
@@ -681,7 +612,6 @@ lib\qar_ar_core.lib
 lib\qar_ogre_streaming.lib
 lib\qar_qar_adapter_capi.lib
 lib\qar_qar_adapter_gestures.lib
-lib\qar_qar_adapter_panels.lib
 lib\qar_qar_adapter_render.lib
 lib\qar_qar_adapter_session.lib
 lib\qar_qar_adapter_url.lib

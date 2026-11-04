@@ -22,16 +22,16 @@ ctest --preset vs2019-x64
 ```text
 Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
         Start   1: check_layering_qar_ar_core
-  1/610 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.13 sec
+  1/576 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.13 sec
         Start   2: check_layering_qar_ogre_streaming
-  2/610 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.11 sec
+  2/576 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.13 sec
         Start   3: check_layering_qar_qar_adapter
-  3/610 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.22 sec
+  3/576 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.20 sec
         Start   4: check_layering_examples
 ...
-100% tests passed, 0 tests failed out of 610
+100% tests passed, 0 tests failed out of 576
 
-Total Test time (real) = 117.38 sec
+Total Test time (real) =  94.95 sec
 ```
 
 The last lines are the summary: how many tests passed, and the names of those that failed. A test that is skipped is reported as skipped and does not count as a failure.
@@ -54,9 +54,9 @@ Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
   Test   #6: StereoStreamConfig.DefaultsAreValid
   Test   #7: StereoStreamConfig.RejectsZeroDimensions
 ...
-  Test #610: HubModeRule.AnExplicitRequestWinsAndAutoLooksAtThePairingAndTheInstall
+  Test #576: HubModeRule.AnExplicitRequestWinsAndAutoLooksAtThePairingAndTheInstall
 
-Total Tests: 610
+Total Tests: 576
 ```
 
 ```powershell
@@ -65,11 +65,11 @@ ctest --preset vs2019-x64 -R check_layering_selftest
 ```text
 Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
     Start 5: check_layering_selftest
-1/1 Test #5: check_layering_selftest ..........   Passed    0.06 sec
+1/1 Test #5: check_layering_selftest ..........   Passed    0.11 sec
 
 100% tests passed, 0 tests failed out of 1
 
-Total Test time (real) =   0.09 sec
+Total Test time (real) =   0.14 sec
 ```
 
 Use `-R` with a part of a suite name to run one suite, and add `-j` followed by a number to run tests in parallel. When a test fails, its output is printed by the preset; add the option `--rerun-failed` to the command to run only the tests that failed in the last run.
@@ -85,7 +85,7 @@ The unit tests are four GoogleTest executables, `qar_ar_core_tests`, `qar_ogre_s
 | `qar_ar_core_tests` | `SpatialFrames`, `ScenePlacementTest`, `GesturePointsAreInAppSpace` | the change of axes between the QarOS space and the ROS world (up, forward, right, anchor yaw, height and stand-off, round trips) and the placement of the scene |
 | `qar_ar_core_tests` | `ResolvePickPoint`, `PointPickSession`, `PosePickSession`, `AreaPick`, `AreaPickSessionTest`, `PlaneBasis`, `NavGoal`, `SpatialPointerFromSample`, `YawQuaternion`, `AreaPickSession` | the resolution of a pick ray against a plane or at a depth, the state machines of point, pose and area picks (press, update, release, cancel; a hover never commits) and navigation goals |
 | `qar_ar_core_tests` | `CommonName` | the stable ASCII common names of the panels and of the app volume: the sanitized labels, the hash of the unsanitized key, the length limits |
-| `qar_ar_core_tests` | `PanelAttach`, `PanelSeams`, `HandIndex` | the decision about a panel that `qar_gui_panels_get_or_create` returned (new, reused, taken by another content type, closed, the suffix walk) and the defaults of the panel seams |
+| `qar_ar_core_tests` | `PanelAttach`, `PanelSeams`, `UrlPanelSeams`, `PanelStateDecision`, `PanelStatePoll`, `HandIndex` | the decision about a panel that `qar_gui_panels_get_or_create` returned (new, reused, taken by another content type, closed, the suffix walk), the defaults of the panel seams, and the decision to ask a panel for its state again, over scripted times |
 | `qar_ar_core_tests` | `TimingSink`, `TimingLog` | the timing CSV writer: header, row width, bounded queue, concurrent appenders, an unwritable folder, and the opt-in environment variable |
 | `qar_ogre_streaming_tests` | `StereoStreamConfig`, `PeerId`, `ManagerConstruction`, `ManagerBookkeeping`, `ManagerRenderTick` | the validation of a stream configuration (zero size, zero frame rate and a layout that is not separated textures are rejected), peer identifiers, and the manager: null seams are rejected, streams are created, looked up and destroyed, a failing sender factory surfaces, and a render tick off the render thread is refused |
 | `qar_ogre_streaming_tests` | `ManagerSenderWait` | what the manager logs while a sender factory returns null: one Error line for the first null and one summary line when the wait ends |
@@ -100,7 +100,7 @@ The unit tests are four GoogleTest executables, `qar_ar_core_tests`, `qar_ogre_s
 | `qar_qar_adapter_tests` | `FrameStall`, `SenderStartLines` | a gap of two seconds between two frames is a stall and is reported once, with the mean colour of the first frame after it, and the words of the lines that a sender prints when it starts |
 | `qar_qar_adapter_tests` | `PanelStateLog`, `RuntimeRecord`, `RuntimeRecordLog`, `PanelLines`, `LogTime`, `LogOnce`, `ThreadNumber` | the line of a change of the state of a panel, the record that the runtime keeps of a panel (a stream that is ours reads match and another one MISMATCH, a change of state, stream or size is a change and nothing else is, the numbering, and the bounded queue), the stamp of a line, and a guard that lets exactly one of many threads through |
 | `qar_qar_adapter_tests` | `RenderFactoryQueue`, `RenderFactoryAttach`, `RenderFactoryLifetime`, `RenderFactoryPending`, `RenderFactoryAsync` | the render sender factory on the session owner, which runs on the fake library: the queues of new and closed peers, the attach and its states, the weak reference to the owner, the pending creations and the asynchronous results |
-| `qar_qar_adapter_tests` | `PanelSender`, `UrlPanel`, `PanelStateGuard`, `PanelStateDecision`, `PanelStatePoll` | the panel adapters on the thread of the owner: the queued create, place, state and teardown tasks, the results that `drain_results` hands out, the reattach of a panel, and the decision to ask a panel for its state again, over scripted times |
+| `qar_qar_adapter_tests` | `UrlPanel`, `PanelStateGuard` | the URL panel adapter on the thread of the owner: the queued create, place, state and teardown tasks, the results that `drain_results` hands out, the reattach of a panel, and the keeper that asks a panel for its state again |
 | `qar_qar_adapter_session_tests` | `SessionOwnerLocal`, `SessionOwnerRemote`, `SessionOwnerMode`, `SessionOwnerConfigure`, `SessionOwnerRefusedStart` | joining the Hub of this PC and of another PC on the fake library: the approval, the pairing with a code, the rejoin, the choice of the mode and the settings that are kept for the next connect |
 | `qar_qar_adapter_session_tests` | `SessionOwnerTargets`, `SessionOwnerListener`, `SessionOwnerInvites`, `SessionOwnerTasks`, `SessionOwnerHandOver`, `SessionOwnerTeardown` | the table of targets and the cap of served targets, the listener, the invite of a device, the tasks of the owner thread with the drop rules, the hand-over of the session to the consumer and the bounded teardown |
 | `qar_qar_adapter_session_tests` | `GuiCallGuard`, `IdentityStore`, `OnboardingStatus`, `TargetRule`, `HubModeRule` | the timer of QarOS calls, the identity file and its folder, the plain-words texts of the status codes, the rule that selects the render targets and the rule that selects the Hub mode |
@@ -152,9 +152,9 @@ The commands call the interpreter of the virtual environment, which is optional 
 & "$env:QAR_VENV\Scripts\python.exe" scripts\check_layering.py --all
 ```
 ```text
-check_layering qar_ar_core: OK (23 files)
+check_layering qar_ar_core: OK (26 files)
 check_layering qar_ogre_streaming: OK (54 files)
-check_layering qar_qar_adapter: OK (50 files)
+check_layering qar_qar_adapter: OK (46 files)
 check_layering examples: OK (7 files)
 ```
 
@@ -179,7 +179,7 @@ For this repository the guard checks four modules: `qar_ar_core`, `qar_ogre_stre
 
 - `qar_ar_core` includes only the standard library, one platform header and its own headers, and it calls no function of the QarOS C API. Only its wrapper header includes the vendored C header.
 - `qar_ogre_streaming` includes Ogre and `qar_ar_core`, and it reaches the C types through the wrapper header only.
-- `qar_qar_adapter` includes `qar_ar_core` and the two seam headers of `qar_ogre_streaming`, and only the component `render` may include them. Each of the six components includes only its own headers and those of the components that it may use.
+- `qar_qar_adapter` includes `qar_ar_core` and the two seam headers of `qar_ogre_streaming`, and only the component `render` may include them. Each of the five components includes only its own headers and those of the components that it may use.
 - Every folder under `examples` has its own entry. The headless sample may include `qar_ogre_streaming` and `qar_ar_core`; the live example may in addition include the headers of the component `render`.
 
 No module of this repository includes a Qt, ROS or RViz header.

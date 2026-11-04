@@ -28,7 +28,6 @@ This page helps when a step of this documentation fails or when a stream does no
 | A target is in the session and gets no stream | [A target gets no stream](#a-target-gets-no-stream) |
 | The log says that no render stream can be created without an app volume | [No render stream without an app volume](#no-render-stream-without-an-app-volume) |
 | `last_error()` says that `qar_library_load` failed | [The QarOS library does not load](#the-qaros-library-does-not-load) |
-| The log shows the codes 603 or 604 | [The codes 603 and 604](#the-codes-603-and-604) |
 | The log of the Visualizer shows the code 507 every ten seconds | [Code 507 every ten seconds](#code-507-every-ten-seconds) |
 | The log says that a backend was rejected | [The log says that a backend was rejected](#the-log-says-that-a-backend-was-rejected) |
 | The sample or the example ends at once and Windows names a missing DLL | [The program cannot find the Ogre DLLs](#the-program-cannot-find-the-ogre-dlls) |
@@ -49,11 +48,13 @@ This page helps when a step of this documentation fails or when a stream does no
 
 ### A command of this documentation fails in Windows PowerShell
 
-**Symptom.** A command fails with a syntax error, or with an unknown command or parameter, in a window titled Windows PowerShell. **Cause.** Every command of this documentation was run in PowerShell 7 (`pwsh`); Windows PowerShell 5.1 is not what it was written and recorded for. **Fix.** Start `pwsh` and run the command there. The helper file `scripts\qar_locations.ps1` is the one script that states that it works in both editions.
+**Symptom.** A command fails with a syntax error, or with an unknown command or parameter, in a window titled Windows PowerShell. **Cause.** Every command of this documentation was run in PowerShell 7 (`pwsh`); Windows PowerShell 5.1 is not what it was written and recorded for. **Fix.** Start `pwsh` and run the command there.
+The helper file `scripts\qar_locations.ps1` is the one script that states that it works in both editions.
 
 ### A download fails with a certificate error
 
-**Symptom.** `pip`, `aqt`, `git` or `winget` stops with a certificate verification error, or CMake cannot download GoogleTest. **Cause.** Your network inspects TLS traffic and re-signs it with a company certificate that these tools do not trust by themselves. On the reference machine behind such a network, the downloads of `scripts\fetch_dependencies.ps1` worked, because they use the Windows certificate store, while the tools below needed the following settings.
+**Symptom.** `pip`, `aqt`, `git` or `winget` stops with a certificate verification error, or CMake cannot download GoogleTest. **Cause.** Your network inspects TLS traffic and re-signs it with a company certificate that these tools do not trust by themselves.
+On the reference machine behind such a network, the downloads of `scripts\fetch_dependencies.ps1` worked, because they use the Windows certificate store, while the tools below needed the following settings.
 
 - `pip`: point it at a bundle that contains your company root certificate with its `--cert` option.
 - `aqt` and other Python programs: set the environment variables `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` to the same bundle.
@@ -110,7 +111,8 @@ UDP 7446 is free
 ### The QarOS library crashes while it starts
 
 **Symptom.** The process ends with an access violation inside `qar_library_init`, and the call stack is in a `MSVCP140.dll` that lies next to the program. **Cause.** QarOS needs a Microsoft C++ runtime of version 14.40 or newer, and the process was using an older copy that lies next to the host program. The authors of this stack observed this in qar_rviz_plugin, where the older copy is the one that the ROS 2 distribution ships beside `rviz2.exe`.
-**What the loader of this stack does.** The adapter loads `qar-streaming-c.dll` by its full path, with the flags `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR` and `LOAD_LIBRARY_SEARCH_SYSTEM32` that the loader of the vendored header sets. Windows then searches for the dependencies of the library in the folder of the library first and then in the system folder, and never in the folder of the host program, the current folder or `PATH`. The runtime files in the QAROS `bin` folder therefore come before an older copy in the folder of the host program, and a runtime file that is missing from that folder is not taken from the folder of the host program. This is the order of the search and no guarantee: Windows uses a module of the same name that the process already holds, whichever folder it came from, so a runtime that the host program has already loaded stays in use.
+**What the loader of this stack does.** The adapter loads `qar-streaming-c.dll` by its full path, with the flags `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR` and `LOAD_LIBRARY_SEARCH_SYSTEM32` that the loader of the vendored header sets.
+Windows then searches for the dependencies of the library in the folder of the library first and then in the system folder, and never in the folder of the host program, the current folder or `PATH`. The runtime files in the QAROS `bin` folder therefore come before an older copy in the folder of the host program, and a runtime file that is missing from that folder is not taken from the folder of the host program. This is the order of the search and no guarantee: Windows uses a module of the same name that the process already holds, whichever folder it came from, so a runtime that the host program has already loaded stays in use.
 **Fix.** In qar_rviz_plugin the authors of this stack got past the crash by replacing the runtime files next to `rviz2.exe` with the same files of version 14.4x from the system folder. If the crash remains, report it together with the versions of the `MSVCP140.dll` files on your machine.
 
 ### The stream stutters when the source window is covered
@@ -141,6 +143,7 @@ The library writes its log files to the folder `quaternar` inside your `TEMP` fo
 
 The library reads its severity from the environment variable `QAR_LOG_SEVERITY`, through the environment table of the C runtime, and that variable wins over the severity field of the library initialisation, in both directions: the field cannot make a run quieter than the variable, and the variable cannot be overridden by the field. A change made with the Windows function that sets an environment variable is not seen by the library; the adapter of this stack therefore sets the variable with the C runtime function before it initialises the library, and also passes the severity in the initialisation structure. The library accepts the spellings trace, debug, info, warn, warning, error and fatal, in any letter case, and no others; this stack accepts the same spellings.
 
+
 ### How much a trace log writes
 
 A run at trace severity writes hundreds of thousands of lines in a short time. Use trace only for the log that QuaternAR asks for, delete it afterwards, and run at warn or higher otherwise. [Installation and build problems](#installation-and-build-problems) and [Run-time problems](#run-time-problems) describe what a large log does to a machine.
@@ -156,7 +159,6 @@ The libraries of this repository write to standard error. Every line starts with
 | Prefix | Written by | What the lines say |
 |---|---|---|
 | `[qar-adapter]` | the session factory and the render sender | the bootstrap and its failures, the setting of the library log, the peers that are admitted or refused, the creation of senders and the first frame and the first bind of each, the OpenGL contexts, the copy into the QarOS textures, the first frame after a stall with its mean colour, and the first hand data |
-| `[qar-panel-adapter]` | the panel sender | the creation of a panel, its subscription to AR input and its retirement, each change of its state, the record that the runtime keeps of it, a transfer that reconnects, its first frame, and failures that start with `***` |
 | `[qar-url-panel-adapter]` | the URL panel adapter | each change of the state of a panel, with its identifier, and a failed call |
 | `[qar-panel-input]` | the panel input source | one line for each gesture event of a panel, with its position in pixels and the resulting u and v, or the word SKIPPED with the reason |
 | `[qar-spatial]` | the app-volume gesture source | the subscription, and for each gesture event the points, the ray and the outcome |
@@ -268,7 +270,7 @@ The entries are about a stream that does not reach the Visualizer or does not lo
 
 ### The program does not join the Hub
 
-**Symptom.** The state of the owner stays at `kWaitingForApproval`, `kNeedsCode` or `kFailed`, and the example prints a failure line. **Cause.** The owner turns the status of the failed call into a sentence. The Hub of this PC asks the person at the PC to allow the program: nobody answered in time (the approval waits 120 seconds unless the configuration says otherwise, and the Hub takes at most 600), the person denied it or closed the prompt, or the program does not match what was approved because it was moved, copied or rebuilt. The Hub may not be running and could not be started, or the program that answers is not the installed, signed QAROS. For the Hub of another PC the code was wrong or has expired (a code lives about 10 seconds and works once), no pairing with that Hub is stored, or the stored pairing has expired or was revoked. QAROS may also not be installed, with `QAROS_RUNTIME_DIR` unset. **Fix.** Connect again and click Allow in the QAROS window; after a rebuild the Hub asks again. For another PC type the current code of its Hub, or pair again. These cases are described from the code of the owner (`onboarding_status.cpp`); the denial, the timeout, a Hub that stops while the program is connected and a pairing with another PC were not run in a live session.
+**Symptom.** The state of the owner stays at `kWaitingForApproval`, `kNeedsCode` or `kFailed`, and the example prints a failure line. **Cause.** The owner turns the status of the failed call into a sentence. The Hub of this PC asks the person at the PC to allow the program: nobody answered in time (the approval waits 120 seconds unless the configuration says otherwise, and the Hub takes at most 600), the person denied it or closed the prompt, or the program does not match what was approved because it was moved, copied or rebuilt. The Hub may not be running and could not be started, or the program that answers is not the installed, signed QAROS. For the Hub of another PC the code was wrong or has expired, no pairing with that Hub is stored, or the stored pairing has expired or was revoked. QAROS may also not be installed, with `QAROS_RUNTIME_DIR` unset. **Fix.** Connect again and click Allow in the QAROS window; after a rebuild the Hub asks again. For another PC type the current code of its Hub, or pair again. These cases are described from the code of the owner (`onboarding_status.cpp`); the denial, the timeout, a Hub that stops while the program is connected and a pairing with another PC were not run in a live session.
 
 ### A target never appears
 
@@ -285,10 +287,6 @@ The entries are about a stream that does not reach the Visualizer or does not lo
 ### The QarOS library does not load
 
 **Symptom.** The owner fails in the state `kLoading`, and the lines of the owner say `no QAROS runtime was found (see the lookup lines above)`, or `qar_library_load failed for '<path>'` when the configuration names a library file. **Cause.** No library is found in the order that the header lists (a library beside the program, the folder of `QAROS_RUNTIME_DIR`, the installed QAROS, `PATH`), or a DLL that the library needs cannot be found. The loader looks for the dependencies in the folder of the library and in the system folder only, never in the folder of the program, in `PATH` or in the current folder. **Fix.** Install QAROS, or give `SessionOwnerConfig::library_path` the path of `qar-streaming-c.dll`, and deploy that folder whole. [Runtime deployment](SDK_COMPATIBILITY.md#runtime-deployment) has the details.
-
-### The codes 603 and 604
-
-**Symptom.** The log shows the status 603 or 604 from the call that begins a frame of a video stream. **Cause.** The header names 603 *stream is reconnecting* and 604 *no active transfers*. A panel sender exists before anything in the headset is attached to its stream, so both are states that pass, not errors, and the panel adapter reports them as not ready and the host polls again. In the log of the mixer, the line *MediaStreamingStreamIsReconnecting* with the code 603 belongs to a receiver of a panel stream that is reconnecting. **Fix.** None. The 3D stream treats any other error of its begin-frame call as a skip with the reason `SenderError` and the text of the call as detail; only 804, a closed producer stream, marks the sender closed, and `poll_closed_peers` then lists the peer.
 
 ### Code 507 every ten seconds
 

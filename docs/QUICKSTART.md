@@ -48,7 +48,7 @@ include\qar_streaming.h        True
 55E6E3F48D940CA29331F0528FE475C1B7230FB19A59C31D5525C6E90B097F6C
 ```
 
-3. Clone this repository and go to the folder of the clone; the remaining steps run there ([Python environment](INSTALL.md#python-environment)).
+3. Clone this repository and go to the folder of the clone; the remaining steps run there ([Clone this repository](INSTALL.md#clone-this-repository)).
 
 ```powershell
 git clone https://github.com/Quaternar/qaros-ogre "$env:QAR_ROOT\src\qar_ogre_adapter"
@@ -62,7 +62,7 @@ done.
 Set-Location "$env:QAR_ROOT\src\qar_ogre_adapter"
 ```
 
-4. Download and unpack the ROS 2 Humble distribution, which provides Ogre ([ROS 2 Humble for Windows](INSTALL.md#ros-2-humble-for-windows)). This repository needs none of the repairs that the reminder at the end of the output mentions: the repair scripts in the folder `scripts` serve qar_rviz_plugin.
+4. Download and unpack the ROS 2 Humble distribution, which provides Ogre ([ROS 2 Humble for Windows](INSTALL.md#ros-2-humble-for-windows)). This repository needs none of the repairs that the reminder at the end of the output mentions: the repair scripts are part of qar_rviz_plugin.
 
 ```powershell
 .\scripts\fetch_dependencies.ps1
@@ -103,8 +103,8 @@ Preset CMake variables:
 ...
 -- qar_qar_adapter: QarOS SDK backend, DYNAMIC loading of C:\Program Files\Quaternar\QAROS/bin/qar-streaming-c.dll (no import lib linked)
 ...
--- Configuring done (10.4s)
--- Generating done (0.2s)
+-- Configuring done (12.8s)
+-- Generating done (0.3s)
 -- Build files have been written to: C:/qar/src/qar_ogre_adapter/build/vs2019-x64
 ```
 
@@ -125,6 +125,11 @@ cmake --build --preset vs2019-x64
   qar_ogre_standalone_streaming_sample.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\examples\ogre_standalone_streaming_sample\RelWithDebInfo\qar_ogre_standalone_streaming_sample.exe
 ...
   qar_ogre_live_stream_example.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\examples\qaros_live_stream\RelWithDebInfo\qar_ogre_live_stream_example.exe
+...
+  qar_ogre_adapter_doc_snippets.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\docs\snippets\RelWithDebInfo\qar_ogre_adapter_doc_snippets.exe
+...
+  qar_qar_adapter_tests.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\qar_qar_adapter\test\RelWithDebInfo\qar_qar_adapter_tests.exe
+  qar_ogre_streaming_tests.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\qar_ogre_streaming\test\RelWithDebInfo\qar_ogre_streaming_tests.exe
 ```
 
 7. Run the tests ([Testing](TESTING.md)).
@@ -135,16 +140,16 @@ ctest --preset vs2019-x64
 ```text
 Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
         Start   1: check_layering_qar_ar_core
-  1/610 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.11 sec
+  1/576 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.17 sec
         Start   2: check_layering_qar_ogre_streaming
-  2/610 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.10 sec
+  2/576 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.15 sec
         Start   3: check_layering_qar_qar_adapter
-  3/610 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.21 sec
+  3/576 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.21 sec
         Start   4: check_layering_examples
 ...
-100% tests passed, 0 tests failed out of 610
+100% tests passed, 0 tests failed out of 576
 
-Total Test time (real) = 117.66 sec
+Total Test time (real) =  95.12 sec
 ```
 
 8. Run the headless sample. It renders an Ogre scene for three synthetic peers and writes their stereo images; it needs no QarOS SDK ([Run the headless sample](GETTING_STARTED.md#run-the-headless-sample)).

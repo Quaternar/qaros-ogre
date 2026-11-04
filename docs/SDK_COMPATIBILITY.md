@@ -9,9 +9,8 @@ QAROS has a product version. The setup program records it in the registry value 
 | 0.9.0-dev.3008+65dc9aeb | verified | The installation that this stack was built, tested and run against. The vendored C header is the header of this installation. |
 | any other version | not verified | The stack may work with it, but nobody has checked. |
 
-The vendored header declares these three parts of the C API, all of which the code uses:
+The vendored header declares these two parts of the C API, both of which the code uses:
 
-- the function `qar_gui_panels_subscribe_all_gesture_events`, which subscribes to all gesture events of a GUI panel;
 - the parameter structure `QarStreamParamsOpenGlWgl`, which hands the Windows OpenGL context of the host to a render stream;
 - the field `app_volume_id` of `QarRenderSenderInit`, which must not be NULL: a NULL id is rejected with the status `QAR_STATUS_APP_VOLUME_INVALID_ID`.
 
@@ -47,22 +46,21 @@ Set-Location "$env:QAR_ROOT\src\qar_ogre_adapter"
 55E6E3F48D940CA29331F0528FE475C1B7230FB19A59C31D5525C6E90B097F6C
 ```
 
-If the two hashes are equal, your QAROS has the C API of the verified version. If they differ, your installation is another one. The third command checks whether the header of your installation still declares the three parts of the C API that the code uses; it prints True for each item that the header declares.
+If the two hashes are equal, your QAROS has the C API of the verified version. If they differ, your installation is another one. The third command checks whether the header of your installation still declares the parts of the C API that the code uses; it prints True for each item that the header declares.
 
 ```powershell
 $qaros = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Quaternar\QAROS'
 $header = Join-Path $qaros.InstallFolder 'include\qar_streaming.h'
-foreach ($name in 'qar_gui_panels_subscribe_all_gesture_events', 'QarStreamParamsOpenGlWgl', 'app_volume_id') {
+foreach ($name in 'QarStreamParamsOpenGlWgl', 'app_volume_id') {
     '{0,-46} {1}' -f $name, (Select-String -LiteralPath $header -Pattern $name -SimpleMatch -Quiet)
 }
 ```
 ```text
-qar_gui_panels_subscribe_all_gesture_events    True
 QarStreamParamsOpenGlWgl                       True
 app_volume_id                                  True
 ```
 
-An installation that has all three items and a different header is not verified: the stack may work with it, but nobody has checked. Build the repositories, run the tests, and read the changes listed for each version before you rely on it.
+An installation that has all the items and a different header is not verified: the stack may work with it, but nobody has checked. Build the repositories, run the tests, and read the changes listed for each version before you rely on it.
 
 ## Updating the QarOS header
 
@@ -76,7 +74,7 @@ To move to another QAROS version, install it as described in [The QarOS SDK](INS
 
 ### Rebuild order
 
-After the header has changed, rebuild the repositories in the order of their dependencies: qar_ogre_adapter first, then qar_qt_streaming, and qar_rviz_plugin last. Each repository is built and installed into the prefix as described in its installation document, and the later ones find the new header and libraries there.
+After the header has changed, rebuild the repositories in the order of their dependencies: qar_ogre_adapter and qar_qt_streaming first, and qar_rviz_plugin last. Each repository is built and installed into the prefix as described in its installation document, and the later ones find the new header and libraries there.
 
 Rebuild from scratch rather than incrementally: an incremental build can keep objects that were compiled against the old header.
 
@@ -94,6 +92,8 @@ cmake --build --preset vs2019-x64 --clean-first
   qar_ogre_standalone_streaming_sample.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\examples\ogre_standalone_streaming_sample\RelWithDebInfo\qar_ogre_standalone_streaming_sample.exe
 ...
   qar_ogre_live_stream_example.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\examples\qaros_live_stream\RelWithDebInfo\qar_ogre_live_stream_example.exe
+...
+  qar_ogre_streaming_tests.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\qar_ogre_streaming\test\RelWithDebInfo\qar_ogre_streaming_tests.exe
 ...
 ```
 
@@ -159,16 +159,15 @@ Exactly one file of this repository includes the header: the wrapper `qar_ar_cor
 
 A header that renumbers an enumeration that this stack maps must not go unnoticed, so the values are pinned at compile time. The input seam checks that the gesture kinds of an app volume, the gesture kinds of a panel and the gesture phases still have the values that its mapping functions were written for. If one of these checks fires, read the new header and change the mapping before you change the pinned number: a stale mapping would turn a hover into a click.
 
-The vendored header declares three parts of the C API that the code uses. The command looks for each of them in the vendored file, whose path is relative to the folder of the clone, and prints True when it finds it.
+The vendored header declares two parts of the C API that the code uses. The command looks for each of them in the vendored file, whose path is relative to the folder of the clone, and prints True when it finds it.
 
 ```powershell
 $header = 'third_party\qar\include\qar_streaming.h'
-foreach ($name in 'qar_gui_panels_subscribe_all_gesture_events', 'QarStreamParamsOpenGlWgl', 'app_volume_id') {
+foreach ($name in 'QarStreamParamsOpenGlWgl', 'app_volume_id') {
     '{0,-46} {1}' -f $name, (Select-String -LiteralPath $header -Pattern $name -SimpleMatch -Quiet)
 }
 ```
 ```text
-qar_gui_panels_subscribe_all_gesture_events    True
 QarStreamParamsOpenGlWgl                       True
 app_volume_id                                  True
 ```
