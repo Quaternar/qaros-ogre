@@ -325,10 +325,11 @@ How a program joins the QAROS Hub is described by QuaternAR: [Onboarding and ses
 
 ### Clone this repository
 
-The next steps use the scripts and the `requirements.txt` of this repository, so clone it first.
+The next steps use the scripts and the `requirements.txt` of this repository, so clone it first. The clone needs `--recurse-submodules`: the QarOS headers come from the submodule `external/qaros`, a checkout of the public qaros repository. That repository stores some images in Git LFS, which the build does not need, so `GIT_LFS_SKIP_SMUDGE=1` skips them. In an existing clone, fetch the submodule with `git submodule update --init`.
 
 ```powershell
-git clone https://github.com/Quaternar/qaros-ogre "$env:QAR_ROOT\src\qar_ogre_adapter"
+$env:GIT_LFS_SKIP_SMUDGE = 1
+git clone --recurse-submodules https://github.com/Quaternar/qaros-ogre "$env:QAR_ROOT\src\qar_ogre_adapter"
 ```
 ```text
 Cloning into 'C:\qar\src\qar_ogre_adapter'...
@@ -482,7 +483,7 @@ Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
 Total Test time (real) =  95.12 sec
 ```
 
-Install it into the prefix. The install puts the libraries of the three modules `qar_ar_core`, `qar_ogre_streaming` and `qar_qar_adapter` and the vendored QarOS C header below `$env:QAR_PREFIX`, together with the CMake package that the other repositories of this stack find there.
+Install it into the prefix. The install puts the libraries of the three modules `qar_ar_core`, `qar_ogre_streaming` and `qar_qar_adapter` and the QarOS C and C++ headers of the qaros submodule below `$env:QAR_PREFIX`, together with the CMake package that the other repositories of this stack find there.
 
 ```powershell
 cmake --install build\vs2019-x64 --config RelWithDebInfo --prefix $env:QAR_PREFIX
@@ -494,7 +495,9 @@ cmake --install build\vs2019-x64 --config RelWithDebInfo --prefix $env:QAR_PREFI
 ...
 -- Installing: C:\qar\install/include/qar_qar_adapter/target_rule.hpp
 -- Installing: C:\qar\install/include/qar_streaming.h
--- Installing: C:\qar\install/share/qar_ogre_adapter/LICENSE.qar_streaming_header
+-- Installing: C:\qar\install/include/qar_streaming_cpp/Runtime.hpp
+...
+-- Installing: C:\qar\install/share/qar_ogre_adapter/LICENSE.qaros
 -- Installing: C:\qar\install/share/qar_ogre_adapter/LICENSE
 -- Installing: C:\qar\install/share/qar_ogre_adapter/cmake/qar_ogre_adapterTargets.cmake
 -- Installing: C:\qar\install/share/qar_ogre_adapter/cmake/qar_ogre_adapterTargets-relwithdebinfo.cmake

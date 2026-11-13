@@ -33,7 +33,7 @@ target_link_libraries(qar_ogre_adapter_doc_snippets PRIVATE
 | `url` | `qar_ogre_adapter::url` | `capi` and `qar_ar_core` |
 | `gestures` | `qar_ogre_adapter::gestures` | `capi` and `qar_ar_core` |
 
-Include a header by its path below the `include` folder of its module, for example `qar_ogre_streaming/types.hpp`. Include the QarOS C header only through `qar_ar_core/qar_streaming_c.hpp`: the vendored header has one include guard, so its first inclusion fixes which optional parts exist, and the wrapper defines `QAR_ENABLE_OPENGL` before it.
+Include a header by its path below the `include` folder of its module, for example `qar_ogre_streaming/types.hpp`. Include the QarOS C header only through `qar_ar_core/qar_streaming_c.hpp`: the QarOS C header has one include guard, so its first inclusion fixes which optional parts exist, and the wrapper defines `QAR_ENABLE_OPENGL` before it.
 
 The code is in the namespaces `qar_ar_core`, `qar_ogre_streaming` and `qar_qar_adapter`. `qar_ogre_streaming` defines a `Status` and a `Result`, with the status `RenderThreadRequired`.
 
@@ -45,7 +45,7 @@ Every public header of the repository, by module. The sections below describe th
 
 | Header | What it declares |
 |---|---|
-| `qar_streaming_c.hpp` | the one include of the vendored QarOS header |
+| `qar_streaming_c.hpp` | the one include of the QarOS C header |
 | `pointer_input.hpp` | the vocabulary of AR pointer input: `PointerGesture`, `PointerHand`, `PointerPhase`, `PanelPointerSample`, the interface `IPanelInputSource` and the queue `QueuedPanelInputSource` |
 | `panel_op_result.hpp` | `PanelOpResult`: the outcome of one queued call on a panel |
 | `panel_state_guard.hpp` | `PanelStateGuard`: the decision that keeps a panel in the state that was asked for |
@@ -103,7 +103,7 @@ Four more headers belong to the header-only target `qar_ogre_adapter::qar_ogre_s
 | `log_time.hpp` | `render`, `url` | `wall_clock_hms_ms`, `hms_ms_of`, `thread_number` and `LogOnce` |
 | `qar_capi_spatial_gesture_source.hpp` | `gestures` | `QarCApiSpatialGestureSource`, `SpatialGestureStats` |
 
-The vendored `third_party/qar/include/qar_streaming.h` is the QarOS C header; [The vendored header](SDK_COMPATIBILITY.md#the-vendored-header) says how it is used.
+The QarOS C header is `qar-streaming-c/include/qar_streaming.h` of the qaros submodule `external/qaros`; [The QarOS header](SDK_COMPATIBILITY.md#the-qaros-header) says how it is used.
 
 ## qar_ar_core
 
@@ -616,11 +616,11 @@ lib\qar_qar_adapter_render.lib
 lib\qar_qar_adapter_session.lib
 lib\qar_qar_adapter_url.lib
 share\qar_ogre_adapter\LICENSE
-share\qar_ogre_adapter\LICENSE.qar_streaming_header
+share\qar_ogre_adapter\LICENSE.qaros
 share\qar_ogre_adapter\cmake\qar_ogre_adapterConfig.cmake
 share\qar_ogre_adapter\cmake\qar_ogre_adapterConfigVersion.cmake
 share\qar_ogre_adapter\cmake\qar_ogre_adapterTargets-relwithdebinfo.cmake
 share\qar_ogre_adapter\cmake\qar_ogre_adapterTargets.cmake
 ```
 
-The command lists every file below the install prefix, relative to it. The package puts the headers of the three modules and the vendored `qar_streaming.h` below `include`, the static libraries below `lib`, and the CMake package files, with the licence of the package and the licence of the QarOS header, below `share/qar_ogre_adapter`.
+The command lists every file below the install prefix, relative to it. The package puts the headers of the three modules and the QarOS headers of the qaros submodule (`qar_streaming.h` and the folder `qar_streaming_cpp`) below `include`, the static libraries below `lib`, and the CMake package files, with the licence of the package and the licence of qaros, below `share/qar_ogre_adapter`.

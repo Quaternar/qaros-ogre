@@ -5,7 +5,7 @@
 This section gives the result of each level. The results of Level 0 and Level 1 are those of this release, and each comes from a recorded run of the commands that the level names. The result of Level 2 comes from live sessions and live checks, and its line says which build each ran.
 
 - Level 0, automated checks: passed. Every test of the repository ran and none failed ([Run all tests](#run-all-tests) shows the totals), the layering guard and its self-test reported OK ([The layering guard](#the-layering-guard)), and the consumer program of the install smoke test built and ran ([Install and the install smoke test](#install-and-the-install-smoke-test)).
-- Level 1, headless checks: the header of the installed QAROS 0.9.0-dev.3008+65dc9aeb equals the vendored header ([The SDK header](#the-sdk-header)) and the headless sample passed ([The headless sample](#the-headless-sample)); the connection check of the live example starts the QAROS Hub, so it is not run for this document ([A QarOS session without a window](#a-qaros-session-without-a-window)).
+- Level 1, headless checks: the header of the installed QAROS 0.9.0-dev.3008+65dc9aeb equalled the header that was then vendored ([The SDK header](#the-sdk-header)) and the headless sample passed ([The headless sample](#the-headless-sample)); the connection check of the live example starts the QAROS Hub, so it is not run for this document ([A QarOS session without a window](#a-qaros-session-without-a-window)).
 - Level 2, desktop checks: the authors of qar_ogre_adapter did not run the live example of this repository in a session with a Visualizer ([Desktop Visualizer checks (Level 2)](#desktop-visualizer-checks-level-2)); the libraries of this repository ran in the live checks of qar_rviz_plugin on the desktop Visualizer with the installed QAROS 0.9.0-dev.3008+65dc9aeb, which the maintainers judged as passed, and no session with a headset has run this release ([What the live sessions showed](#what-the-live-sessions-showed)).
 - Level 3, device checks: not run for this release; [Device checks (Level 3)](#device-checks-level-3) says why.
 
@@ -137,7 +137,7 @@ cmake --install build\vs2019-x64 --config RelWithDebInfo --prefix $env:QAR_PREFI
 ...
 -- Installing: C:\qar\install/include/qar_qar_adapter/target_rule.hpp
 -- Installing: C:\qar\install/include/qar_streaming.h
--- Installing: C:\qar\install/share/qar_ogre_adapter/LICENSE.qar_streaming_header
+-- Installing: C:\qar\install/share/qar_ogre_adapter/LICENSE.qaros
 -- Installing: C:\qar\install/share/qar_ogre_adapter/LICENSE
 -- Installing: C:\qar\install/share/qar_ogre_adapter/cmake/qar_ogre_adapterTargets.cmake
 -- Installing: C:\qar\install/share/qar_ogre_adapter/cmake/qar_ogre_adapterTargets-relwithdebinfo.cmake
@@ -225,13 +225,13 @@ $env:PATH = "$env:ROS2_INSTALL_ROOT\opt\rviz_ogre_vendor\bin;$env:PATH"
 
 ### The SDK header
 
-The repository vendors the QarOS C header, and the header must be the one of the QAROS that the stack runs against. The command compares the SHA256 of the header of the installed QAROS with that of the vendored copy and prints True when they are equal. It changes nothing; [SDK compatibility](SDK_COMPATIBILITY.md) describes the script that updates the vendored header.
+The QarOS C header comes from the qaros submodule `external/qaros`. The command compares the SHA256 of the header of the installed QAROS with that of the submodule and prints True when they are equal; False means that the installed QAROS and the pinned qaros commit are different versions. It changes nothing; [SDK compatibility](SDK_COMPATIBILITY.md#updating-the-qaros-header) describes how the pin is moved.
 
 ```powershell
 $qaros = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Quaternar\QAROS'
 $sdk = Join-Path $qaros.InstallFolder 'include\qar_streaming.h'
-$vendored = 'third_party\qar\include\qar_streaming.h'
-(Get-FileHash -LiteralPath $sdk -Algorithm SHA256).Hash -eq (Get-FileHash -LiteralPath $vendored -Algorithm SHA256).Hash
+$submodule = 'external\qaros\qar-streaming-c\include\qar_streaming.h'
+(Get-FileHash -LiteralPath $sdk -Algorithm SHA256).Hash -eq (Get-FileHash -LiteralPath $submodule -Algorithm SHA256).Hash
 ```
 ```text
 True

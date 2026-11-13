@@ -1,18 +1,18 @@
 // Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
-// THE one include of the vendored QarOS C header (third_party/qar/include/qar_streaming.h)
+// THE one include of the QarOS C header (qaros submodule: external/qaros/qar-streaming-c/include/qar_streaming.h)
 // for every library, adapter and plugin translation unit. Nothing else includes the
-// vendored header directly; the layering guard enforces that.
+// QarOS C header directly; the layering guard enforces that.
 //
 // Why exactly one wrapper:
-//  * The vendored header has ONE include guard, so its first inclusion in a translation
+//  * The QarOS C header has ONE include guard, so its first inclusion in a translation
 //    unit fixes which optional parts exist. On Windows it enables only D3D11 by itself;
 //    the OpenGL producer types (QarVideoFrameOpenGl, QarStreamParamsOpenGl*, ...) and the
 //    OpenGL slots of the dynamically loaded function tables exist only when
 //    QAR_ENABLE_OPENGL is defined first. It is defined here AND as a PUBLIC compile
 //    definition of qar_ar_core, so no include order can produce a translation unit
-//    without it. On Windows it pulls in no GL header; on Linux the vendored header
+//    without it. On Windows it pulls in no GL header; on Linux the QarOS C header
 //    includes <GL/gl.h>.
 //  * The header is auto-generated and defines many unreferenced `static inline` helpers;
 //    MSVC C4505/C4100 (GCC/Clang -Wunused-function/-Wunused-parameter) are silenced for

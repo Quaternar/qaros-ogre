@@ -1,7 +1,7 @@
 // Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
-// A stand-in for the QarOS library, for the tests of the session owner. The vendored header
+// A stand-in for the QarOS library, for the tests of the session owner. The QarOS C header
 // resolves every call through the function tables g_qar_*_api (dynamic loading); this fake fills
 // the entries the owner can reach with functions of its own, so no test loads the real library.
 //

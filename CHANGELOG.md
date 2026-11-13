@@ -4,6 +4,17 @@ All notable changes to this repository are listed in this file, newest version f
 
 Each version lists what it adds, the compatibility it was verified with (the QAROS version, the ROS 2 distribution, Qt, the toolchain and the versions of the repositories it builds on), and its known limitations. The version of a repository is the version of its CMake package, 0.2.0 for this release.
 
+## Unreleased
+
+### Changed
+
+- The QarOS headers come from the public qaros repository, a git submodule in `external/qaros`, instead of a copy of the C header in `third_party/qar`: the C header (`qar-streaming-c`) and the C++ headers (`qar-streaming-cpp`) from one qaros commit, through the CMake targets of qaros. Clone with `--recurse-submodules`. The cache variable `QAROS_SOURCE_DIR` replaces `QAR_VENDOR_INCLUDE_DIR`, and the project enables the C language, which the qaros header target requires.
+- The package installs the C++ headers `qar_streaming_cpp` next to `qar_streaming.h`, and the licence of qaros as `share/qar_ogre_adapter/LICENSE.qaros` instead of `LICENSE.qar_streaming_header`.
+
+### Removed
+
+- `third_party/qar` (the copy of `qar_streaming.h`, its licence and README) and `scripts/update_qar_headers.ps1`.
+
 ## 0.2.0
 
 ### Added

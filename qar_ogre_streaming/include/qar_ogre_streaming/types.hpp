@@ -7,13 +7,13 @@
 /// @file types.hpp
 /// @brief Shared value types for qar_ogre_streaming.
 ///
-/// This header reuses the real Qar C types (via the vendored qar_streaming.h)
+/// This header reuses the real Qar C types (via qar_streaming.h of the qaros submodule)
 /// and adds a small set of library-level POD types that describe stereo frame
 /// requests and OpenGL stereo frame submissions. It has ZERO dependency on
-/// rviz_common, rviz_rendering, Qt, ament or ROS — only the vendored Qar header,
+/// rviz_common, rviz_rendering, Qt, ament or ROS — only the QarOS C header,
 /// Ogre (forward-declared here) and the C++ standard library.
 
-// The wrapper performs the single, warning-suppressed include of the vendored
+// The wrapper performs the single, warning-suppressed include of the QarOS C
 // qar_streaming.h, which defines the REAL OpenGL producer types
 // (QarVideoTextureOpenGl, QarVideoFrameOpenGl, ... — note the "OpenGl" casing). The
 // library uses the real ABI struct at the QAR boundary and the small

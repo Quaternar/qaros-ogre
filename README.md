@@ -7,7 +7,8 @@ qar_ogre_adapter 0.2.0 is the QarOS integration layer of a stack that streams Og
 You need Windows 11, PowerShell 7, the toolchain, the ROS 2 distribution that provides Ogre (on Windows, the Humble binary distribution: [ROS 2 Humble for Windows](docs/INSTALL.md#ros-2-humble-for-windows)) and the layout variables of [Installation](docs/INSTALL.md); the last step also needs QAROS installed ([The QarOS SDK](docs/INSTALL.md#the-qaros-sdk)). Then clone, build, test, install and run:
 
 ```powershell
-git clone https://github.com/Quaternar/qaros-ogre "$env:QAR_ROOT\src\qar_ogre_adapter"
+$env:GIT_LFS_SKIP_SMUDGE = 1
+git clone --recurse-submodules https://github.com/Quaternar/qaros-ogre "$env:QAR_ROOT\src\qar_ogre_adapter"
 Set-Location "$env:QAR_ROOT\src\qar_ogre_adapter"
 cmake --preset vs2019-x64
 cmake --build --preset vs2019-x64
@@ -41,7 +42,7 @@ Everything that is not QarOS is installed from a fresh Windows 11 machine, step 
 
 ## Features
 
-- **A core that calls no QarOS function.** `qar_ar_core` holds the Qt-free vocabulary of AR pointer input, the decisions about a QarOS panel, the pointing-ray model, the spatial frames and the pick model, and the one wrapper of the vendored QarOS C header.
+- **A core that calls no QarOS function.** `qar_ar_core` holds the Qt-free vocabulary of AR pointer input, the decisions about a QarOS panel, the pointing-ray model, the spatial frames and the pick model, and the one wrapper of the QarOS C header.
 - **An Ogre stereo stream for every peer.** `qar_ogre_streaming` renders an Ogre scene into a colour and a depth render texture for each eye, with the pose and the field of view of each eye from QarOS, and reaches QarOS only through a narrow seam.
 - **The QarOS C API adapter.** `qar_qar_adapter` has five components, `capi`, `session`, `render`, `url` and `gestures`; its session owner joins the QAROS Hub as a local app or with a pairing code, on a thread of its own.
 - **Geo anchor and diagnostics.** A WGS84 fix or an ECEF frame can georeference the app volume, and opt-in switches write a per-frame trace and stage timings as CSV files.
@@ -56,7 +57,7 @@ This repository is one of three that together stream an Ogre scene, Qt widgets, 
 
 | Repository | Version | What it provides | Depends on | Also needs |
 |---|---|---|---|---|
-| **qar_ogre_adapter** (this repository) | 0.2.0 | The QarOS integration layer: renders an Ogre scene for each eye and streams it to QarOS; the adapter for the QarOS C API; the vendored C header | none | The ROS 2 distribution, for Ogre only |
+| **qar_ogre_adapter** (this repository) | 0.2.0 | The QarOS integration layer: renders an Ogre scene for each eye and streams it to QarOS; the adapter for the QarOS C API; the QarOS headers of the qaros submodule | none | The ROS 2 distribution, for Ogre only |
 | qar_qt_streaming | 0.2.0 | Qt widgets as QarOS AR GUI panels, as a Qt library that needs no ROS 2, no RViz and no Ogre | none | Qt 5.15.2 or Qt 6.5 and newer, the QarOS C++ SDK headers (a copy is carried) |
 | qar_rviz_plugin | 0.2.0 | The RViz2 plugin that streams RViz into QarOS, and web AR panels from a UI model and from the ROS 2 graph | qar_ogre_adapter, qar_qt_streaming | The ROS 2 distribution with its repairs, Qt 5.15.2, colcon |
 
@@ -85,7 +86,7 @@ The installation document of each repository installs the repositories it depend
 
 QAROS, which consists of `qar-streaming-c.dll`, `qar_streaming.dll`, the zenoh and GStreamer stacks, the Hub and the Visualizer `qar-streaming-viz.exe`, is QuaternAR's proprietary product and is not part of this repository. You obtain its setup program from QuaternAR and install it once on the PC. The crash reports of the Visualizer carry the name of a second program of the same installation, `qar-stereokit-gui.exe`.
 
-This repository vendors only the C header of the QarOS C API, `third_party/qar/include/qar_streaming.h`, with the MIT licence of the public QarOS repository in `third_party/qar/LICENSE`; the file `third_party/qar/README.md` names where the header and the licence come from.
+The QarOS headers come from the public QarOS repository <https://github.com/Quaternar/qaros>, which is a git submodule of this repository in `external/qaros`: the C header `qar-streaming-c/include/qar_streaming.h` and the C++ headers `qar-streaming-cpp/include/qar_streaming_cpp`, both from one qaros commit. The build uses the CMake targets of the submodule (`qar-streaming-c-headers` and `qar-streaming-cpp`), and the install copies both header sets and the MIT licence of qaros into the prefix. Clone with `--recurse-submodules`, or fetch the submodule of an existing clone with `git submodule update --init`. The qaros repository keeps some images in Git LFS; a clone that only builds can skip them with `GIT_LFS_SKIP_SMUDGE=1`, as the commands above do. Another qaros checkout can be used with `-DQAROS_SOURCE_DIR=<folder>`.
 
 You do not need QAROS to build this repository or to run its tests. Nothing links against QAROS: a program loads the installed library `qar-streaming-c.dll` at run time, and configuring only prints a warning when the folder that `QAR_SDK_ROOT` names does not hold the DLL. You need QAROS to connect to it.
 
@@ -103,6 +104,6 @@ This repository is licensed under the MIT license; the text is in [LICENSE](LICE
 
 Third-party material in this repository:
 
-- `third_party/qar` holds the QarOS C header and the MIT licence of the public QarOS repository, which publishes it; its README names the origin of both;
+- `external/qaros` is a git submodule of the public QarOS repository <https://github.com/Quaternar/qaros> (MIT licence), the source of the QarOS C and C++ headers;
 - `third_party/stb` holds the single-header PNG writer `stb_image_write.h`; its README names the origin.
 - GoogleTest is downloaded when you configure, only for the tests; it is not part of this repository and is not installed with it.

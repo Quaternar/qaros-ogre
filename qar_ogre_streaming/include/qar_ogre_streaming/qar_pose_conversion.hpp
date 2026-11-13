@@ -14,7 +14,7 @@
 /// A full write-up lives in `docs/ARCHITECTURE.md#pose-projection-and-world-basis`.
 /// Summary:
 ///
-/// **Qar** uses the OpenXR convention (verified against the vendored
+/// **Qar** uses the OpenXR convention (verified against the QarOS C
 /// `qar_streaming.h`: `QAR_HANDEDNESS_RIGHT` is the default, gesture docs put
 /// Y=up / Z=forward-back and yaw/pitch/roll on the y/x/z axes, and `QarFov`'s
 /// default `{-45,+45,+45,-45}°` matches `XrFovf` exactly):

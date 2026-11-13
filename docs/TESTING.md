@@ -136,7 +136,7 @@ CTest registers one guard test per module that this repository holds, named `che
 |---|---|
 | L1, include classes | A module includes only the foreign header families listed for it: the standard library, Qt, Ogre, ROS 2, RViz, platform headers, GoogleTest, stb. |
 | L2, project edges | A module includes only the project modules listed for it, and some edges only through named headers: no upward and no sideways edge. Every example folder has its own entry. |
-| L3, vendored header | Only the wrapper header of the core includes the vendored QarOS C header. |
+| L3, QarOS C header | Only the wrapper header of the core includes the QarOS C header. |
 | L4, core calls no API | The core calls no QarOS C function; it uses the types of the C API only, so it never needs the SDK DLL. |
 | L5, adapter components | Every file of the adapter belongs to one component and includes only headers of its own component and of the components it may use. |
 | L6, loader | The dynamic-loading implementation macro of the C header appears exactly once, in the loader file of the adapter, and nothing defines the dynamic-loading switch except CMake. |
@@ -177,7 +177,7 @@ Fix the include rather than the table: move the code to the layer that may use t
 
 For this repository the guard checks four modules: `qar_ar_core`, `qar_ogre_streaming`, `qar_qar_adapter` and `examples`. CTest registers one test for each of them, `check_layering_qar_ar_core`, `check_layering_qar_ogre_streaming`, `check_layering_qar_qar_adapter` and `check_layering_examples`, and the test `check_layering_selftest`. What the rules mean here:
 
-- `qar_ar_core` includes only the standard library, one platform header and its own headers, and it calls no function of the QarOS C API. Only its wrapper header includes the vendored C header.
+- `qar_ar_core` includes only the standard library, one platform header and its own headers, and it calls no function of the QarOS C API. Only its wrapper header includes the QarOS C header.
 - `qar_ogre_streaming` includes Ogre and `qar_ar_core`, and it reaches the C types through the wrapper header only.
 - `qar_qar_adapter` includes `qar_ar_core` and the two seam headers of `qar_ogre_streaming`, and only the component `render` may include them. Each of the five components includes only its own headers and those of the components that it may use.
 - Every folder under `examples` has its own entry. The headless sample may include `qar_ogre_streaming` and `qar_ar_core`; the live example may in addition include the headers of the component `render`.

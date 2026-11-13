@@ -6,7 +6,8 @@
 cmake_minimum_required(VERSION 3.22)
 project(qar_ogre_adapter VERSION 0.2.0
   DESCRIPTION "QarOS integration layer for Ogre applications"
-  LANGUAGES CXX)
+  # C: the qaros header target qar-streaming-c-headers requires the compile feature c_std_11.
+  LANGUAGES C CXX)
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/QarBuildSupport.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/QarRosBuildSupport.cmake")
@@ -20,11 +21,11 @@ qar_set_default_build_type()
 qar_set_default_install_prefix()
 qar_use_ros2_distro()
 
-set(QAR_VENDOR_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/qar/include" CACHE PATH
-  "Folder with the vendored qar_streaming.h")
-if(NOT EXISTS "${QAR_VENDOR_INCLUDE_DIR}/qar_streaming.h")
-  message(FATAL_ERROR "Vendored QarOS header not found: ${QAR_VENDOR_INCLUDE_DIR}/qar_streaming.h")
-endif()
+# The QarOS C header (qar-streaming-c) and the C++ headers (qar-streaming-cpp) come from the public
+# qaros repository, a git submodule in external/qaros: one qaros commit for both.
+set(QAROS_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/qaros" CACHE PATH
+  "Checkout of the public qaros repository (the git submodule external/qaros)")
+qar_add_qaros_headers("${QAROS_SOURCE_DIR}")
 
 add_subdirectory(qar_ar_core)
 add_subdirectory(qar_ogre_streaming)
@@ -56,9 +57,12 @@ if(_qar_install)
     INCLUDES DESTINATION include)
   install(DIRECTORY qar_ar_core/include/ qar_ogre_streaming/include/ qar_qar_adapter/include/
     DESTINATION include)
-  install(FILES third_party/qar/include/qar_streaming.h DESTINATION include)
-  install(FILES third_party/qar/LICENSE DESTINATION share/qar_ogre_adapter
-    RENAME LICENSE.qar_streaming_header)
+  # The QarOS headers of the submodule, so that the repositories built on this package compile
+  # against the same qaros commit.
+  install(FILES "${QAROS_SOURCE_DIR}/qar-streaming-c/include/qar_streaming.h" DESTINATION include)
+  install(DIRECTORY "${QAROS_SOURCE_DIR}/qar-streaming-cpp/include/" DESTINATION include)
+  install(FILES "${QAROS_SOURCE_DIR}/LICENSE" DESTINATION share/qar_ogre_adapter
+    RENAME LICENSE.qaros)
   install(FILES LICENSE DESTINATION share/qar_ogre_adapter OPTIONAL)
   qar_install_package(qar_ogre_adapter EXPORT qar_ogre_adapterTargets NAMESPACE qar_ogre_adapter::)
 endif()

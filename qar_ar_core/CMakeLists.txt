@@ -5,9 +5,9 @@
 # (the naming rule, the attach decision, the panel state guard, the outcome of a panel
 # operation), the pointer-input vocabulary (pointer_input, panel_input_source), the AR
 # pointing ray, room/scene/ROS frames, the spatial pick model, the per-frame timing log, the
-# URL-panel seam, and THE one wrapper of the vendored QarOS C header (qar_streaming_c.hpp).
+# URL-panel seam, and THE one wrapper of the QarOS C header of the qaros submodule (qar_streaming_c.hpp).
 #
-# Plain CMake. The C++17 standard library and the vendored qar_streaming.h only: no Qt,
+# Plain CMake. The C++17 standard library and qar_streaming.h (qaros submodule) only: no Qt,
 # Ogre, ROS or RViz, and no call into the QarOS C API (it uses the C API's TYPES only, so
 # it never needs the SDK DLL or the dynamic-loading tables). Enforced by the layering guard.
 
@@ -24,12 +24,14 @@ target_compile_features(qar_ar_core PUBLIC cxx_std_17)
 target_include_directories(qar_ar_core PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
   "$<INSTALL_INTERFACE:include>"
-  # The vendored QarOS C header; only include/qar_ar_core/qar_streaming_c.hpp includes it.
-  "$<BUILD_INTERFACE:${QAR_VENDOR_INCLUDE_DIR}>"
 )
+# The QarOS headers of the qaros submodule (qar_streaming.h and qar_streaming_cpp/); only
+# include/qar_ar_core/qar_streaming_c.hpp includes the C header. The package installs both
+# header sets into its own include folder, so the installed target needs no qaros target.
+target_link_libraries(qar_ar_core PUBLIC "$<BUILD_INTERFACE:qar-streaming-cpp>")
 
 # One OpenGL policy for every translation unit of every consumer, whatever its include
-# order: the vendored header has ONE include guard, and its first inclusion fixes whether
+# order: the QarOS C header has ONE include guard, and its first inclusion fixes whether
 # the OpenGL types and the OpenGL function-table slots exist (see qar_streaming_c.hpp).
 target_compile_definitions(qar_ar_core PUBLIC QAR_ENABLE_OPENGL)
 

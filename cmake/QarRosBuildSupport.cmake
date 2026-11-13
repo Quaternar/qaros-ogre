@@ -39,6 +39,37 @@ function(qar_use_ament_environment)
   endif()
 endfunction()
 
+# qar_add_qaros_headers(<qaros checkout>)
+# The QarOS headers from a checkout of the public qaros repository (in this repository the git
+# submodule external/qaros): the interface targets qar-streaming-c-headers (qar_streaming.h) and
+# qar-streaming-cpp (the C++17 headers over it), defined by the checkout's own CMake files. Only
+# the header targets are added; the examples of the checkout are not built.
+function(qar_add_qaros_headers dir)
+  if(TARGET qar-streaming-cpp)
+    return()
+  endif()
+  file(TO_CMAKE_PATH "${dir}" dir)
+  if(NOT EXISTS "${dir}/qar-streaming-c/include/qar_streaming.h"
+      OR NOT EXISTS "${dir}/qar-streaming-cpp/CMakeLists.txt")
+    message(FATAL_ERROR
+      "The qaros checkout ${dir} has no qar-streaming-c/include/qar_streaming.h or no "
+      "qar-streaming-cpp/CMakeLists.txt. Fetch the submodule with "
+      "'git submodule update --init external/qaros' (or clone with --recurse-submodules), "
+      "or set -DQAROS_SOURCE_DIR=<qaros checkout>.")
+  endif()
+  # qar-streaming-c-headers requires the compile feature c_std_11, so the C language must be on.
+  get_property(_qaros_languages GLOBAL PROPERTY ENABLED_LANGUAGES)
+  if(NOT "C" IN_LIST _qaros_languages)
+    message(FATAL_ERROR "The qaros header targets need the C language: add C to the LANGUAGES of "
+      "project() (project(<name> ... LANGUAGES C CXX)).")
+  endif()
+  set(BUILD_CORE_EXAMPLES OFF)
+  set(BUILD_VULKAN_EXAMPLE OFF)
+  add_subdirectory("${dir}/qar-streaming-c" "${CMAKE_BINARY_DIR}/_qaros/qar-streaming-c" EXCLUDE_FROM_ALL)
+  add_subdirectory("${dir}/qar-streaming-cpp" "${CMAKE_BINARY_DIR}/_qaros/qar-streaming-cpp" EXCLUDE_FROM_ALL)
+  message(STATUS "qaros headers: ${dir}")
+endfunction()
+
 # QAR_PREFIX (-D, else the environment variable): the install prefix of the upstream repositories.
 macro(_qar_use_prefix)
   if("${QAR_PREFIX}" STREQUAL "" AND NOT "$ENV{QAR_PREFIX}" STREQUAL "")
@@ -85,10 +116,11 @@ function(_qar_add_upstream_sources pkg dir version)
         list(APPEND _modules qar_ogre_streaming)
       endif()
     endforeach()
-    if("${QAR_VENDOR_INCLUDE_DIR}" STREQUAL "")
-      set(QAR_VENDOR_INCLUDE_DIR "${dir}/third_party/qar/include" CACHE PATH
-        "Folder with the vendored qar_streaming.h" FORCE)
+    if("${QAROS_SOURCE_DIR}" STREQUAL "")
+      set(QAROS_SOURCE_DIR "${dir}/external/qaros" CACHE PATH
+        "Checkout of the public qaros repository (the git submodule external/qaros)" FORCE)
     endif()
+    qar_add_qaros_headers("${QAROS_SOURCE_DIR}")
   elseif(pkg STREQUAL "qar_qt_streaming")
     # The consumers here (the RViz plugin) use the seam and the Qt core; the backend over the QarOS C++
     # SDK is left out, so no SDK headers are needed to build from source.

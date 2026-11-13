@@ -6,10 +6,10 @@ QAROS has a product version. The setup program records it in the registry value 
 
 | QAROS version | Status | Meaning |
 |---|---|---|
-| 0.9.0-dev.3008+65dc9aeb | verified | The installation that this stack was built, tested and run against. The vendored C header is the header of this installation. |
+| 0.9.0-dev.3008+65dc9aeb | verified | The installation that this stack was built, tested and run against. The C header then vendored in this repository was the header of this installation; the header now comes from the qaros submodule (see [The QarOS header](#the-qaros-header)). |
 | any other version | not verified | The stack may work with it, but nobody has checked. |
 
-The vendored header declares these two parts of the C API, both of which the code uses:
+The QarOS C header declares these two parts of the C API, both of which the code uses:
 
 - the parameter structure `QarStreamParamsOpenGlWgl`, which hands the Windows OpenGL context of the host to a render stream;
 - the field `app_volume_id` of `QarRenderSenderInit`, which must not be NULL: a NULL id is rejected with the status `QAR_STATUS_APP_VOLUME_INVALID_ID`.
@@ -30,8 +30,7 @@ $qaros.Version
 55E6E3F48D940CA29331F0528FE475C1B7230FB19A59C31D5525C6E90B097F6C
 ```
 
-The header that this stack compiles against is the header of the verified installation, and the second command prints its hash.
-This repository vendors the header as `third_party\qar\include\qar_streaming.h`, so the command reads it from there, relative to the folder of the clone.
+The header that this stack compiles against is `qar-streaming-c\include\qar_streaming.h` of the qaros submodule `external\qaros`, and the second command prints its hash, relative to the folder of the clone.
 
 Go to the folder of the clone first:
 
@@ -40,13 +39,10 @@ Set-Location "$env:QAR_ROOT\src\qar_ogre_adapter"
 ```
 
 ```powershell
-(Get-FileHash -LiteralPath 'third_party\qar\include\qar_streaming.h' -Algorithm SHA256).Hash
-```
-```text
-55E6E3F48D940CA29331F0528FE475C1B7230FB19A59C31D5525C6E90B097F6C
+(Get-FileHash -LiteralPath 'external\qaros\qar-streaming-c\include\qar_streaming.h' -Algorithm SHA256).Hash
 ```
 
-If the two hashes are equal, your QAROS has the C API of the verified version. If they differ, your installation is another one. The third command checks whether the header of your installation still declares the parts of the C API that the code uses; it prints True for each item that the header declares.
+If the two hashes are equal, your QAROS has the C API that this stack compiles against. If they differ, your installation and the pinned qaros commit are different versions. The third command checks whether the header of your installation still declares the parts of the C API that the code uses; it prints True for each item that the header declares.
 
 ```powershell
 $qaros = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Quaternar\QAROS'
@@ -64,13 +60,18 @@ An installation that has all the items and a different header is not verified: t
 
 ## Updating the QarOS header
 
-This repository owns the QarOS C header that all repositories of this stack compile against: it vendors the file `qar_streaming.h` in `third_party\qar\include`, next to `third_party\qar\LICENSE` and a README that names where both come from. The header is the only part of QAROS that is copied into a repository.
+This repository owns the QarOS headers that all repositories of this stack compile against. They come from the public QarOS repository <https://github.com/Quaternar/qaros>, a git submodule in `external\qaros`: the C header `qar-streaming-c\include\qar_streaming.h` and the C++ headers `qar-streaming-cpp\include\qar_streaming_cpp`, both from the one qaros commit that the submodule pins. Nothing of QAROS is copied into the repository.
 
-To move to another QAROS version, install it as described in [The QarOS SDK](INSTALL.md#the-qaros-sdk), point `QAR_SDK_ROOT` at its install folder, and run the update script of this repository. The script prints the SHA256 of the vendored header and of the header in the installation, and copies the installed header only when the two differ; when the two are equal it prints that nothing changed. It does not touch the licence file, because the installation ships no licence file for the header, so read the licence list of the installation when the header changes.
+To move to another qaros version, check out that commit in the submodule and commit the new pin. The qaros repository keeps some images in Git LFS, which the build does not need; `GIT_LFS_SKIP_SMUDGE=1` skips them.
 
 ```powershell
-.\scripts\update_qar_headers.ps1 -SdkRoot $env:QAR_SDK_ROOT
+$env:GIT_LFS_SKIP_SMUDGE = 1
+git -C external\qaros fetch origin
+git -C external\qaros checkout <commit>
+git add external\qaros
 ```
+
+A clone of this repository fetches the pinned commit with `git clone --recurse-submodules`, and an existing clone with `git submodule update --init`. The configure step stops with an error that names these commands when the submodule is missing. Another qaros checkout can be used with `-DQAROS_SOURCE_DIR=<folder>`.
 
 ### Rebuild order
 
@@ -149,20 +150,20 @@ This stack states the QarOS behaviour it relies on in [QarOS integration notes](
 | [The in-AR browser for URL panels](QAROS_INTEGRATION_NOTES.md#the-in-ar-browser-for-url-panels) | what the SDK does not say about the browser of a URL panel |
 | [Known SDK limitations](QAROS_INTEGRATION_NOTES.md#known-sdk-limitations) | the limits of the SDK that this stack works around |
 
-The build catches some changes of the header by itself, as [The vendored header](#the-vendored-header) explains. It cannot catch a change of behaviour: what the Visualizer reads from the depth view, which geometry the runtime intersects a gesture with and how a receiver reacts to a destroyed sender are observations of the authors of qar_ogre_adapter or gaps of the documentation, and only a live run shows whether they still hold.
+The build catches some changes of the header by itself, as [The QarOS header](#the-qaros-header) explains. It cannot catch a change of behaviour: what the Visualizer reads from the depth view, which geometry the runtime intersects a gesture with and how a receiver reacts to a destroyed sender are observations of the authors of qar_ogre_adapter or gaps of the documentation, and only a live run shows whether they still hold.
 
-## The vendored header
+## The QarOS header
 
-The header of the verified QAROS version is vendored without any change as `third_party/qar/include/qar_streaming.h`. `third_party/qar/LICENSE` next to it is the MIT licence of the public QarOS repository <https://github.com/Quaternar/qaros>, which publishes the header, and the SDK drop ships no licence file for it. [The README of the folder](../third_party/qar/README.md) names the origin of both files. The header calls itself auto-generated and says that it must not be edited, so a change of the C API comes with a new QAROS version and is brought in with the update script that [Updating the QarOS header](#updating-the-qaros-header) describes.
+The QarOS C header is `qar-streaming-c/include/qar_streaming.h` of the qaros submodule `external/qaros`, used without any change through the CMake target `qar-streaming-c-headers` of qaros; the C++ headers over it are the target `qar-streaming-cpp`, which `qar_ar_core` links in the build tree. The MIT licence of qaros is `external/qaros/LICENSE`. The header calls itself auto-generated and says that it must not be edited, so a change of the C API comes with a new qaros commit and is brought in by moving the pin, as [Updating the QarOS header](#updating-the-qaros-header) describes.
 
 Exactly one file of this repository includes the header: the wrapper `qar_ar_core/include/qar_ar_core/qar_streaming_c.hpp`, and the layering guard rejects every other include of it (rule L3). The reason is that the header has one include guard, so its first inclusion in a translation unit fixes which optional parts exist. On Windows the header enables only Direct3D 11 by itself, and the OpenGL types that the component `render` needs exist only when `QAR_ENABLE_OPENGL` is defined before the header is included. The wrapper defines it, and `qar_ar_core` also exports it as a public compile definition, so that no order of includes can produce a translation unit without it. The wrapper also silences the two warnings that the generated header raises at warning level 4, the removal of an unreferenced local function and an unreferenced formal parameter, so that they do not appear in the build of this repository. It does not define `QAR_ENABLE_DYNAMIC_LOADING`: that definition is a usage requirement of the component `capi`, which holds the function tables of the program ([Component capi](API.md#component-capi)).
 
 A header that renumbers an enumeration that this stack maps must not go unnoticed, so the values are pinned at compile time. The input seam checks that the gesture kinds of an app volume, the gesture kinds of a panel and the gesture phases still have the values that its mapping functions were written for. If one of these checks fires, read the new header and change the mapping before you change the pinned number: a stale mapping would turn a hover into a click.
 
-The vendored header declares two parts of the C API that the code uses. The command looks for each of them in the vendored file, whose path is relative to the folder of the clone, and prints True when it finds it.
+The QarOS C header declares two parts of the C API that the code uses. The command looks for each of them in the header of the submodule, whose path is relative to the folder of the clone, and prints True when it finds it.
 
 ```powershell
-$header = 'third_party\qar\include\qar_streaming.h'
+$header = 'external\qaros\qar-streaming-c\include\qar_streaming.h'
 foreach ($name in 'QarStreamParamsOpenGlWgl', 'app_volume_id') {
     '{0,-46} {1}' -f $name, (Select-String -LiteralPath $header -Pattern $name -SimpleMatch -Quiet)
 }
@@ -172,7 +173,7 @@ QarStreamParamsOpenGlWgl                       True
 app_volume_id                                  True
 ```
 
-The hash of this file is the hash of the verified QAROS version that [Identifying the QAROS version](#identifying-the-qaros-version) prints. The installed package carries the header and its licence, so that a program that links the package compiles against the same file as the libraries; [What the package installs](API.md#what-the-package-installs) lists the files.
+[Identifying the QAROS version](#identifying-the-qaros-version) compares the hash of this file with the header of the installed QAROS. The installed package carries the C header, the C++ headers and the licence of qaros, so that a program that links the package compiles against the same file as the libraries; [What the package installs](API.md#what-the-package-installs) lists the files.
 
 ## Runtime deployment
 
@@ -180,7 +181,7 @@ The QarOS runtime is not a build dependency of this repository. Nothing links an
 
 **Use the installed QAROS.** QAROS is installed once on the PC, and a program does not ship a copy of its `bin` folder. The session owner calls `qar_library_load` with no path, which takes the first library in the order of the header; a program that wants a particular library file puts its path into `SessionOwnerConfig::library_path`, and the environment variable `QAROS_RUNTIME_DIR` names another runtime folder for the lookup. The owner leaves the field `runtime_binaries_folder_path` empty, so the runtime starts its launcher from the folder that the loaded library came from. [The QarOS SDK](INSTALL.md#the-qaros-sdk) lists the order.
 
-**Where Windows looks for the dependencies.** The loader of the vendored header loads the library by its full path with the flags `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR` and `LOAD_LIBRARY_SEARCH_SYSTEM32`. Windows then resolves the dependencies of the library from the folder of the library and from the system folder, in that order. It does not search the folder of the program, the current folder or the folders of the `PATH` environment variable, so putting the QAROS folder on `PATH` achieves nothing, and a runtime file that is missing from the QAROS folder is not taken from the folder of the program. Microsoft describes the flags in [LoadLibraryExA](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-loadlibraryexa).
+**Where Windows looks for the dependencies.** The loader of the QarOS C header loads the library by its full path with the flags `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR` and `LOAD_LIBRARY_SEARCH_SYSTEM32`. Windows then resolves the dependencies of the library from the folder of the library and from the system folder, in that order. It does not search the folder of the program, the current folder or the folders of the `PATH` environment variable, so putting the QAROS folder on `PATH` achieves nothing, and a runtime file that is missing from the QAROS folder is not taken from the folder of the program. Microsoft describes the flags in [LoadLibraryExA](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-loadlibraryexa).
 
 **The C++ runtime.** QarOS needs a Microsoft C++ runtime of version 14.40 or newer. The authors of qar_ogre_adapter observed that an older copy of the runtime files next to the host program, as the ROS 2 distribution ships beside `rviz2.exe`, crashed `qar_library_init` with an access violation. The header recommends loading the library dynamically, with the dependencies taken from the library's own folder, and this stack loads it that way. That describes the order of the search and is no guarantee: before Windows searches, it also checks the modules that the process already holds, and it uses a module of the same name whichever folder that module came from. If `qar_library_init` crashes inside a `MSVCP140.dll` that does not lie in the QAROS folder, see [The QarOS library crashes while it starts](TROUBLESHOOTING.md#the-qaros-library-crashes-while-it-starts).
 

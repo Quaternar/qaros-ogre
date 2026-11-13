@@ -60,7 +60,7 @@
 /// ## The SDK reports gesture points in APP content space
 ///
 /// The basis change above is the WHOLE map for a gesture. The SDK's
-/// `@section qar_coordinate_systems` (`third_party/qar/include/qar_streaming.h`)
+/// `@section qar_coordinate_systems` (`external/qaros/qar-streaming-c/include/qar_streaming.h`)
 /// names the frame and gives it to the view poses, the hand poses and a mapped
 /// app volume gesture's start and action points at once:
 ///

@@ -27,7 +27,7 @@
 
 # ---------------------------------------------------------------------------
 # The QarOS SDK. DYNAMIC LOADING (the vendor-recommended model): no qar-streaming-c.lib,
-# no find_package(qar-streaming-c). With QAR_ENABLE_DYNAMIC_LOADING the vendored single
+# no find_package(qar-streaming-c). With QAR_ENABLE_DYNAMIC_LOADING the QarOS C single
 # header resolves every qar_impl_* symbol from the DLL at run time (qar_library_load()),
 # loaded by its full path with LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR:
 # its own folder is searched first for its dependencies, then the application directory,

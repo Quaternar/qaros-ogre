@@ -76,12 +76,12 @@
 /// forward, in app units, the same frame the gesture's action point and start
 /// point arrive in, so the SDK ray and the reconstruction are interchangeable
 /// without any conversion (see `@section qar_coordinate_systems` in
-/// `third_party/qar/include/qar_streaming.h` and `spatial_frames.hpp`).
+/// `external/qaros/qar-streaming-c/include/qar_streaming.h` and `spatial_frames.hpp`).
 /// Crossing to the ROS world is `spatial_frames.hpp`'s job and happens once,
 /// downstream, in `spatial_pointer_from_sample`. Nothing in this header knows
 /// about ROS.
 ///
-/// The frame the runtime reports hand joints in is **not stated** in the vendored
+/// The frame the runtime reports hand joints in is **not stated** in the QarOS C
 /// header (`QarDeviceHandsWithJoints` carries a `device_id` and a timestamp and
 /// no frame note), and app content space is the only frame the rest of the
 /// tracking API speaks. @ref PointingRay therefore carries

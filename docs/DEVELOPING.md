@@ -2,7 +2,7 @@
 
 ## Repository layout
 
-The code of this repository is three modules, each in a folder of its own, plus two examples and the vendored files. [Layers and components](ARCHITECTURE.md#layers-and-components) shows how the modules link.
+The code of this repository is three modules, each in a folder of its own, plus two examples, the vendored files and the qaros submodule. [Layers and components](ARCHITECTURE.md#layers-and-components) shows how the modules link.
 
 | Path | What it holds |
 |---|---|
@@ -11,9 +11,9 @@ The code of this repository is three modules, each in a folder of its own, plus 
 | `qar_qar_adapter/` | the QarOS C API adapter in five components: headers in `qar_qar_adapter/include/qar_qar_adapter/`, sources in `qar_qar_adapter/src/` (with one private header), tests in `qar_qar_adapter/test/` |
 | `examples/ogre_standalone_streaming_sample/` | the headless sample, which needs no QarOS SDK |
 | `examples/qaros_live_stream/` | the live example, which streams the scene of the sample to a QarOS Visualizer |
-| `third_party/qar/` | the vendored QarOS header, its licence, and a README that names where both come from |
+| `external/qaros/` | the git submodule of the public qaros repository: the QarOS C header (`qar-streaming-c`) and C++ headers (`qar-streaming-cpp`) with their CMake targets |
 | `third_party/stb/` | the single header with which the sample writes its PNG files, and its notice |
-| `scripts/` | `update_qar_headers.ps1`, `run_ogre_sample.ps1`, the layering guard `check_layering.py`, `fetch_dependencies.ps1`, which [Installation](INSTALL.md) runs, and `qar_locations.ps1`, which the PowerShell scripts share |
+| `scripts/` | `run_ogre_sample.ps1`, the layering guard `check_layering.py`, `fetch_dependencies.ps1`, which [Installation](INSTALL.md) runs, and `qar_locations.ps1`, which the PowerShell scripts share |
 | `cmake/` | `QarBuildSupport.cmake`, the build services that the top-level project calls |
 | `docs/` | these documents, `docs/snippets/` with the compile-checked snippets, and `docs/snippets/consumer/`, the install smoke test |
 
@@ -25,7 +25,7 @@ The layering guard, `scripts/check_layering.py`, enforces the rules of this sect
 
 | Module | Project modules it may include | Foreign headers it may include |
 |---|---|---|
-| `qar_ar_core` | itself | the standard library, the vendored QarOS header through the wrapper `qar_streaming_c.hpp` only, `share.h` |
+| `qar_ar_core` | itself | the standard library, the QarOS C header through the wrapper `qar_streaming_c.hpp` only, `share.h` |
 | `qar_ogre_streaming` | itself, and `qar_ar_core` through the wrapper only | the standard library, Ogre, `windows.h` |
 | `qar_qar_adapter` | itself, `qar_ar_core`, and `qar_ogre_streaming` through the two seam headers `qar_render_sender_adapter.hpp` and `types.hpp`, in the component `render` only | the standard library, `windows.h` |
 | `examples/ogre_standalone_streaming_sample` | `qar_ogre_streaming`, `qar_ar_core` | the standard library, Ogre, stb |
@@ -104,7 +104,7 @@ RViz2 on the distribution runs Ogre's legacy OpenGL render system, not the GL3+ 
 
 ## QarOS format and view ids
 
-The numbers of the C API that the code writes into a frame description, as the vendored header defines them:
+The numbers of the C API that the code writes into a frame description, as the QarOS C header defines them:
 
 | Name | Value | Used for |
 |---|---|---|
