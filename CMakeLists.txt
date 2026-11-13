@@ -6,8 +6,7 @@
 cmake_minimum_required(VERSION 3.22)
 project(qar_ogre_adapter VERSION 0.2.0
   DESCRIPTION "QarOS integration layer for Ogre applications"
-  # C: the qaros header target qar-streaming-c-headers requires the compile feature c_std_11.
-  LANGUAGES C CXX)
+  LANGUAGES CXX)
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/QarBuildSupport.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/QarRosBuildSupport.cmake")

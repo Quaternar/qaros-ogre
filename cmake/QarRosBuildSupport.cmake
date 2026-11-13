@@ -57,14 +57,8 @@ function(qar_add_qaros_headers dir)
       "'git submodule update --init external/qaros' (or clone with --recurse-submodules), "
       "or set -DQAROS_SOURCE_DIR=<qaros checkout>.")
   endif()
-  # qar-streaming-c-headers requires the compile feature c_std_11, so the C language must be on.
-  get_property(_qaros_languages GLOBAL PROPERTY ENABLED_LANGUAGES)
-  if(NOT "C" IN_LIST _qaros_languages)
-    message(FATAL_ERROR "The qaros header targets need the C language: add C to the LANGUAGES of "
-      "project() (project(<name> ... LANGUAGES C CXX)).")
-  endif()
-  set(BUILD_CORE_EXAMPLES OFF)
-  set(BUILD_VULKAN_EXAMPLE OFF)
+  # The header targets need no C language, and the examples of qaros are opt-in
+  # (QAROS_BUILD_EXAMPLES, OFF when qaros is added as a subdirectory).
   add_subdirectory("${dir}/qar-streaming-c" "${CMAKE_BINARY_DIR}/_qaros/qar-streaming-c" EXCLUDE_FROM_ALL)
   add_subdirectory("${dir}/qar-streaming-cpp" "${CMAKE_BINARY_DIR}/_qaros/qar-streaming-cpp" EXCLUDE_FROM_ALL)
   message(STATUS "qaros headers: ${dir}")
