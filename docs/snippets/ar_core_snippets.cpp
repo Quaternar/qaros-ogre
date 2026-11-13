@@ -1,55 +1,20 @@
 // Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
-// Snippets of API.md for the module qar_ar_core: the seam of the panel path, the pointing ray, the room-to-ROS
+// Snippets of API.md for the module qar_ar_core: the pointing ray, the room-to-ROS
 // frame change and the pick model. The functions are compiled and linked and never run. Their parameters stand
 // for what the host owns, so each one is a pointer that the documentation names in its text.
 
-#include <cstdint>
 #include <cstdio>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "qar_ar_core/panel_input_source.hpp"
-#include "qar_ar_core/panel_types.hpp"
 #include "qar_ar_core/pointing_ray.hpp"
-#include "qar_ar_core/qar_panel_sender.hpp"
 #include "qar_ar_core/qar_streaming_c.hpp"
 #include "qar_ar_core/spatial_frames.hpp"
 #include "qar_ar_core/spatial_pick.hpp"
-
-void snippet_panel_seam(qar_ar_core::IQarPanelSenderFactory * factory, const std::uint8_t * pixels)
-{
-  // [qar-snippet:panel_seam]
-  qar_ar_core::PanelDesc desc;
-  desc.key = "status";                                    // the key that the host uses for the panel
-  desc.display_name = "Status";                           // the title that QarOS shows
-  desc.buffer_width = 1024;                               // the size of the buffer is fixed for the sender
-  desc.buffer_height = 768;
-  desc.placement.pose.position = QarVector3{0.0f, 1.6f, -1.0f};
-  desc.placement.size = QarGuiPanelSize{0.8f, 0.6f, 1.0f};
-
-  const std::shared_ptr<qar_ar_core::IQarPanelSenderAdapter> sender = factory->create_panel_sender(desc);
-  if (!sender) {
-    std::fprintf(stderr, "panel: %s\n", factory->last_error().c_str());
-    return;
-  }
-
-  // Once for each tick, on the thread of the host that owns the widget.
-  bool ready = false;
-  if (sender->try_begin_frame(ready) && ready) {
-    qar_ar_core::PanelPixels frame;
-    frame.data = pixels;
-    frame.width = desc.buffer_width;
-    frame.height = desc.buffer_height;
-    frame.stride_bytes = desc.buffer_width * 4u;          // RGBA: four bytes for each pixel
-    sender->submit_frame(frame);                          // copies the pixels; the buffer stays the host's
-  }
-
-  sender->close();                                        // the one teardown, in a fixed order
-  // [qar-snippet-end:panel_seam]
-}
 
 void snippet_pointing_ray(
   const QarDeviceHandsWithJoints & hands, const QarVector3 & eye_position, qar_ar_core::PointingRaySlot * slot)
@@ -90,7 +55,7 @@ void snippet_spatial_frames()
   // [qar-snippet-end:spatial_frames]
 }
 
-void snippet_pick_session(qar_ar_core::IQarPanelInputSource * source)
+void snippet_pick_session(qar_ar_core::IPanelInputSource * source)
 {
   // [qar-snippet:pick_session]
   const qar_ar_core::RoomToRosTransform transform = qar_ar_core::room_to_ros_from_environment();

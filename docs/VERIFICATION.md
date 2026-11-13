@@ -51,8 +51,8 @@ Preset CMake variables:
 ...
 -- qar_qar_adapter: QarOS SDK backend, DYNAMIC loading of C:\Program Files\Quaternar\QAROS/bin/qar-streaming-c.dll (no import lib linked)
 ...
--- Configuring done (10.4s)
--- Generating done (0.2s)
+-- Configuring done (12.8s)
+-- Generating done (0.3s)
 -- Build files have been written to: C:/qar/src/qar_ogre_adapter/build/vs2019-x64
 ```
 
@@ -71,6 +71,11 @@ cmake --build --preset vs2019-x64
   qar_ogre_standalone_streaming_sample.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\examples\ogre_standalone_streaming_sample\RelWithDebInfo\qar_ogre_standalone_streaming_sample.exe
 ...
   qar_ogre_live_stream_example.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\examples\qaros_live_stream\RelWithDebInfo\qar_ogre_live_stream_example.exe
+...
+  qar_ogre_adapter_doc_snippets.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\docs\snippets\RelWithDebInfo\qar_ogre_adapter_doc_snippets.exe
+...
+  qar_qar_adapter_tests.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\qar_qar_adapter\test\RelWithDebInfo\qar_qar_adapter_tests.exe
+  qar_ogre_streaming_tests.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\qar_ogre_streaming\test\RelWithDebInfo\qar_ogre_streaming_tests.exe
 ```
 
 ### Run all tests
@@ -83,16 +88,16 @@ ctest --preset vs2019-x64
 ```text
 Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
         Start   1: check_layering_qar_ar_core
-  1/610 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.13 sec
+  1/576 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.13 sec
         Start   2: check_layering_qar_ogre_streaming
-  2/610 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.11 sec
+  2/576 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.13 sec
         Start   3: check_layering_qar_qar_adapter
-  3/610 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.22 sec
+  3/576 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.20 sec
         Start   4: check_layering_examples
 ...
-100% tests passed, 0 tests failed out of 610
+100% tests passed, 0 tests failed out of 576
 
-Total Test time (real) = 117.38 sec
+Total Test time (real) =  94.95 sec
 ```
 
 [Testing](TESTING.md#what-the-automated-tests-do-not-cover) lists what these tests leave out: every call into QarOS, the handover of the pictures through OpenGL and the live desktop. Of the checks of the next levels, only those of Level 1 were run for this release: the headless sample, which runs the Ogre side without QarOS, and `--connect-only`, which covers the bootstrap of a QarOS session. The calls into QarOS beyond that bootstrap and the live desktop were exercised only in the live checks of qar_rviz_plugin on the desktop Visualizer, with a build that differs from this release only in comments and the text of one tool tip, and the check of Level 2 has not been run.
@@ -105,9 +110,9 @@ The guard checks the include rules of every module and of the examples, and its 
 & "$env:QAR_VENV\Scripts\python.exe" scripts\check_layering.py --all
 ```
 ```text
-check_layering qar_ar_core: OK (23 files)
+check_layering qar_ar_core: OK (26 files)
 check_layering qar_ogre_streaming: OK (54 files)
-check_layering qar_qar_adapter: OK (50 files)
+check_layering qar_qar_adapter: OK (46 files)
 check_layering examples: OK (7 files)
 ```
 
@@ -129,13 +134,8 @@ cmake --install build\vs2019-x64 --config RelWithDebInfo --prefix $env:QAR_PREFI
 -- Installing: C:\qar\install/lib/qar_ar_core.lib
 -- Installing: C:\qar\install/lib/qar_ogre_streaming.lib
 -- Installing: C:\qar\install/lib/qar_qar_adapter_capi.lib
--- Installing: C:\qar\install/lib/qar_qar_adapter_session.lib
--- Installing: C:\qar\install/lib/qar_qar_adapter_render.lib
--- Installing: C:\qar\install/lib/qar_qar_adapter_panels.lib
--- Installing: C:\qar\install/lib/qar_qar_adapter_url.lib
--- Installing: C:\qar\install/lib/qar_qar_adapter_gestures.lib
--- Installing: C:\qar\install/include
 ...
+-- Installing: C:\qar\install/include/qar_qar_adapter/target_rule.hpp
 -- Installing: C:\qar\install/include/qar_streaming.h
 -- Installing: C:\qar\install/share/qar_ogre_adapter/LICENSE.qar_streaming_header
 -- Installing: C:\qar\install/share/qar_ogre_adapter/LICENSE
@@ -149,7 +149,8 @@ cmake --install build\vs2019-x64 --config RelWithDebInfo --prefix $env:QAR_PREFI
 cmake -S docs\snippets\consumer -B build\consumer -G "Visual Studio 16 2019" -A x64 "-DCMAKE_PREFIX_PATH=$env:QAR_PREFIX"
 ```
 ```text
--- Found rviz_ogre_vendor: 11.2.25 (C:/qar/deps/ros2_humble/ros2-windows/share/rviz_ogre_vendor/cmake)
+-- Selecting Windows SDK version 10.0.22621.0 to target Windows 10.0.26200.
+-- The CXX compiler identification is MSVC 19.29.30151.0
 ...
 -- Configuring done (2.1s)
 -- Generating done (0.0s)
@@ -167,8 +168,8 @@ cmake --build build\consumer --config RelWithDebInfo
 .\build\consumer\RelWithDebInfo\qar_ogre_adapter_consumer.exe
 ```
 ```text
-qar_ogre_adapter 0.1.0
-targets: qar_ogre_adapter::qar_ar_core qar_ogre_adapter::qar_ogre_streaming qar_ogre_adapter::render qar_ogre_adapter::panels qar_ogre_adapter::url qar_ogre_adapter::gestures
+qar_ogre_adapter 0.2.0
+targets: qar_ogre_adapter::qar_ar_core qar_ogre_adapter::qar_ogre_streaming qar_ogre_adapter::render qar_ogre_adapter::url qar_ogre_adapter::gestures
 QarOS library loaded: no
 status text: Ok
 parse_bool_env("on"): true
@@ -244,7 +245,7 @@ A pass is a Visualizer window that shows the sample scene upright and in colour 
 
 ### What the live sessions showed
 
-The authors of qar_ogre_adapter did not run the live example of this repository in a session with a Visualizer, so the check above has not been run. The libraries of this repository ran in the live checks of qar_rviz_plugin, which streams the scene of RViz to a Visualizer through them: the plugin joined the QAROS Hub of the PC as a local app, the maintainers added a receiver in the Visualizer, and the scene of RViz and the panels of the plugin reached it. The maintainers judged those checks as passed; the judgement is theirs, and this document gives no measurement of it.
+The authors of qar_ogre_adapter did not run the live example of this repository in a session with a Visualizer, so the check above has not been run. The libraries of this repository ran in the live checks of qar_rviz_plugin, which streams the scene of RViz to a Visualizer through them: the plugin joined the QAROS Hub of the PC as a local app, the maintainers added a receiver in the Visualizer, and the scene of RViz reached it. The maintainers judged those checks as passed; the judgement is theirs, and this document gives no measurement of it.
 
 Not checked in a live session: the approval of a program by the Hub being denied or timing out, a Hub that stops while the program is connected, the pairing with the Hub of another PC, forgetting a pairing and pairing again, the invitation of a device, geographic anchoring against a live GPS source, and real multi-user devices. These paths are described as designed, from the code of the session owner.
 

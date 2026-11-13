@@ -8,16 +8,16 @@ The code of this repository is three modules, each in a folder of its own, plus 
 |---|---|
 | `qar_ar_core/` | the Qt-free core: headers in `qar_ar_core/include/qar_ar_core/`, sources in `qar_ar_core/src/`, tests in `qar_ar_core/test/` |
 | `qar_ogre_streaming/` | the Ogre stereo streaming library: headers in `qar_ogre_streaming/include/qar_ogre_streaming/`, sources in `qar_ogre_streaming/src/`, tests in `qar_ogre_streaming/test/`, and the header-only test doubles in `qar_ogre_streaming/test_support/` |
-| `qar_qar_adapter/` | the QarOS C API adapter in six components: headers in `qar_qar_adapter/include/qar_qar_adapter/`, sources in `qar_qar_adapter/src/` (with one private header), tests in `qar_qar_adapter/test/` |
+| `qar_qar_adapter/` | the QarOS C API adapter in five components: headers in `qar_qar_adapter/include/qar_qar_adapter/`, sources in `qar_qar_adapter/src/` (with one private header), tests in `qar_qar_adapter/test/` |
 | `examples/ogre_standalone_streaming_sample/` | the headless sample, which needs no QarOS SDK |
 | `examples/qaros_live_stream/` | the live example, which streams the scene of the sample to a QarOS Visualizer |
 | `third_party/qar/` | the vendored QarOS header, its licence, and a README that names where both come from |
 | `third_party/stb/` | the single header with which the sample writes its PNG files, and its notice |
-| `scripts/` | `update_qar_headers.ps1`, `run_ogre_sample.ps1`, the layering guard `check_layering.py`, `fetch_dependencies.ps1`, which [Installation](INSTALL.md) runs, and `qar_locations.ps1`, which the PowerShell scripts share; the repair scripts whose names start with fix_ and `env_setup.ps1` serve qar_rviz_plugin, and this repository needs none of them |
+| `scripts/` | `update_qar_headers.ps1`, `run_ogre_sample.ps1`, the layering guard `check_layering.py`, `fetch_dependencies.ps1`, which [Installation](INSTALL.md) runs, and `qar_locations.ps1`, which the PowerShell scripts share |
 | `cmake/` | `QarBuildSupport.cmake`, the build services that the top-level project calls |
 | `docs/` | these documents, `docs/snippets/` with the compile-checked snippets, and `docs/snippets/consumer/`, the install smoke test |
 
-The headers that a consumer includes are the ones in the `include` folders. A header in a `src` folder is private: the only one in this repository is `qar_qar_adapter/src/qar_capi_input_internal.hpp`, which the components `panels` and `gestures` share.
+The headers that a consumer includes are the ones in the `include` folders. A header in a `src` folder is private: the only one in this repository is `qar_qar_adapter/src/qar_capi_input_internal.hpp`, which the component `gestures` uses.
 
 ## Layering rules
 
@@ -37,7 +37,6 @@ Every file of `qar_qar_adapter` belongs to exactly one component, and a file may
 |---|---|
 | `capi` | `capi` |
 | `render` | `capi`, `render` |
-| `panels` | `capi`, `panels`, the private input header |
 | `url` | `capi`, `url` |
 | `gestures` | `capi`, `gestures`, the private input header |
 | tests of the adapter | `capi`, `render` |
@@ -48,9 +47,9 @@ Three further rules hold the picture together: the core calls no function of the
 
 - **Language level and warnings.** The libraries require C++17 as a compile feature, and the warning flags `/W4 /permissive-` come from `qar_apply_warning_flags`. The five adapter components set `/W4` alone.
 - **Static libraries.** Every module and every component is a static library with position-independent code, so that a consumer links it into a program or a shared library without a runtime DLL of its own and without Ogre types crossing a DLL boundary.
-- **Names.** Every library has an alias of the form `qar_ogre_adapter::<name>`, and a consumer links the aliases only: `qar_ar_core`, `qar_ogre_streaming`, and the components `capi`, `render`, `panels`, `url` and `gestures`. The component targets carry the export name that the alias repeats.
+- **Names.** Every library has an alias of the form `qar_ogre_adapter::<name>`, and a consumer links the aliases only: `qar_ar_core`, `qar_ogre_streaming`, and the components `capi`, `render`, `url` and `gestures`. The component targets carry the export name that the alias repeats.
 - **Usage requirements.** `QAR_ENABLE_OPENGL` is a public compile definition of `qar_ar_core`, and `QAR_ENABLE_DYNAMIC_LOADING` is a public compile definition of `capi`; every consumer that links the target receives them. Ogre is a public dependency of `qar_ogre_streaming`, because its public headers forward-declare Ogre types.
-- **Build type.** Build `RelWithDebInfo`: the build and test presets name that configuration, and a single-configuration generator defaults to it. The reason is the release runtime of the ROS 2 and Qt binaries, which a debug runtime in the same process cannot share.
+- **Build type.** Build `RelWithDebInfo`: the build and test presets name that configuration, and a single-configuration generator defaults to it. The reason is the release runtime of the ROS 2 binaries, which a debug runtime in the same process cannot share.
 - **Tests.** GoogleTest 1.14.0 is downloaded at configure time and checked against a hash, and each test executable registers its cases with CTest through `gtest_discover_tests`.
 
 The options and the variables of the configure step are in [CMake options and cache variables](CONFIGURATION.md#cmake-options-and-cache-variables).
@@ -74,7 +73,7 @@ These conventions apply to every C++ file of this repository. Keep them when you
 
 **Comments and documentation.** Write in English. A comment states what the code does and why it does it that way, as the code is now. It contains no dates, no milestone or ticket tags, no names of people or tools and no account of how the code came to be. Documentation comments describe the contract of a function or type: what it expects, what it returns, who owns what, and on which thread it may be called.
 
-**Logic that talks to another system.** Code that reads the environment, Qt, ROS 2 or QarOS is kept thin; the decisions it makes are put into functions that take plain values, so that they can be tested without a QarOS session, a window or a ROS 2 graph. For example, the helpers that parse environment variables take the raw text and never read the environment themselves; their callers pass it in. There is no fake of the QarOS SDK.
+**Logic that talks to another system.** Code that reads the environment, Qt, ROS 2 or QarOS is kept thin; the decisions it makes are put into functions that take plain values, so that they can be tested without a QarOS session, a window or a ROS 2 graph. For example, the helpers that parse environment variables take the raw text and never read the environment themselves; their callers pass it in. The tests that reach the QarOS C API load no QarOS library: they run on a fake of its function tables.
 
 Four rules of the threads apply to the code of this repository. Everything that touches Ogre or OpenGL runs on the render thread, under the render lock of the host if there is one. The callbacks that QarOS makes on its own threads convert what they receive, queue it and return: they do not block and they do not call a subscribe function. The state that such a callback may see lives in a slot of a process-lifetime arena that is never freed. The one exception is the subscription to peer updates of the session factory: it passes the factory itself and has no slot, and it relies on the destruction of the session and of the library in the destructor of the factory to end its callbacks. And the libraries start no thread of their own except the writer of the timing log, which never touches Ogre or QarOS.
 

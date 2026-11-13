@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT
 //
 // The opt-in per-frame stage timing (timing_log.hpp): the CSV sink and writer thread, the
-// trace a decoded frame carries through qar_qt_streaming's LatestVideoFrame, and the row
-// that its QtPanelStream writes for every capture tick of a video panel. The analyser
+// trace a decoded frame carries through the hand-over of video frames, and the row
+// that a panel stream writes for every capture tick of a video panel. The analyser
 // (analyze_video_timing.py in qar_rviz_plugin) reads exactly these columns, so the tests
 // pin the formats.
 

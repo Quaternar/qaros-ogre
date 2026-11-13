@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 //
 // Snippets of API.md for the module qar_qar_adapter: the session owner, the configuration and use of the render
-// factory, the panel, URL panel and gesture components, and the environment helpers. The functions are compiled
+// factory, the URL panel and gesture components, and the environment helpers. The functions are compiled
 // and linked and never run. Their parameters stand for what the host owns, so each one is a pointer that the
 // documentation names in its text.
 
@@ -12,13 +12,9 @@
 #include <vector>
 
 #include "qar_ar_core/common_name.hpp"
-#include "qar_ar_core/panel_input_source.hpp"
-#include "qar_ar_core/panel_types.hpp"
 #include "qar_ar_core/qar_streaming_c.hpp"
 #include "qar_ar_core/spatial_frames.hpp"
 #include "qar_qar_adapter/env_config.hpp"
-#include "qar_qar_adapter/qar_capi_panel_input_source.hpp"
-#include "qar_qar_adapter/qar_capi_panel_sender_adapter.hpp"
 #include "qar_qar_adapter/qar_capi_render_sender_adapter.hpp"
 #include "qar_qar_adapter/qar_capi_session_owner.hpp"
 #include "qar_qar_adapter/qar_capi_spatial_gesture_source.hpp"
@@ -77,35 +73,6 @@ void snippet_factory_use(
   const std::string anchor_error = factory->set_geo_anchor_wgs84(47.3769, 8.5417, 408.0);
   std::printf("invite: %s, geo anchor: %s\n", refused.c_str(), anchor_error.c_str());   // empty: it worked
   // [qar-snippet-end:factory_use]
-}
-
-void snippet_panels(qar_qar_adapter::IQarSessionOwner * owner)
-{
-  // [qar-snippet:panels]
-  // One input source serves all panels; the factory hands it to every panel that it creates.
-  auto input = std::make_shared<qar_qar_adapter::QarCApiPanelInputSource>(owner->session());
-  qar_qar_adapter::QarCApiPanelSenderFactory factory(owner, input);
-
-  qar_ar_core::PanelDesc desc;
-  desc.key = "status";
-  desc.buffer_width = 1024;
-  desc.buffer_height = 768;
-  desc.content_width = 1000;                           // the part of the buffer that the widget paints;
-  desc.content_height = 760;                           // zero means the whole buffer
-  const std::shared_ptr<qar_ar_core::IQarPanelSenderAdapter> sender = factory.create_panel_sender(desc);
-  if (!sender) {
-    std::printf("panel: %s\n", factory.last_error().c_str());
-    return;
-  }
-
-  // The panel is subscribed to its gestures. On the GUI thread, once for each tick:
-  std::vector<qar_ar_core::PanelPointerSample> samples;
-  input->drain(samples);
-  std::vector<std::string> closed;
-  input->drain_closed_panels(closed);                  // the keys of the panels that the operator closed in AR
-  std::printf("%zu samples, %zu closed, %zu subscriptions\n", samples.size(), closed.size(),
-    input->subscription_count());
-  // [qar-snippet-end:panels]
 }
 
 void snippet_url_panels(qar_qar_adapter::IQarSessionOwner * owner)

@@ -18,14 +18,23 @@ Rules (comments and string literals are ignored; every #include line is classifi
                         (standard library, Qt, Ogre, ROS 2, RViz, platform headers, GoogleTest, stb);
   L2  project edges     each module may include only the project modules listed in POLICY, and some
                         edges only through the named headers (EDGE_ONLY): no upward or sideways edge;
+                        qar_qt_streaming has no edge to any other project module, and its seam
+                        (qar_qt_streaming/seam) includes only the seam itself, the standard library
+                        and share.h: no Qt, no QarOS header, no SDK header; its backend (qar_qt_streaming/qaros)
+                        includes the seam, itself and the SDK headers (qar_streaming_cpp/...): no Qt;
                         every example folder under examples/ has its own entry in EXAMPLE_POLICY
                         (foreign families, project modules and the adapter components it may include);
+                        qar_capi_panels (the QarOS C API behind the panels of qar_qt_streaming) includes
+                        the seam of qar_qt_streaming only (qar_qt_streaming/seam/...), qar_ar_core, and the
+                        capi headers of qar_qar_adapter (the session headers in its tests): no Qt;
   L3  vendored header   only qar_ar_core/include/qar_ar_core/qar_streaming_c.hpp includes qar_streaming.h;
   L4  core calls no API qar_ar_core production code calls no qar_* C function (it uses the C API's types
                         only, so it never needs the SDK DLL or the dynamic-loading tables);
   L5  adapter parts     every qar_qar_adapter file belongs to one component (ADAPTER_COMPONENT) and includes
                         adapter headers of its own component and of the components it may use only;
-  L6  loader            QAR_IMPLEMENT_DYNAMIC_LOADING() appears exactly once, in qar_capi_loader.cpp;
+  L6  loader            QAR_IMPLEMENT_DYNAMIC_LOADING() appears exactly once, in qar_capi_loader.cpp (the program
+                        examples/qt_panel_example/main.cpp and the fake function tables of the qaros tests expand
+                        it for themselves; the library qar_qt_streaming/qaros expands none);
                         nothing #defines QAR_ENABLE_DYNAMIC_LOADING (CMake does), and only the wrapper
                         #defines QAR_ENABLE_OPENGL.
 
@@ -40,7 +49,7 @@ import sys
 import tempfile
 
 MODULES = ['qar_ar_core', 'qar_ogre_streaming', 'qar_qar_adapter', 'examples', 'qar_qt_streaming',
-           'qar_ui_model', 'qar_web_panels', 'qar_ros_ui', 'qar_rviz_streaming']
+           'qar_ui_model', 'qar_web_panels', 'qar_ros_ui', 'qar_capi_panels', 'qar_rviz_streaming']
 
 # Include roots of the project: the first path component of a project include.
 PROJECT_ROOTS = {
@@ -49,6 +58,7 @@ PROJECT_ROOTS = {
     'qar_ogre_streaming_test_support': 'qar_ogre_streaming',
     'qar_qar_adapter': 'qar_qar_adapter',
     'qar_qt_streaming': 'qar_qt_streaming',
+    'qar_capi_panels': 'qar_capi_panels',
     'qar_ui_model': 'qar_ui_model',
     'qar_web_panels': 'qar_web_panels',
     'qar_ros_ui': 'qar_ros_ui',
@@ -66,17 +76,34 @@ POLICY = {
                             prod={'STD', 'PLATFORM'}, test={'GTEST'}, platform={'windows.h'}),
     'examples': dict(project={'qar_ogre_streaming', 'qar_ar_core'}, prod={'STD', 'OGRE', 'STB'}, test=set(),
                      platform=set()),
-    'qar_qt_streaming': dict(project={'qar_qt_streaming', 'qar_ar_core'}, prod={'STD', 'QT'}, test={'GTEST'},
+    'qar_qt_streaming': dict(project={'qar_qt_streaming'}, prod={'STD', 'QT'}, test={'GTEST'},
                              platform=set()),
     'qar_ui_model': dict(project={'qar_ui_model'}, prod={'STD'}, test={'GTEST'}, platform=set()),
     'qar_web_panels': dict(project={'qar_web_panels', 'qar_ui_model', 'qar_ar_core'}, prod={'STD', 'QT'},
                            test={'GTEST'}, platform=set()),
     'qar_ros_ui': dict(project={'qar_ros_ui', 'qar_ui_model'}, prod={'STD', 'ROS'}, test={'GTEST', 'PLATFORM'},
                        platform={'process.h', 'unistd.h'}),
+    'qar_capi_panels': dict(project={'qar_capi_panels', 'qar_ar_core', 'qar_qar_adapter', 'qar_qt_streaming'},
+                            prod={'STD'}, test={'GTEST', 'PLATFORM'}, platform={'windows.h'}),
     'qar_rviz_streaming': dict(project=set(PROJECT_ROOTS.values()),
                                prod={'STD', 'QT', 'OGRE', 'ROS', 'RVIZ', 'PLATFORM', 'STB'},
                                test={'GTEST'}, platform={'windows.h', 'mmsystem.h', 'process.h', 'unistd.h'}),
 }
+
+# The seam of qar_qt_streaming (the folder qar_qt_streaming/seam): the standard library only.
+SEAM_PREFIX = 'qar_qt_streaming/seam/'
+SEAM_POLICY = dict(project={'qar_qt_streaming'}, prod={'STD', 'PLATFORM'}, test={'GTEST'},
+                   platform={'share.h'})
+
+# The qaros backend of qar_qt_streaming (the folder qar_qt_streaming/qaros): the seam, itself and the headers of
+# the QarOS C++ SDK; no Qt, no core of qar_qt_streaming, no platform header.
+QAROS_PREFIX = 'qar_qt_streaming/qaros/'
+QAROS_POLICY = dict(project={'qar_qt_streaming'}, prod={'STD', 'SDK_CPP'}, test={'GTEST'}, platform=set())
+
+# Besides LOADER: the files that may expand QAR_IMPLEMENT_DYNAMIC_LOADING() (a program, and the fake function
+# tables of a test). The file of the program must hold exactly one expansion.
+OTHER_LOADERS = {'qar_qt_streaming/qaros/test/fake_c_table.cpp', 'examples/qt_panel_example/main.cpp'}
+PROGRAM_LOADER = 'examples/qt_panel_example/main.cpp'
 
 # Policy of each example folder under examples/ (files elsewhere under examples/ use POLICY['examples']):
 # the same keys as POLICY, and 'adapter': the qar_qar_adapter components whose headers the example may include.
@@ -85,8 +112,8 @@ EXAMPLE_POLICY = {
                                              prod={'STD', 'OGRE', 'STB'}, test=set(), platform=set(), adapter=set()),
     'qaros_live_stream': dict(project={'qar_ogre_streaming', 'qar_ar_core', 'qar_qar_adapter'},
                               prod={'STD', 'OGRE', 'STB'}, test=set(), platform=set(), adapter={'render', 'session'}),
-    'qt_panel_example': dict(project={'qar_qt_streaming', 'qar_ar_core', 'qar_qar_adapter'},
-                             prod={'STD', 'QT'}, test=set(), platform=set(), adapter={'session', 'panels'}),
+    'qt_panel_example': dict(project={'qar_qt_streaming'}, prod={'STD', 'QT', 'SDK_CPP'}, test=set(),
+                             platform=set(), adapter=set()),
     'web_panel_example': dict(project={'qar_ui_model', 'qar_web_panels', 'qar_ar_core', 'qar_qar_adapter'},
                               prod={'STD', 'QT'}, test=set(), platform=set(), adapter={'render', 'session', 'url'}),
     'ros_topic_panel_example': dict(project={'qar_ui_model', 'qar_web_panels', 'qar_ros_ui', 'qar_ar_core',
@@ -102,6 +129,16 @@ EDGE_ONLY = {
     ('qar_qar_adapter', 'qar_ogre_streaming'): {'qar_ogre_streaming/qar_render_sender_adapter.hpp',
                                                 'qar_ogre_streaming/types.hpp'},
 }
+
+# (module, target project module) -> the only folder of the target that edge may use.
+EDGE_PREFIX = {
+    ('qar_capi_panels', 'qar_qt_streaming'): SEAM_PREFIX,
+}
+
+# The adapter components whose headers qar_capi_panels may include: in production code the C API
+# loader side (capi), in its tests the session owner as well.
+CAPI_PANELS_MAY_INCLUDE = {'capi'}
+CAPI_PANELS_TEST_MAY_INCLUDE = {'capi', 'session'}
 
 WRAPPER = 'qar_ar_core/include/qar_ar_core/qar_streaming_c.hpp'
 LOADER = 'qar_qar_adapter/src/qar_capi_loader.cpp'
@@ -120,8 +157,7 @@ ADAPTER_COMPONENT = {
     'onboarding_status.hpp': 'session', 'onboarding_status.cpp': 'session',
     'target_rule.hpp': 'session', 'env_config.hpp': 'session', 'env_config.cpp': 'session',
     'fake_qar_api.hpp': 'test', 'session_owner_harness.hpp': 'test',
-    'qar_capi_panel_sender_adapter.hpp': 'panels', 'qar_capi_panel_sender_adapter.cpp': 'panels',
-    'qar_capi_panel_input_source.hpp': 'panels', 'qar_capi_panel_input_source.cpp': 'panels',
+    'panel_test_kit.hpp': 'test',
     'qar_capi_url_panel_adapter.hpp': 'url', 'qar_capi_url_panel_adapter.cpp': 'url',
     'qar_capi_spatial_gesture_source.hpp': 'gestures', 'qar_capi_spatial_gesture_source.cpp': 'gestures',
     'qar_capi_input_internal.hpp': 'input_private',
@@ -130,11 +166,10 @@ COMPONENT_MAY_INCLUDE = {
     'capi': {'capi'},
     'session': {'capi', 'session'},
     'render': {'capi', 'session', 'render'},
-    'panels': {'capi', 'panels', 'input_private'},
     'url': {'capi', 'url'},
     'gestures': {'capi', 'gestures', 'input_private'},
     'input_private': {'capi'},
-    'test': {'capi', 'session', 'render', 'panels', 'url', 'test'},
+    'test': {'capi', 'session', 'render', 'url', 'test'},
 }
 # Only these components may use the Ogre library's seam headers (EDGE_ONLY above).
 OGRE_SEAM_COMPONENTS = {'render'}
@@ -155,6 +190,8 @@ def classify(inc, quote, including_file):
         return 'PROJECT'
     if inc == 'qar_streaming.h':
         return 'VENDORED'
+    if inc.startswith('qar_streaming_cpp/'):
+        return 'SDK_CPP'
     if re.match(r'^(gtest|gmock)/', inc):
         return 'GTEST'
     if re.match(r'^Q[A-Za-z]\w*(/|$)', inc) or inc.startswith('Qt'):
@@ -225,6 +262,10 @@ def policy_of(module, parts):
     """(policy, name used in messages) of a file: the files of an example folder follow EXAMPLE_POLICY."""
     if module == 'examples' and len(parts) > 2 and parts[1] in EXAMPLE_POLICY:
         return EXAMPLE_POLICY[parts[1]], 'examples/' + parts[1]
+    if module == 'qar_qt_streaming' and len(parts) > 2 and parts[1] == 'seam':
+        return SEAM_POLICY, 'qar_qt_streaming/seam'
+    if module == 'qar_qt_streaming' and len(parts) > 2 and parts[1] == 'qaros':
+        return QAROS_POLICY, 'qar_qt_streaming/qaros'
     return POLICY[module], module
 
 
@@ -235,7 +276,9 @@ def check_module(root, module):
         r = rel(root, path)
         parts = r.split('/')
         pol, label = policy_of(module, parts)
-        is_test = len(parts) > 1 and parts[1] in ('test', 'test_support')
+        is_test = (len(parts) > 1 and parts[1] in ('test', 'test_support')) or (
+            module == 'qar_qt_streaming' and len(parts) > 3 and parts[1] in ('seam', 'qaros') and
+            parts[2] == 'test')
         text = open(path, encoding='utf-8', errors='replace').read()
         masked = mask(text)
         allowed = set(pol['prod']) | (set(pol['test']) if is_test else set())
@@ -259,10 +302,28 @@ def check_module(root, module):
                 if target not in pol['project']:
                     errors.append('%s:%d: [L2] %s must not include %s (module %s)' % (r, line, label, inc, target))
                     continue
+                if label == 'qar_qt_streaming/qaros' and not inc.startswith((SEAM_PREFIX, QAROS_PREFIX)):
+                    errors.append('%s:%d: [L2] qar_qt_streaming/qaros must not include %s (only %s... and %s...)'
+                                  % (r, line, inc, SEAM_PREFIX, QAROS_PREFIX))
+                    continue
+                if label == 'qar_qt_streaming/seam' and not inc.startswith(SEAM_PREFIX):
+                    errors.append('%s:%d: [L2] qar_qt_streaming/seam must not include %s (only %s...)'
+                                  % (r, line, inc, SEAM_PREFIX))
+                    continue
                 only = EDGE_ONLY.get((module, target))
                 if only is not None and inc not in only:
                     errors.append('%s:%d: [L2] %s may use %s only through %s, not %s'
                                   % (r, line, module, target, ', '.join(sorted(only)), inc))
+                prefix = EDGE_PREFIX.get((module, target))
+                if prefix is not None and not inc.startswith(prefix):
+                    errors.append('%s:%d: [L2] %s may use %s only through %s..., not %s'
+                                  % (r, line, module, target, prefix, inc))
+                if module == 'qar_capi_panels' and target == 'qar_qar_adapter':
+                    other = ADAPTER_COMPONENT.get(inc.split('/')[-1])
+                    may = CAPI_PANELS_TEST_MAY_INCLUDE if is_test else CAPI_PANELS_MAY_INCLUDE
+                    if other not in may:
+                        errors.append('%s:%d: [L5] qar_capi_panels must not include %s (component %s; allowed: %s)'
+                                      % (r, line, inc, other, ', '.join(sorted(may))))
                 if module == 'examples' and target == 'qar_qar_adapter':
                     example_component = ADAPTER_COMPONENT.get(inc.split('/')[-1])
                     if example_component not in pol['adapter']:
@@ -300,7 +361,7 @@ def check_module(root, module):
         # L6: one loader, macros defined in one place only
         for m in re.finditer(r'\bQAR_IMPLEMENT_DYNAMIC_LOADING\s*\(\s*\)', masked):
             loader_hits.append(r)
-            if r != LOADER:
+            if r != LOADER and r not in OTHER_LOADERS:
                 line = masked.count('\n', 0, m.start()) + 1
                 errors.append('%s:%d: [L6] QAR_IMPLEMENT_DYNAMIC_LOADING() belongs in %s only' % (r, line, LOADER))
         for m in re.finditer(r'^[ \t]*#[ \t]*define[ \t]+(QAR_ENABLE_DYNAMIC_LOADING|QAR_ENABLE_OPENGL)\b', masked, re.M):
@@ -310,6 +371,10 @@ def check_module(root, module):
             errors.append('%s:%d: [L6] %s is defined by %s, not here'
                           % (r, line, m.group(1), 'CMake (qar_qar_adapter_capi)' if 'DYNAMIC' in m.group(1)
                              else WRAPPER))
+    if module == 'examples' and os.path.isfile(os.path.join(root, PROGRAM_LOADER)) and \
+            loader_hits.count(PROGRAM_LOADER) != 1:
+        errors.append('%s:1: [L6] expected exactly one QAR_IMPLEMENT_DYNAMIC_LOADING() here, found %d'
+                      % (PROGRAM_LOADER, loader_hits.count(PROGRAM_LOADER)))
     if module == 'qar_qar_adapter' and loader_hits.count(LOADER) != 1:
         errors.append('%s:1: [L6] expected exactly one QAR_IMPLEMENT_DYNAMIC_LOADING() here, found %d'
                       % (LOADER, loader_hits.count(LOADER)))
@@ -353,12 +418,33 @@ def self_test():
         put('qar_ui_model/src/u.cpp', '#include <windows.h>\n#include <vector>\n')
         put('qar_web_panels/src/w.cpp', '#include "qar_ar_core/spatial_pick.hpp"\n#include <QTcpServer>\n')
         put('examples/qaros_live_stream/main.cpp',
-            '#include <QWidget>\n#include "qar_qt_streaming/x.hpp"\n#include "qar_qar_adapter/qar_capi_panel_sender_adapter.hpp"\n'
+            '#include <QWidget>\n#include "qar_qt_streaming/x.hpp"\n#include "qar_qar_adapter/qar_capi_spatial_gesture_source.hpp"\n'
             '#include "qar_qar_adapter/qar_capi_render_sender_adapter.hpp"\n')
         put('examples/qt_panel_example/main.cpp',
-            '#include <QWidget>\n#include "qar_qt_streaming/x.hpp"\n#include "qar_qar_adapter/qar_capi_panel_sender_adapter.hpp"\n'
-            '#include "qar_qar_adapter/qar_session_owner.hpp"\n#include "qar_qar_adapter/qar_capi_url_panel_adapter.hpp"\n')
+            '#include <QWidget>\n#include "qar_qt_streaming/x.hpp"\n#include <qar_streaming_cpp/Runtime.hpp>\n'
+            '#include "qar_qar_adapter/qar_session_owner.hpp"\nQAR_IMPLEMENT_DYNAMIC_LOADING()\n')
+        put('qar_qt_streaming/qaros/src/q_bad.cpp',
+            '#include <qar_streaming_cpp/Session.hpp>\n#include <QString>\n#include "qar_qt_streaming/qt_compat.hpp"\n'
+            '#include "qar_qt_streaming/seam/values.hpp"\n#include "qar_ar_core/common_name.hpp"\n'
+            'QAR_IMPLEMENT_DYNAMIC_LOADING()\n')
+        put('qar_qt_streaming/qaros/test/fake_c_table.cpp',
+            '#include <gtest/gtest.h>\n#include <qar_streaming_cpp/Session.hpp>\nQAR_IMPLEMENT_DYNAMIC_LOADING()\n')
+        put('qar_capi_panels/src/glue_bad.cpp',
+            '#include <QWidget>\n#include "qar_qt_streaming/seam/values.hpp"\n#include "qar_qt_streaming/qt_compat.hpp"\n'
+            '#include "qar_qar_adapter/qar_capi_url_panel_adapter.hpp"\n#include "qar_qar_adapter/qar_session_owner.hpp"\n'
+            '#include "qar_qar_adapter/panel_state_guard.hpp"\n#include "qar_ogre_streaming/types.hpp"\n')
+        put('qar_capi_panels/test/glue_test_ok.cpp',
+            '#include <gtest/gtest.h>\n#include "qar_qar_adapter/qar_session_owner.hpp"\n'
+            '#include "qar_qt_streaming/seam/panel_sender.hpp"\n')
         put('examples/stray.cpp', '#include <QWidget>\n')
+        put('qar_qt_streaming/src/core_bad.cpp',
+            '#include "qar_qt_streaming/seam/values.hpp"\n#include <QWidget>\n#include "qar_ar_core/panel_types.hpp"\n'
+            '#include "qar_streaming_cpp/Runtime.hpp"\n#include "qar_qar_adapter/qar_session_owner.hpp"\n')
+        put('qar_qt_streaming/seam/src/seam_bad.cpp',
+            '#include "qar_qt_streaming/seam/values.hpp"\n#include <QString>\n#include "qar_qt_streaming/qt_compat.hpp"\n'
+            '#include "qar_ar_core/common_name.hpp"\n#include "qar_streaming_cpp/Runtime.hpp"\n#include <vector>\n')
+        put('qar_qt_streaming/seam/test/seam_test_ok.cpp',
+            '#include <gtest/gtest.h>\n#include "qar_qt_streaming/seam/values.hpp"\n')
         expect = {
             'qar_ar_core': ['[L1] QT header <QWidget>', '[L2] qar_ar_core must not include qar_qt_streaming/x.hpp',
                             '[L4] qar_ar_core must not call the C API: qar_library_load('],
@@ -366,12 +452,34 @@ def self_test():
                                 '[L3] only', '[L5] file belongs to no adapter component',
                                 '[L6] QAR_ENABLE_DYNAMIC_LOADING is defined by CMake',
                                 '[L6] QAR_IMPLEMENT_DYNAMIC_LOADING() belongs in'],
+            'qar_qt_streaming': ['qar_qt_streaming/src/core_bad.cpp:3: [L2] qar_qt_streaming must not include '
+                                 'qar_ar_core/panel_types.hpp',
+                                 'core_bad.cpp:4: [L1] SDK_CPP header <qar_streaming_cpp/Runtime.hpp> is not allowed in '
+                                 'qar_qt_streaming',
+                                 'core_bad.cpp:5: [L2] qar_qt_streaming must not include qar_qar_adapter/',
+                                 'seam_bad.cpp:2: [L1] QT header <QString> is not allowed in qar_qt_streaming/seam',
+                                 'seam_bad.cpp:3: [L2] qar_qt_streaming/seam must not include qar_qt_streaming/qt_compat.hpp',
+                                 'seam_bad.cpp:4: [L2] qar_qt_streaming/seam must not include qar_ar_core/common_name.hpp',
+                                 'seam_bad.cpp:5: [L1] SDK_CPP header <qar_streaming_cpp/Runtime.hpp> is not allowed in '
+                                 'qar_qt_streaming/seam',
+                                 'q_bad.cpp:2: [L1] QT header <QString> is not allowed in qar_qt_streaming/qaros',
+                                 'q_bad.cpp:3: [L2] qar_qt_streaming/qaros must not include qar_qt_streaming/qt_compat.hpp',
+                                 'q_bad.cpp:5: [L2] qar_qt_streaming/qaros must not include qar_ar_core/common_name.hpp',
+                                 'q_bad.cpp:6: [L6] QAR_IMPLEMENT_DYNAMIC_LOADING() belongs in'],
+            'qar_capi_panels': ['glue_bad.cpp:1: [L1] QT header <QWidget> is not allowed in qar_capi_panels',
+                                'glue_bad.cpp:3: [L2] qar_capi_panels may use qar_qt_streaming only through '
+                                'qar_qt_streaming/seam/..., not qar_qt_streaming/qt_compat.hpp',
+                                'glue_bad.cpp:4: [L5] qar_capi_panels must not include '
+                                'qar_qar_adapter/qar_capi_url_panel_adapter.hpp',
+                                'glue_bad.cpp:5: [L5] qar_capi_panels must not include '
+                                'qar_qar_adapter/qar_session_owner.hpp',
+                                'glue_bad.cpp:7: [L2] qar_capi_panels must not include qar_ogre_streaming/types.hpp'],
             'qar_ui_model': ['[L1] platform header <windows.h>'],
             'qar_web_panels': ['[L2] qar_web_panels may use qar_ar_core only through'],
             'examples': ['[L1] QT header <QWidget> is not allowed in examples/qaros_live_stream',
                          '[L2] examples/qaros_live_stream must not include qar_qt_streaming/x.hpp',
-                         '[L5] examples/qaros_live_stream must not include qar_qar_adapter/qar_capi_panel_sender_adapter.hpp',
-                         '[L5] examples/qt_panel_example must not include qar_qar_adapter/qar_capi_url_panel_adapter.hpp',
+                         '[L5] examples/qaros_live_stream must not include qar_qar_adapter/qar_capi_spatial_gesture_source.hpp',
+                         '[L2] examples/qt_panel_example must not include qar_qar_adapter/qar_session_owner.hpp',
                          'examples/stray.cpp:1: [L1] QT header <QWidget> is not allowed in examples'],
         }
         failed = 0
@@ -388,6 +496,32 @@ def self_test():
         if len(example_errors) != 1:
             print('self-test: examples/qt_panel_example reported %d violations, expected only the url header: %s'
                   % (len(example_errors), example_errors))
+            failed += 1
+        r2_errors = check_module(tmp, 'qar_qt_streaming')
+        seam_bad = [e for e in r2_errors if 'seam_bad.cpp' in e]
+        if len(seam_bad) != 4:
+            print('self-test: seam_bad.cpp reported %d violations, expected 4: %s' % (len(seam_bad), seam_bad))
+            failed += 1
+        qaros_bad = [e for e in r2_errors if 'q_bad.cpp' in e]
+        if len(qaros_bad) != 4:
+            print('self-test: q_bad.cpp reported %d violations, expected 4: %s' % (len(qaros_bad), qaros_bad))
+            failed += 1
+        qaros_clean = [e for e in r2_errors if 'fake_c_table.cpp' in e]
+        if qaros_clean:
+            print('self-test: the fake function tables of the qaros tests were reported: %s' % qaros_clean)
+            failed += 1
+        seam_clean = [e for e in r2_errors if 'seam_test_ok.cpp' in e]
+        if seam_clean:
+            print('self-test: a clean seam test was reported: %s' % seam_clean)
+            failed += 1
+        glue_errors = check_module(tmp, 'qar_capi_panels')
+        glue_bad = [e for e in glue_errors if 'glue_bad.cpp' in e]
+        if len(glue_bad) != 5:
+            print('self-test: glue_bad.cpp reported %d violations, expected 5: %s' % (len(glue_bad), glue_bad))
+            failed += 1
+        glue_clean = [e for e in glue_errors if 'glue_test_ok.cpp' in e]
+        if glue_clean:
+            print('self-test: a clean glue test was reported: %s' % glue_clean)
             failed += 1
         clean =[e for e in check_module(tmp, 'qar_ar_core') if e.startswith(WRAPPER)]
         if clean:

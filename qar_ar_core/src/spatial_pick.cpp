@@ -211,7 +211,7 @@ SpatialPointer spatial_pointer_from_sample(
     out.point_is_scene_hit = sample.room_point_is_scene_hit;
   }
   // A sample that only carries a resolved panel (u, v) belongs to the panel
-  // path, not here; qar_qt_streaming's panel_hit_test.hpp owns that geometry.
+  // path, not here; the panel hit test owns that geometry.
   out.valid = out.has_ray || out.has_point;
   return out;
 }

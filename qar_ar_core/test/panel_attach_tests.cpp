@@ -1,14 +1,11 @@
 // Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
-// The reattach decision (pure, from probe values), its log line, the detach defaults of the
-// adapter seams and the hand index helper.
+// The reattach decision (pure, from probe values), its log line and the outcome record of a panel
+// operation.
 
 #include "qar_ar_core/panel_attach.hpp"
-#include "qar_ar_core/panel_types.hpp"
-#include "qar_ar_core/pointing_ray.hpp"
-#include "qar_ar_core/qar_panel_sender.hpp"
-#include "qar_ar_core/qar_url_panel.hpp"
+#include "qar_ar_core/panel_op_result.hpp"
 
 #include <gtest/gtest.h>
 
@@ -199,7 +196,7 @@ TEST(PanelAttach, TheLogLineHasTheDocumentedFormat)
   fields.time = "12:34:56.789";
   fields.key = "hidden:Displays";
   fields.reattached = true;
-  fields.common_name = "hidden-displays-0123abcd.rviz2-plugin.devpc.qaros-ros";
+  fields.common_name = "hidden-displays-0123abcd.host-plugin.devpc.qaros-ros";
   fields.panel_id = "f75868aa-9802-40b3-92c1-10438545623f";
   fields.state_was = panel_state_name(QAR_GUI_PANEL_STATE_HIDDEN);
   fields.stream_swapped = true;
@@ -207,118 +204,13 @@ TEST(PanelAttach, TheLogLineHasTheDocumentedFormat)
   EXPECT_EQ(
     panel_attach_log_line(fields),
     "[qar-panel-adapter] 12:34:56.789 panel 'hidden:Displays' reattached "
-    "name=hidden-displays-0123abcd.rviz2-plugin.devpc.qaros-ros "
+    "name=hidden-displays-0123abcd.host-plugin.devpc.qaros-ros "
     "id=f75868aa-9802-40b3-92c1-10438545623f state_was=HIDDEN stream_swapped=y size_changed=n");
 
   fields.reattached = false;
   EXPECT_NE(panel_attach_log_line(fields).find("' created name="), std::string::npos);
   EXPECT_EQ(panel_state_name(QAR_GUI_PANEL_STATE_CLOSED), "CLOSED");
   EXPECT_EQ(panel_state_name(static_cast<QarGuiPanelState>(9)), "state 9");
-}
-
-namespace
-{
-
-class CountingPanelSender : public IQarPanelSenderAdapter
-{
-public:
-  bool try_begin_frame(bool & out_ready) override { out_ready = false; return true; }
-  bool submit_frame(const PanelPixels &) override { return true; }
-  bool set_placement(const PanelPlacement &) override { return true; }
-  PanelCloseReport close(bool panel_closed_in_ar) override
-  {
-    ++closes;
-    last_closed_in_ar = panel_closed_in_ar;
-    return {};
-  }
-  const std::string & last_error() const override { return error; }
-
-  int closes = 0;
-  bool last_closed_in_ar = true;
-  std::string error;
-};
-
-class CountingUrlPanel : public IQarUrlPanelAdapter
-{
-public:
-  bool navigate(const std::string &) override { return true; }
-  bool set_placement(const UrlPanelPlacement &) override { return true; }
-  bool set_state(QarGuiPanelState) override { return true; }
-  void close() override { ++closes; }
-  const std::string & last_error() const override { return error; }
-
-  int closes = 0;
-  std::string error;
-};
-
-}  // namespace
-
-TEST(PanelSeams, ASenderThatCannotDetachClosesItsPanelInstead)
-{
-  CountingPanelSender sender;
-  EXPECT_FALSE(sender.supports_detach());
-  sender.detach();
-  EXPECT_EQ(sender.closes, 1);
-  EXPECT_FALSE(sender.last_closed_in_ar);
-
-  CountingUrlPanel url_panel;
-  EXPECT_FALSE(url_panel.supports_detach());
-  url_panel.detach();
-  EXPECT_EQ(url_panel.closes, 1);
-}
-
-TEST(PanelSeams, DescriptionsCarryAnEmptyCommonNameUntilTheHostFillsIt)
-{
-  EXPECT_TRUE(PanelDesc{}.common_name.empty());
-  EXPECT_TRUE(UrlPanelDesc{}.common_name.empty());
-}
-
-TEST(HandIndex, LeftIsZeroRightIsOneUnspecifiedIsNone)
-{
-  EXPECT_EQ(hand_index(QAR_HANDEDNESS_LEFT), 0);
-  EXPECT_EQ(hand_index(QAR_HANDEDNESS_RIGHT), 1);
-  EXPECT_EQ(hand_index(QAR_HANDEDNESS_UNSPECIFIED), -1);
-
-  HandJointsProbe probe;
-  probe.right.tracked = true;
-  EXPECT_TRUE(probe.hand(QAR_HANDEDNESS_RIGHT).tracked);
-  EXPECT_FALSE(probe.hand(QAR_HANDEDNESS_LEFT).tracked);
-  EXPECT_FALSE(probe.hand(QAR_HANDEDNESS_UNSPECIFIED).tracked);
-}
-
-TEST(PanelSeams, PausedIsADistinctNotReadyCause)
-{
-  EXPECT_NE(PanelNotReadyCause::Paused, PanelNotReadyCause::NoDestination);
-  EXPECT_NE(PanelNotReadyCause::Paused, PanelNotReadyCause::NoActiveTransfers);
-  EXPECT_NE(PanelNotReadyCause::Paused, PanelNotReadyCause::Reconnecting);
-}
-
-TEST(PanelSeams, CreatingIsADistinctNotReadyCause)
-{
-  EXPECT_NE(PanelNotReadyCause::Creating, PanelNotReadyCause::NoDestination);
-  EXPECT_NE(PanelNotReadyCause::Creating, PanelNotReadyCause::NoActiveTransfers);
-  EXPECT_NE(PanelNotReadyCause::Creating, PanelNotReadyCause::Reconnecting);
-  EXPECT_NE(PanelNotReadyCause::Creating, PanelNotReadyCause::Paused);
-}
-
-TEST(PanelSeams, AQueuedCloseHasItsOwnName)
-{
-  EXPECT_STREQ(to_string(PanelCloseOutcome::Queued), "queued");
-  EXPECT_STRNE(to_string(PanelCloseOutcome::Queued), to_string(PanelCloseOutcome::NoPanel));
-}
-
-TEST(PanelSeams, ASenderThatCallsQarOsAtOnceIsNeverPendingAndHasNoResults)
-{
-  CountingPanelSender sender;
-  EXPECT_FALSE(sender.pending());
-  std::vector<PanelOpResult> results;
-  sender.drain_results(results);
-  EXPECT_TRUE(results.empty());
-
-  CountingUrlPanel url_panel;
-  EXPECT_FALSE(url_panel.pending());
-  url_panel.drain_results(results);
-  EXPECT_TRUE(results.empty());
 }
 
 TEST(PanelSeams, AnOutcomeStartsAsASuccessfulCreate)

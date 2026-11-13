@@ -133,8 +133,7 @@ StatusText describe_status(
       break;
     case QAR_STATUS_PAKE_ERROR:
       out.message =
-        "The code was wrong or has expired (codes live about 10 s and work once). Type the code "
-        "the Hub shows at that moment.";
+        "The code was wrong or has expired. Type the code the Hub shows now.";
       out.retry_offered = true;
       break;
     case QAR_STATUS_ONBOARDING_SESSION_NOT_FOUND:

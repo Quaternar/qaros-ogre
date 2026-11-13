@@ -9,7 +9,12 @@
 add_executable(qar_ar_core_tests
   common_name_tests.cpp
   panel_attach_tests.cpp
+  # The seams of the panels: the URL panel and the hand index.
+  panel_seam_tests.cpp
+  # The decision to ask a panel for its state again, over scripted times.
+  panel_state_guard_tests.cpp
   panel_input_source_tests.cpp
+  pointer_input_tests.cpp
   pointing_ray_tests.cpp
   spatial_frames_tests.cpp
   spatial_pick_tests.cpp

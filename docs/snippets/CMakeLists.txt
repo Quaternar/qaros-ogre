@@ -13,7 +13,6 @@ target_link_libraries(qar_ogre_adapter_doc_snippets PRIVATE
   qar_ogre_adapter::qar_ar_core
   qar_ogre_adapter::qar_ogre_streaming
   qar_ogre_adapter::render
-  qar_ogre_adapter::panels
   qar_ogre_adapter::url
   qar_ogre_adapter::gestures
 )

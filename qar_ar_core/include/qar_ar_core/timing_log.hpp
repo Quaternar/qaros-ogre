@@ -10,7 +10,7 @@
 /// ## What it is for
 ///
 /// "Is the stutter ours?" needs numbers that attribute every long gap to one stage of
-/// the pipeline: the publisher, the ROS transport, our decode, our GUI-thread capture,
+/// the pipeline: the publisher, the transport, our decode, our GUI-thread capture,
 /// or QarOS not offering a destination (`try_begin_frame` -> not ready). Each stage
 /// stamps its own events with the same clock, and the `analyze_video_timing.py`
 /// script of qar_rviz_plugin merges the files. The clock is `std::chrono::system_clock` as microseconds since the
@@ -45,8 +45,8 @@
 /// @ref TimingLog::shutdown from its destructor - the panel does - which joins the
 /// writer and flushes; a later @ref TimingLog::open simply restarts the thread.
 ///
-/// Header-only and Qt/ROS-free on purpose: the ROS source, the Qt panel stream and the
-/// QarOS render adapter all include it.
+/// Header-only and standard-library-only on purpose: every stage of the pipeline, in
+/// whichever library it lives, can include it.
 
 #ifdef _MSC_VER
 #include <share.h>

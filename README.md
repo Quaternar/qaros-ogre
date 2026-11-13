@@ -1,6 +1,6 @@
 # qar_ogre_adapter - the QarOS integration layer
 
-qar_ogre_adapter 0.1.0 is the QarOS integration layer of a stack that streams Ogre scenes, Qt widgets, web pages and RViz into QarOS. It renders an Ogre scene for each eye into OpenGL textures and streams them to QarOS, it holds the one adapter for the QarOS C API (the session owner that joins the QAROS Hub, the targets, panels, URL panels and gestures) that the other repositories of the stack build on, and it carries the C header of QAROS that all of them compile against. It is a set of C++17 static libraries for Windows 11 and MSVC, delivered as the CMake package `qar_ogre_adapter`, with a headless sample and a live example that you can run.
+qar_ogre_adapter 0.2.0 is the QarOS integration layer of a stack that streams Ogre scenes, Qt widgets, web pages and RViz into QarOS. It renders an Ogre scene for each eye into OpenGL textures and streams them to QarOS, it holds the one adapter for the QarOS C API (the session owner that joins the QAROS Hub, the targets, URL panels and gestures) that the plugin repository of the stack builds on, and it carries the C header of QAROS that the stack compiles against. It is a set of C++17 static libraries for Windows 11 and MSVC, delivered as the CMake package `qar_ogre_adapter`, with a headless sample and a live example that you can run.
 
 ## TL;DR
 
@@ -41,9 +41,9 @@ Everything that is not QarOS is installed from a fresh Windows 11 machine, step 
 
 ## Features
 
-- **A core that calls no QarOS function.** `qar_ar_core` holds the Qt-free panel and pointer types, the input seam, the pointing-ray model, the spatial frames and the pick model, and the one wrapper of the vendored QarOS C header.
+- **A core that calls no QarOS function.** `qar_ar_core` holds the Qt-free vocabulary of AR pointer input, the decisions about a QarOS panel, the pointing-ray model, the spatial frames and the pick model, and the one wrapper of the vendored QarOS C header.
 - **An Ogre stereo stream for every peer.** `qar_ogre_streaming` renders an Ogre scene into a colour and a depth render texture for each eye, with the pose and the field of view of each eye from QarOS, and reaches QarOS only through a narrow seam.
-- **The QarOS C API adapter.** `qar_qar_adapter` has six components, `capi`, `session`, `render`, `panels`, `url` and `gestures`; its session owner joins the QAROS Hub as a local app or with a pairing code, on a thread of its own.
+- **The QarOS C API adapter.** `qar_qar_adapter` has five components, `capi`, `session`, `render`, `url` and `gestures`; its session owner joins the QAROS Hub as a local app or with a pairing code, on a thread of its own.
 - **Geo anchor and diagnostics.** A WGS84 fix or an ECEF frame can georeference the app volume, and opt-in switches write a per-frame trace and stage timings as CSV files.
 - **A headless sample and a live example.** The sample renders the same Ogre scene for synthetic peers and needs no QAROS; the example joins the QAROS Hub and streams that scene to the first target that comes up.
 - **Known limitations.** What the QarOS SDK does not document or does not do is listed in [Known SDK limitations](docs/QAROS_INTEGRATION_NOTES.md#known-sdk-limitations), and the symptoms of the limits that you may meet are in [Troubleshooting](docs/TROUBLESHOOTING.md#qaros-stream-problems). [What the live sessions showed](docs/VERIFICATION.md#what-the-live-sessions-showed) says what the sessions of qar_rviz_plugin showed.
@@ -52,13 +52,13 @@ Each feature is described in [Feature details](docs/ARCHITECTURE.md#feature-deta
 
 ## Where this fits
 
-This repository is one of three that together stream an Ogre scene, Qt widgets, web pages and RViz into QarOS. Each repository has the version 0.1.0, and this documentation describes version 0.1.0 of all three: a repository asks for that version of the repositories it builds on, so the three have to be at matching versions. The table lists the three in the order in which they are installed: `qar_ogre_adapter` first, then `qar_qt_streaming`, then `qar_rviz_plugin`.
+This repository is one of three that together stream an Ogre scene, Qt widgets, web pages and RViz into QarOS. Each repository has the version 0.2.0, and this documentation describes version 0.2.0 of all three: a repository asks for that version of the repositories it builds on, so the three have to be at matching versions. The table lists the three in the order in which they are installed: `qar_ogre_adapter` and `qar_qt_streaming` are independent of each other, and `qar_rviz_plugin` comes last because it builds on both.
 
 | Repository | Version | What it provides | Depends on | Also needs |
 |---|---|---|---|---|
-| **qar_ogre_adapter** (this repository) | 0.1.0 | The QarOS integration layer: renders an Ogre scene for each eye and streams it to QarOS; the adapter for the QarOS C API; the vendored C header | none | The ROS 2 distribution, for Ogre only |
-| qar_qt_streaming | 0.1.0 | Qt widgets as QarOS AR GUI panels | qar_ogre_adapter | Qt 5.15.2 |
-| qar_rviz_plugin | 0.1.0 | The RViz2 plugin that streams RViz into QarOS, and web AR panels from a UI model and from the ROS 2 graph | qar_ogre_adapter, qar_qt_streaming | The ROS 2 distribution with its repairs, Qt 5.15.2, colcon |
+| **qar_ogre_adapter** (this repository) | 0.2.0 | The QarOS integration layer: renders an Ogre scene for each eye and streams it to QarOS; the adapter for the QarOS C API; the vendored C header | none | The ROS 2 distribution, for Ogre only |
+| qar_qt_streaming | 0.2.0 | Qt widgets as QarOS AR GUI panels, as a Qt library that needs no ROS 2, no RViz and no Ogre | none | Qt 5.15.2 or Qt 6.5 and newer, the QarOS C++ SDK headers (a copy is carried) |
+| qar_rviz_plugin | 0.2.0 | The RViz2 plugin that streams RViz into QarOS, and web AR panels from a UI model and from the ROS 2 graph | qar_ogre_adapter, qar_qt_streaming | The ROS 2 distribution with its repairs, Qt 5.15.2, colcon |
 
 The installation document of each repository installs the repositories it depends on, with the commands for each, so you can start from any of them.
 

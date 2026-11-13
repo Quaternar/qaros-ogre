@@ -3,7 +3,7 @@
 #
 # Unit tests for qar_qar_adapter.
 #
-# Two executables. qar_qar_adapter_tests holds the SDK-free parts of the render and panel
+# Two executables. qar_qar_adapter_tests holds the SDK-free parts of the render and URL panel
 # adapters: geo_anchor.cpp and env_config.cpp are kept apart from the render adapter for
 # exactly that reason, and render_timing.hpp is header-only. qar_qar_adapter_session_tests
 # runs the session owner against a fake of the QarOS function tables (fake_qar_api.cpp); it
@@ -21,15 +21,15 @@ add_executable(qar_qar_adapter_tests
   # The log line of a panel state change, the line for the first 3D frame after a stall, and the
   # defaults of the factory configuration: pure values, no QarOS session.
   panel_state_log_tests.cpp
-  # The decision to ask a panel for its state again, over scripted times.
-  panel_state_guard_tests.cpp
   frame_stall_probe_tests.cpp
   render_config_tests.cpp
   # The render sender factory on the session owner, which runs on the fake QarOS library.
   fake_qar_api.cpp
   render_factory_tests.cpp
-  # The panel adapters on the owner's thread, on the same fake.
+  # The URL panel adapter on the owner's thread, on the same fake.
   panel_async_tests.cpp
+  # The helpers those tests share.
+  panel_test_kit.hpp
 )
 
 # The `render` component's pure units. Linking the static library pulls in only the
@@ -37,7 +37,6 @@ add_executable(qar_qar_adapter_tests
 # C API or Ogre, so the exe needs neither the QarOS DLL nor OgreMain.dll.
 target_link_libraries(qar_qar_adapter_tests PRIVATE
   qar_ogre_adapter::render
-  qar_ogre_adapter::panels
   qar_ogre_adapter::url
   GTest::gtest_main
 )

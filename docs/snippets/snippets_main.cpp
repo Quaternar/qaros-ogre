@@ -11,7 +11,6 @@
 
 #include "qar_ar_core/panel_input_source.hpp"
 #include "qar_ar_core/pointing_ray.hpp"
-#include "qar_ar_core/qar_panel_sender.hpp"
 #include "qar_ar_core/qar_streaming_c.hpp"
 #include "qar_ogre_streaming/diagnostics.hpp"
 #include "qar_ogre_streaming/ogre_qar_streaming_manager.hpp"
@@ -22,11 +21,10 @@
 #include "qar_qar_adapter/qar_session_owner.hpp"
 
 // ar_core_snippets.cpp
-void snippet_panel_seam(qar_ar_core::IQarPanelSenderFactory * factory, const std::uint8_t * pixels);
 void snippet_pointing_ray(
   const QarDeviceHandsWithJoints & hands, const QarVector3 & eye_position, qar_ar_core::PointingRaySlot * slot);
 void snippet_spatial_frames();
-void snippet_pick_session(qar_ar_core::IQarPanelInputSource * source);
+void snippet_pick_session(qar_ar_core::IPanelInputSource * source);
 
 // ogre_streaming_snippets.cpp
 void snippet_stream_config(const QarPeerId & peer);
@@ -43,7 +41,6 @@ void snippet_factory_config(
   const std::shared_ptr<qar_qar_adapter::QarSessionOwner> & owner, const std::string & host);
 void snippet_factory_use(
   qar_qar_adapter::QarSessionOwner * owner, qar_qar_adapter::QarCApiSenderFactory * factory);
-void snippet_panels(qar_qar_adapter::IQarSessionOwner * owner);
 void snippet_url_panels(qar_qar_adapter::IQarSessionOwner * owner);
 void snippet_gestures(qar_qar_adapter::QarCApiSenderFactory * factory);
 void snippet_env_helpers();
@@ -60,7 +57,6 @@ static qar_ogre_streaming::OgreQarStreamingConfig kConfig;
 int main(int argc, char** argv) {
   (void)argv;
   if (argc > 1000) {
-    snippet_panel_seam(nullptr, nullptr);
     snippet_pointing_ray(kHands, kEye, nullptr);
     snippet_spatial_frames();
     snippet_pick_session(nullptr);
@@ -73,7 +69,6 @@ int main(int argc, char** argv) {
 
     snippet_factory_config(nullptr, kHost);
     snippet_factory_use(nullptr, nullptr);
-    snippet_panels(nullptr);
     snippet_url_panels(nullptr);
     snippet_gestures(nullptr);
     snippet_env_helpers();

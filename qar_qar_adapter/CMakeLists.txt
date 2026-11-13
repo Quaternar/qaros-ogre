@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 #
 # ===========================================================================
-# qar_qar_adapter — the QarOS C API side of the library seams, as six static
+# qar_qar_adapter — the QarOS C API side of the library seams, as five static
 # libraries. They are components of the qar_ogre_adapter package; EXPORT_NAME is
 # the name the package exports and the alias consumers use (qar_ogre_adapter::<name>):
 #
@@ -18,11 +18,10 @@
 #                                       and the factory that borrows the owner's
 #                                       session (QarCApiSenderFactory). Needs Ogre,
 #                                       through qar_ogre_streaming's seam headers.
-#   panels    qar_qar_adapter_panels    GUI-panel sender + per-panel input.
 #   url       qar_qar_adapter_url       browser-backed (URL) panels.
 #   gestures  qar_qar_adapter_gestures  app-volume (spatial) gestures.
 #
-# panels, url and gestures need only qar_ar_core and capi: no Ogre, no Qt.
+# url and gestures need only qar_ar_core and capi: no Ogre, no Qt.
 # The QarOS SDK DLL is loaded at RUN time; nothing links an import library.
 # ===========================================================================
 
@@ -90,7 +89,7 @@ target_link_libraries(qar_qar_adapter_capi PUBLIC
   qar_ogre_adapter::qar_ar_core
 )
 # A usage requirement, not a private flag: every translation unit that calls the
-# C API (the four components, and any consumer that calls it directly) must
+# C API (the components, and any consumer that calls it directly) must
 # dispatch through the tables qar_capi_loader.cpp defines. There is no import lib.
 target_compile_definitions(qar_qar_adapter_capi PUBLIC QAR_ENABLE_DYNAMIC_LOADING)
 
@@ -118,15 +117,6 @@ target_link_libraries(qar_qar_adapter_render PUBLIC
   qar_ogre_adapter::session
   qar_ogre_adapter::qar_ar_core
   qar_ogre_adapter::qar_ogre_streaming
-)
-
-qar_adapter_component(qar_qar_adapter_panels panels
-  src/qar_capi_panel_sender_adapter.cpp
-  src/qar_capi_panel_input_source.cpp
-)
-target_link_libraries(qar_qar_adapter_panels PUBLIC
-  qar_ogre_adapter::capi
-  qar_ogre_adapter::qar_ar_core
 )
 
 qar_adapter_component(qar_qar_adapter_url url

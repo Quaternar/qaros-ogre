@@ -7,15 +7,14 @@ cmake_minimum_required(VERSION 3.22)
 project(qar_ogre_adapter_consumer LANGUAGES CXX)
 
 # [qar-snippet:find]
-find_package(qar_ogre_adapter 0.1.0 CONFIG REQUIRED
-  COMPONENTS qar_ar_core qar_ogre_streaming render panels url gestures)
+find_package(qar_ogre_adapter 0.2.0 CONFIG REQUIRED
+  COMPONENTS qar_ar_core qar_ogre_streaming render url gestures)
 # [qar-snippet-end:find]
 
 set(consumer_targets
   qar_ogre_adapter::qar_ar_core
   qar_ogre_adapter::qar_ogre_streaming
   qar_ogre_adapter::render
-  qar_ogre_adapter::panels
   qar_ogre_adapter::url
   qar_ogre_adapter::gestures)
 list(JOIN consumer_targets " " consumer_target_text)

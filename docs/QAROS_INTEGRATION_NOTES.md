@@ -210,11 +210,10 @@ The authors of qar_ogre_adapter measured the following with test pages that were
 
 QAROS has a product version, and this stack states the one it was verified against: the installed QAROS 0.9.0-dev.3008+65dc9aeb. [Supported QAROS versions](SDK_COMPATIBILITY.md#supported-qaros-versions) says what that means, [Identifying the QAROS version](SDK_COMPATIBILITY.md#identifying-the-qaros-version) shows how to read the version and the hash of the header of an installation, and [API changes by QAROS version](SDK_COMPATIBILITY.md#api-changes-by-qaros-version) lists the parts of the header that the code depends on.
 
-Three parts of the C API that the code uses are worth checking when you move to another version. The code calls each of them, so a runtime that lacks one of them lacks something the code needs:
+Two parts of the C API that the code uses are worth checking when you move to another version. The code calls each of them, so a runtime that lacks one of them lacks something the code needs:
 
 | Part of the C API | What the code does with it |
 |---|---|
-| `qar_gui_panels_subscribe_all_gesture_events` | `QarCApiPanelInputSource` makes this one subscription for every GUI panel that streams a widget. |
 | `QarStreamParamsOpenGlWgl` | `QarCApiSenderFactory` chains it onto every render sender, with the four callbacks that tell QarOS how to use the OpenGL context. |
 | the field `app_volume_id` of `QarRenderSenderInit`, which must not be NULL | The factory creates its app volume before any sender exists and refuses to create a sender without one. |
 

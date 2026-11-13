@@ -1,10 +1,9 @@
 // Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
-// PRIVATE to qar_qar_adapter (not installed): the trace and error helpers that BOTH the
-// panel input source (component `panels`) and the spatial gesture source (component
-// `gestures`) use. Moved verbatim out of qar_capi_panel_input_source.cpp; they keep the
-// internal linkage they had there (one copy per translation unit, as before).
+// PRIVATE to qar_qar_adapter (not installed): the trace and error helpers of the spatial
+// gesture source (component `gestures`). They have internal linkage: one copy per translation
+// unit.
 
 #ifndef QAR_QAR_ADAPTER__QAR_CAPI_INPUT_INTERNAL_HPP_
 #define QAR_QAR_ADAPTER__QAR_CAPI_INPUT_INTERNAL_HPP_

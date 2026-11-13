@@ -8,13 +8,13 @@
 
 #include <chrono>
 
-#include "qar_qar_adapter/panel_state_guard.hpp"
+#include "qar_ar_core/panel_state_guard.hpp"
 
 namespace
 {
 
 using namespace std::chrono_literals;
-using qar_qar_adapter::PanelStateGuard;
+using namespace qar_ar_core;
 using Kind = PanelStateGuard::Decision::Kind;
 
 const PanelStateGuard::Clock::time_point kStart{};
