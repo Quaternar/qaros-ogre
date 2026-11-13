@@ -10,10 +10,19 @@ Each version lists what it adds, the compatibility it was verified with (the QAR
 
 - The QarOS headers come from the public qaros repository, a git submodule in `external/qaros`, instead of a copy of the C header in `third_party/qar`: the C header (`qar-streaming-c`) and the C++ headers (`qar-streaming-cpp`) from one qaros commit, through the CMake targets of qaros. Clone with `--recurse-submodules`. The cache variable `QAROS_SOURCE_DIR` replaces `QAR_VENDOR_INCLUDE_DIR`, and the project enables the C language, which the qaros header target requires.
 - The package installs the C++ headers `qar_streaming_cpp` next to `qar_streaming.h`, and the licence of qaros as `share/qar_ogre_adapter/LICENSE.qaros` instead of `LICENSE.qar_streaming_header`.
+- **Behaviour change: the session owner joins only the QAROS Hub of its own PC.** `QarSessionOwner` joins as a local source app (`QarOnboardLocalAppExt`): the Hub asks once to allow the program, no code is needed, and the program stores nothing. The QAROS header marks the code pairing with the Hub of another PC (`QarOnboardCodeExt`, `QarOnboardHostExt`), the rejoin with a stored onboarding id (`qar_runtime_rejoin`, `qar_runtime_rejoin_async`) and `qar_runtime_forget` deprecated and names no replacement inside an app.
+- **Migration for "another PC":** make the Hub of the program's PC a member of the Hub of the other PC in QAROS, and let the program join the Hub of its own PC as before. A stored pairing (`identity.txt` below `%LOCALAPPDATA%\Quaternar\QarOS-ROS\<program>`) is no longer read; delete the folder if you like, and revoke the old device in the Visualizer of the other Hub.
+- The components of `qar_qar_adapter` and its tests are compiled with `/we4996`: a call of a QarOS C API function that the header marks deprecated fails the build.
+- The status texts for the Hub of another PC are gone. `describe_status` takes `(code, context, detail)` without the Hub address, and the texts of the storage codes no longer speak of a stored pairing.
+- The live example takes `[--local] [--connect-only] [--seconds N]`; `--local` is the only mode and is still accepted.
 
 ### Removed
 
 - `third_party/qar` (the copy of `qar_streaming.h`, its licence and README) and `scripts/update_qar_headers.ps1`.
+- From the session owner (`qar_session_owner.hpp`): `HubEndpoint`, `submit_code()`, `forget()`, `configure()`, `effective_mode()`, `has_remote_identity()`, the states `kRejoining`, `kNeedsCode` and `kPairing`, the event `kForgetDone`, and the fields `SessionOwnerConfig::mode`, `remote`, `instance` and `identity_dir`. The runtime no longer gets a storage folder of the program.
+- `HubMode` and `resolve_hub_mode` (`target_rule.hpp`), and the contexts `kRemote`, `kRejoin` and `kForget` of `OnboardingContext`.
+- `identity_store.hpp` and `identity_store.cpp` (the stored pairing, `default_identity_dir`), and with them the environment variable `QAR_PANEL_IDENTITY_DIR`.
+- The options `--hub HOST:PORT`, `--code CODE` and `--forget` of the live example.
 
 ## 0.2.0
 

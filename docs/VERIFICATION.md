@@ -88,14 +88,14 @@ ctest --preset vs2019-x64
 ```text
 Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
         Start   1: check_layering_qar_ar_core
-  1/576 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.13 sec
+  1/546 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.13 sec
         Start   2: check_layering_qar_ogre_streaming
-  2/576 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.13 sec
+  2/546 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.13 sec
         Start   3: check_layering_qar_qar_adapter
-  3/576 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.20 sec
+  3/546 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.20 sec
         Start   4: check_layering_examples
 ...
-100% tests passed, 0 tests failed out of 576
+100% tests passed, 0 tests failed out of 546
 
 Total Test time (real) =  94.95 sec
 ```
@@ -247,7 +247,7 @@ A pass is a Visualizer window that shows the sample scene upright and in colour 
 
 The authors of qar_ogre_adapter did not run the live example of this repository in a session with a Visualizer, so the check above has not been run. The libraries of this repository ran in the live checks of qar_rviz_plugin, which streams the scene of RViz to a Visualizer through them: the plugin joined the QAROS Hub of the PC as a local app, the maintainers added a receiver in the Visualizer, and the scene of RViz reached it. The maintainers judged those checks as passed; the judgement is theirs, and this document gives no measurement of it.
 
-Not checked in a live session: the approval of a program by the Hub being denied or timing out, a Hub that stops while the program is connected, the pairing with the Hub of another PC, forgetting a pairing and pairing again, the invitation of a device, geographic anchoring against a live GPS source, and real multi-user devices. These paths are described as designed, from the code of the session owner.
+Not checked in a live session: the approval of a program by the Hub being denied or timing out, a Hub that stops while the program is connected, a Hub of this PC that is a member of the Hub of another PC, the invitation of a device, geographic anchoring against a live GPS source, and real multi-user devices. These paths are described as designed, from the code of the session owner.
 
 ## Device checks (Level 3)
 

@@ -71,8 +71,7 @@ std::string status_symbol(int code)
   return "QAR_STATUS_" + std::to_string(code);
 }
 
-StatusText describe_status(
-  int code, OnboardingContext context, const char * detail, const char * hub_address)
+StatusText describe_status(int code, OnboardingContext context, const char * detail)
 {
   StatusText out;
   out.code = code;
@@ -80,8 +79,6 @@ StatusText describe_status(
   if (detail != nullptr) {
     out.detail = detail;
   }
-  const std::string address =
-    (hub_address != nullptr && *hub_address != '\0') ? hub_address : "the address you typed";
 
   switch (code) {
     case kStatusNoRuntime:
@@ -96,15 +93,9 @@ StatusText describe_status(
       out.retry_offered = true;
       break;
     case QAR_STATUS_ONBOARDING_HUB_UNREACHABLE:
-      if (context == OnboardingContext::kLocal) {
-        out.message =
-          "The QAROS Hub is not running and could not be started. Start QAROS from the Start "
-          "menu, then connect again.";
-      } else {
-        out.message = "The QAROS Hub at " + address +
-          " does not answer. Check host, port (shown with the code), that the Hub runs, and the "
-          "firewall (TCP/UDP 19120-19200).";
-      }
+      out.message =
+        "The QAROS Hub is not running and could not be started. Start QAROS from the Start "
+        "menu, then connect again.";
       out.retry_offered = true;
       break;
     case QAR_STATUS_ONBOARDING_APPROVAL_DENIED:
@@ -131,45 +122,17 @@ StatusText describe_status(
         "old approval in the Visualizer (Source Applications) and connect again.";
       out.retry_offered = true;
       break;
-    case QAR_STATUS_PAKE_ERROR:
-      out.message =
-        "The code was wrong or has expired. Type the code the Hub shows now.";
-      out.retry_offered = true;
-      break;
-    case QAR_STATUS_ONBOARDING_SESSION_NOT_FOUND:
-      if (context == OnboardingContext::kForget) {
-        out.message = "No pairing with that Hub is stored.";
-      } else {
-        out.message =
-          "This PC is not paired with that Hub. Type the Hub's current code.";
-      }
-      out.retry_offered = true;
-      break;
-    case QAR_STATUS_ONBOARDING_RE_PAIR_REQUIRED:
-      out.message =
-        "The pairing has expired or was revoked. Pair again with a code from the Hub.";
-      out.retry_offered = true;
-      break;
-    case QAR_STATUS_ONBOARDING_RENEWAL_POSSESSION_UNPROVEN:
-      out.message = "The stored pairing is damaged. Pair again with a code.";
-      out.retry_offered = true;
-      break;
-    case QAR_STATUS_ONBOARDING_SESSION_STILL_ACTIVE:
-      out.message = "Disconnect first, then forget.";
-      out.retry_offered = true;
-      break;
     case QAR_STATUS_ARGUMENT_NOT_SUPPORTED:
       if (context == OnboardingContext::kInvite) {
         out.message =
           "The device address is not valid, or the Hub cannot invite that kind of device.";
       } else {
-        out.message =
-          "Host or port is not valid (the port is required; it is shown with the Hub's code).";
+        out.message = "QAROS refused an argument of the join: " + quoted_detail(detail) + ".";
       }
       out.retry_offered = true;
       break;
     case QAR_STATUS_NOT_IMPLEMENTED:
-      out.message = "This-PC mode works on Windows only; use another PC's Hub with a code.";
+      out.message = "Joining the QAROS Hub as a local app works on Windows only.";
       out.retry_offered = false;
       break;
     case QAR_STATUS_TIMEOUT:
@@ -181,7 +144,7 @@ StatusText describe_status(
       out.retry_offered = true;
       break;
     case QAR_STATUS_SECURE_STORAGE_LOCKED:
-      out.message = "The stored pairing is in use by another program. Try again in a moment.";
+      out.message = "The storage of QAROS is in use by another program. Try again in a moment.";
       out.retry_offered = true;
       break;
     case QAR_STATUS_SECURE_STORAGE_ERROR:
@@ -190,8 +153,8 @@ StatusText describe_status(
     case QAR_STATUS_SECURE_STORAGE_PROTECTOR_MISMATCH:
     case QAR_STATUS_SECURE_STORAGE_PROTECTOR_UNAVAILABLE:
     case QAR_STATUS_SECURE_STORAGE_INVALID_KEY:
-      out.message = "The stored pairing cannot be read on this PC / user (" + out.symbol +
-        "). Forget the pairing and pair again.";
+      out.message = "QAROS cannot read its storage on this PC / user (" + out.symbol +
+        "). Check the QAROS installation.";
       out.retry_offered = false;
       break;
     case QAR_STATUS_HUB_TARGET_APP_DEVICE_NOT_INVITABLE:

@@ -17,7 +17,7 @@
 //    QAROS threads    result, progress and peer-update callbacks. They queue a message or copy a
 //                     peer into the target table and return; they call no command.
 //    consumer thread  poll(), the render senders, the panels, invite_device(). It uses the
-//                     session from the drained kRunning event until disconnect(), forget() or the
+//                     session from the drained kRunning event until disconnect() or the
 //                     destructor, which the consumer calls after it released everything built on
 //                     the session.
 //
@@ -31,8 +31,10 @@
 //  messages (the results of the onboarding, the presence of the Hub) are handled in posting
 //  order, behind the tasks posted before them.
 //
-//  Two ways to join the Hub: a source app on the Hub's own PC (the Hub asks for approval once,
-//  no code), or a Hub on another PC (a pairing code once, then a stored pairing).
+//  The owner joins the QAROS Hub of this PC as a source app (QarOnboardLocalAppExt): the Hub asks
+//  the person at the PC to allow the program once, and the program stores nothing. To work with a
+//  Hub on another PC, make the Hub of this PC a member of that Hub (in QAROS); the program still
+//  joins the Hub of its own PC.
 
 #ifndef QAR_QAR_ADAPTER__QAR_SESSION_OWNER_HPP_
 #define QAR_QAR_ADAPTER__QAR_SESSION_OWNER_HPP_
@@ -58,11 +60,8 @@ namespace qar_qar_adapter
 enum class SessionState
 {
   kIdle,                ///< Not connected; connect() starts.
-  kLoading,             ///< Loading the library, creating the runtime, choosing the mode.
-  kWaitingForApproval,  ///< This-PC mode: the Hub asks the person at the PC to allow the program.
-  kRejoining,           ///< Another PC's Hub: joining again with the stored pairing.
-  kNeedsCode,           ///< Another PC's Hub: waiting for host, port and code (submit_code()).
-  kPairing,             ///< Another PC's Hub: pairing with the code.
+  kLoading,             ///< Loading the library and creating the runtime.
+  kWaitingForApproval,  ///< The Hub asks the person at the PC to allow the program.
   kRunning,             ///< Joined; the session is the consumer's.
   kReconnecting,        ///< Joined, but the Hub does not answer; the session stays valid.
   kStopping,            ///< Releasing the session.
@@ -76,23 +75,12 @@ enum class DeviceKind
   kHeadset     ///< `headset:<host>` (Meta Quest, Android glasses)
 };
 
-/// @brief Host and onboarding port of a Hub on another PC. The port has no default.
-struct HubEndpoint
-{
-  std::string host;
-  std::uint16_t port = 0;
-};
-
 /// @brief Everything the owner needs to know before connect().
 struct SessionOwnerConfig
 {
-  HubMode mode = HubMode::kAuto;
-  HubEndpoint remote;                       ///< Prefill for the remote mode.
-  std::string program_tag;                  ///< "rviz2-plugin", ...: names the folders.
-  std::string instance;                     ///< A second program of the same kind on one PC.
+  std::string program_tag;                  ///< "rviz2-plugin", ...: goes into the peer info.
   std::string display_name;                 ///< Shown in the Hub's approval prompt.
   std::string app_version = "0.1.0";
-  std::string identity_dir;                 ///< Empty: default_identity_dir(tag, instance).
   std::string library_path;                 ///< Empty: the vendor's lookup (library_load(NULL)).
   std::uint32_t approval_timeout_ms = 0;    ///< 0: the Hub's default; at most 600000.
   std::uint32_t max_targets = 8;            ///< How many targets get a stream.
@@ -117,10 +105,10 @@ struct TargetInfo
 /// @brief Something the owner reports to the consumer. poll() hands them out in order.
 struct SessionEvent
 {
-  enum class Kind { kState, kProgress, kTargetUp, kTargetDown, kInviteDone, kForgetDone, kLog };
+  enum class Kind { kState, kProgress, kTargetUp, kTargetDown, kInviteDone, kLog };
   Kind kind = Kind::kLog;
   SessionState state = SessionState::kIdle;   ///< kState.
-  StatusText status;                          ///< kState (the cause), kInviteDone, kForgetDone.
+  StatusText status;                          ///< kState (the cause), kInviteDone.
   std::string text;                           ///< kProgress and kLog text; kInviteDone: the device.
   float percent = -1.0f;                      ///< kProgress; negative when unknown.
   TargetInfo target;                          ///< kTargetUp, kTargetDown, kInviteDone (its id).
@@ -184,21 +172,10 @@ public:
 
   /// @brief kIdle or kFailed to kLoading; ignored in every other state.
   void connect();
-  /// @brief kNeedsCode to kPairing. A host that is empty or a port of 0 is refused: the state
-  /// stays kNeedsCode and the event says why. The code is a secret: it is not stored or logged.
-  void submit_code(std::string code, HubEndpoint hub);
-  /// @brief Cancels the wait for approval, the rejoin or the pairing.
+  /// @brief Cancels the wait for approval.
   void cancel();
-  /// @brief kRunning to kStopping to kIdle. The stored pairing stays.
+  /// @brief kRunning to kStopping to kIdle.
   void disconnect();
-  /// @brief Disconnects, erases the stored pairing from the runtime and deletes the identity file.
-  /// Remote mode only; ignored otherwise.
-  void forget();
-  /// @brief Sets the Hub mode that the next connect() uses and the remote host and port that the
-  /// pairing starts from. The owner thread applies it. While the owner is joining, running or
-  /// stopping the values are kept and applied at the next connect(); one log line says so. The
-  /// owner never has to be destroyed to change them.
-  void configure(HubMode mode, HubEndpoint remote);
   /// @brief Sets who hears about targets. A new listener first hears of the targets that have a
   /// stream. An empty listener removes it, and the call returns only after a delivery that is
   /// running has ended, so the caller may release the old listener right after. Consumer thread.
@@ -212,15 +189,13 @@ public:
   /// handed out a kRunning event, ready() is true.
   void poll(std::vector<SessionEvent> & out);
   SessionState state() const;
-  HubMode effective_mode() const;
-  bool has_remote_identity() const;
   /// @brief The targets that are here (thread-safe copy).
   std::vector<TargetInfo> targets() const;
   QarPeerId self_peer() const;
   /// @brief "0.9.0 release v0 from <path>" once the library is loaded; empty before.
   std::string runtime_description() const;
   /// @brief Asks the Hub of this PC to start the app of a device. Consumer thread, session
-  /// running, this-PC mode only. @return empty when the request started (the answer arrives as
+  /// running. @return empty when the request started (the answer arrives as
   /// kInviteDone), else the refusal in plain words.
   std::string invite_device(DeviceKind kind, const std::string & host);
 
@@ -247,7 +222,7 @@ public:
   /// @brief A thread-safe copy of the counters of the task queue.
   TaskStats task_stats() const;
 
-  /// @brief How long the tasks that were posted before a disconnect, a forget or the destructor
+  /// @brief How long the tasks that were posted before a disconnect or the destructor
   /// may keep running; a task whose turn comes later is dropped.
   static constexpr std::chrono::seconds kTaskDrainBudget{8};
 
@@ -265,7 +240,7 @@ private:
 };
 
 /// @brief For console programs, which may block: polls until the session runs, joining stops
-/// at a failure or at a request for a code, or @p deadline passes.
+/// at a failure, or @p deadline passes.
 /// @param seen When not null, receives every event polled.
 /// @return the state when the wait ended.
 SessionState wait_for_session(

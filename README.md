@@ -19,7 +19,7 @@ cmake --install build\vs2019-x64 --config RelWithDebInfo --prefix $env:QAR_PREFI
 
 The tests end with the line 100% tests passed and the sample with the line sample PASSED (exit 0).
 
-To use QAROS, run the live example. It joins the QAROS Hub of this PC as a source app: QAROS asks to allow the program once for each build of it (and again after a rebuild), so click Allow in the QAROS window. Then open a Visualizer from QAROS and add a receiver in it if it has none, and the example streams the sample scene to it. A Hub on another PC needs `--hub HOST:PORT --code CODE` instead of `--local`.
+To use QAROS, run the live example. It joins the QAROS Hub of this PC as a source app: QAROS asks to allow the program once for each build of it (and again after a rebuild), so click Allow in the QAROS window. Then open a Visualizer from QAROS and add a receiver in it if it has none, and the example streams the sample scene to it. For a Hub on another PC, make the Hub of this PC a member of that Hub in QAROS; the example still joins the Hub of its own PC.
 
 ```powershell
 $env:PATH = "$env:ROS2_INSTALL_ROOT\opt\rviz_ogre_vendor\bin;$env:PATH"
@@ -44,7 +44,7 @@ Everything that is not QarOS is installed from a fresh Windows 11 machine, step 
 
 - **A core that calls no QarOS function.** `qar_ar_core` holds the Qt-free vocabulary of AR pointer input, the decisions about a QarOS panel, the pointing-ray model, the spatial frames and the pick model, and the one wrapper of the QarOS C header.
 - **An Ogre stereo stream for every peer.** `qar_ogre_streaming` renders an Ogre scene into a colour and a depth render texture for each eye, with the pose and the field of view of each eye from QarOS, and reaches QarOS only through a narrow seam.
-- **The QarOS C API adapter.** `qar_qar_adapter` has five components, `capi`, `session`, `render`, `url` and `gestures`; its session owner joins the QAROS Hub as a local app or with a pairing code, on a thread of its own.
+- **The QarOS C API adapter.** `qar_qar_adapter` has five components, `capi`, `session`, `render`, `url` and `gestures`; its session owner joins the QAROS Hub of its own PC as a local app, on a thread of its own.
 - **Geo anchor and diagnostics.** A WGS84 fix or an ECEF frame can georeference the app volume, and opt-in switches write a per-frame trace and stage timings as CSV files.
 - **A headless sample and a live example.** The sample renders the same Ogre scene for synthetic peers and needs no QAROS; the example joins the QAROS Hub and streams that scene to the first target that comes up.
 - **Known limitations.** What the QarOS SDK does not document or does not do is listed in [Known SDK limitations](docs/QAROS_INTEGRATION_NOTES.md#known-sdk-limitations), and the symptoms of the limits that you may meet are in [Troubleshooting](docs/TROUBLESHOOTING.md#qaros-stream-problems). [What the live sessions showed](docs/VERIFICATION.md#what-the-live-sessions-showed) says what the sessions of qar_rviz_plugin showed.

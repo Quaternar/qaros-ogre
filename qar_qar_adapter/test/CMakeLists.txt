@@ -44,12 +44,16 @@ target_compile_features(qar_qar_adapter_tests PRIVATE cxx_std_17)
 target_include_directories(qar_qar_adapter_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 
 qar_apply_warning_flags(qar_qar_adapter_tests)
+if(MSVC)
+  # A deprecated QarOS C API call is an error here as in the components.
+  target_compile_options(qar_qar_adapter_tests PRIVATE /we4996)
+endif()
 
 include(GoogleTest)
 gtest_discover_tests(qar_qar_adapter_tests DISCOVERY_TIMEOUT 30)
 
-# The session owner on the fake library: joining the Hub of this PC and of another PC, the
-# targets, the teardown, the stored pairing and the status texts.
+# The session owner on the fake library: joining the Hub of this PC, the targets, the teardown
+# and the status texts.
 add_executable(qar_qar_adapter_session_tests
   fake_qar_api.cpp
   # Replaces the global operator new and delete so that a test can tell when a block was freed.
@@ -57,7 +61,6 @@ add_executable(qar_qar_adapter_session_tests
   session_owner_tests.cpp
   # The timer of QarOS calls on a GUI thread.
   gui_call_guard_tests.cpp
-  identity_store_tests.cpp
   onboarding_status_tests.cpp
 )
 target_link_libraries(qar_qar_adapter_session_tests PRIVATE
@@ -68,5 +71,9 @@ target_compile_features(qar_qar_adapter_session_tests PRIVATE cxx_std_17)
 target_include_directories(qar_qar_adapter_session_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 
 qar_apply_warning_flags(qar_qar_adapter_session_tests)
+if(MSVC)
+  # A deprecated QarOS C API call is an error here as in the components.
+  target_compile_options(qar_qar_adapter_session_tests PRIVATE /we4996)
+endif()
 
 gtest_discover_tests(qar_qar_adapter_session_tests DISCOVERY_TIMEOUT 30 PROPERTIES TIMEOUT 60)

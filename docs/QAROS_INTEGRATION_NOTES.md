@@ -46,11 +46,11 @@ The header describes the basic flow, and the session owner of this stack makes t
 
 1. `qar_library_load` and `qar_library_init`, once per process.
 2. `qar_runtime_create`, with the runtime binaries folder left empty.
-3. `qar_runtime_onboard_async` with exactly one mode extension, or `qar_runtime_rejoin_async` with the onboarding id that was stored by an earlier pairing. `QarOnboardLocalAppExt` joins a source app on the PC of the Hub and needs no code; `QarOnboardCodeExt` pairs with the Hub of another PC with its host, its onboarding port and a pairing code. These are the only calls that produce an active `QarSession`; there is no getter for a current session, so the owner keeps the pointer.
+3. `qar_runtime_onboard_async` with `QarOnboardLocalAppExt`, which joins a source app on the PC of the Hub and needs no code. This is the only call that produces an active `QarSession`; there is no getter for a current session, so the owner keeps the pointer.
 4. `qar_session_get_my_spec` for the own peer, then `qar_peer_subscribe_updates` for the peers of the session.
 5. `qar_app_volumes_get_or_create`, then `qar_render_sender_create_async` for each target that streams. The consumer of the owner makes these calls through tasks that the owner thread runs, in order.
 
-The stored pairing is the onboarding id in the file `identity.txt` of the program's identity folder; `qar_runtime_forget` erases it in the runtime, and the owner then deletes the file. A source app that joins the Hub of its own PC stores nothing.
+A source app that joins the Hub of its own PC stores nothing. The header marks the other ways deprecated: code pairing (`QarOnboardCodeExt` with `QarOnboardHostExt`), the rejoin of a stored onboarding id (`qar_runtime_rejoin`, `qar_runtime_rejoin_async`) and `qar_runtime_forget`. The stack calls none of them, and the components of `qar_qar_adapter` are compiled with `/we4996`, so a call of a deprecated function fails the build. To work with the Hub of another PC, make the Hub of this PC a member of that Hub in QAROS; the program still joins the Hub of its own PC.
 
 Creating a render sender negotiates a transfer with the receiver, and with a QAROS runtime earlier than the verified version it had, as far as this stack observed, no bound on its duration. This stack therefore never waits for it on the render thread: it starts `qar_render_sender_create_async`, answers "not yet" to the render tick, and picks up the result on a later tick.
 
