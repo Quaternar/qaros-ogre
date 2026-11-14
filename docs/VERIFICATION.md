@@ -168,7 +168,7 @@ cmake --build build\consumer --config RelWithDebInfo
 .\build\consumer\RelWithDebInfo\qar_ogre_adapter_consumer.exe
 ```
 ```text
-qar_ogre_adapter 0.2.0
+qar_ogre_adapter 0.3.0
 targets: qar_ogre_adapter::qar_ar_core qar_ogre_adapter::qar_ogre_streaming qar_ogre_adapter::render qar_ogre_adapter::url qar_ogre_adapter::gestures
 QarOS library loaded: no
 status text: Ok

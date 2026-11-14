@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <thread>
 
+#include "qar_ar_core/version.hpp"
 #include "qar_qar_adapter/gui_call_guard.hpp"
 #include "session_owner_harness.hpp"
 
@@ -87,7 +88,7 @@ TEST(SessionOwnerLocal, ApprovalJoinsTheSessionAndHandsItOverAfterTheConsumerDra
   EXPECT_EQ(requests[0].kind, "local");
   EXPECT_EQ(requests[0].approval_timeout_ms, 45000u);
   EXPECT_EQ(requests[0].display_name, "Test program on host");
-  EXPECT_EQ(requests[0].app_version, "0.1.0");
+  EXPECT_EQ(requests[0].app_version, qar_ar_core::kLibraryVersion);
   EXPECT_EQ(requests[0].custom_info, "qaros-ros;program=test-program");
 
   const auto states = h.events();

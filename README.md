@@ -1,6 +1,6 @@
 # qar_ogre_adapter - the QarOS integration layer
 
-qar_ogre_adapter 0.2.0 is the QarOS integration layer of a stack that streams Ogre scenes, Qt widgets, web pages and RViz into QarOS. It renders an Ogre scene for each eye into OpenGL textures and streams them to QarOS, it holds the one adapter for the QarOS C API (the session owner that joins the QAROS Hub, the targets, URL panels and gestures) that the plugin repository of the stack builds on, and it carries the C header of QAROS that the stack compiles against. It is a set of C++17 static libraries for Windows 11 and MSVC, delivered as the CMake package `qar_ogre_adapter`, with a headless sample and a live example that you can run.
+qar_ogre_adapter 0.3.0 is the QarOS integration layer of a stack that streams Ogre scenes, Qt widgets, web pages and RViz into QarOS. It renders an Ogre scene for each eye into OpenGL textures and streams them to QarOS, it holds the one adapter for the QarOS C API (the session owner that joins the QAROS Hub, the targets, URL panels and gestures) that the plugin repository of the stack builds on, and it carries the C header of QAROS that the stack compiles against. It is a set of C++17 static libraries for Windows 11 and MSVC, delivered as the CMake package `qar_ogre_adapter`, with a headless sample and a live example that you can run.
 
 ## TL;DR
 
@@ -53,13 +53,13 @@ Each feature is described in [Feature details](docs/ARCHITECTURE.md#feature-deta
 
 ## Where this fits
 
-This repository is one of three that together stream an Ogre scene, Qt widgets, web pages and RViz into QarOS. Each repository has the version 0.2.0, and this documentation describes version 0.2.0 of all three: a repository asks for that version of the repositories it builds on, so the three have to be at matching versions. The table lists the three in the order in which they are installed: `qar_ogre_adapter` and `qar_qt_streaming` are independent of each other, and `qar_rviz_plugin` comes last because it builds on both.
+This repository is one of three that together stream an Ogre scene, Qt widgets, web pages and RViz into QarOS. Each repository has its own version, the file `VERSION` at its root, which is 0.3.0 in all three for this documentation; a repository asks for the same minor version of the repositories it builds on, so the three have to be at matching minor versions. What changed in each version is in its `CHANGELOG.md`. The table lists the three in the order in which they are installed: `qar_ogre_adapter` and `qar_qt_streaming` are independent of each other, and `qar_rviz_plugin` comes last because it builds on both.
 
 | Repository | Version | What it provides | Depends on | Also needs |
 |---|---|---|---|---|
-| **qar_ogre_adapter** (this repository) | 0.2.0 | The QarOS integration layer: renders an Ogre scene for each eye and streams it to QarOS; the adapter for the QarOS C API; the QarOS headers of the qaros submodule | none | The ROS 2 distribution, for Ogre only |
-| qar_qt_streaming | 0.2.0 | Qt widgets as QarOS AR GUI panels, as a Qt library that needs no ROS 2, no RViz and no Ogre | none | Qt 5.15.2 or Qt 6.5 and newer, the QarOS C++ SDK headers (a copy is carried) |
-| qar_rviz_plugin | 0.2.0 | The RViz2 plugin that streams RViz into QarOS, and web AR panels from a UI model and from the ROS 2 graph | qar_ogre_adapter, qar_qt_streaming | The ROS 2 distribution with its repairs, Qt 5.15.2, colcon |
+| **qar_ogre_adapter** (this repository) | 0.3.0 | The QarOS integration layer: renders an Ogre scene for each eye and streams it to QarOS; the adapter for the QarOS C API; the QarOS headers of the qaros submodule | none | The ROS 2 distribution, for Ogre only |
+| qar_qt_streaming | 0.3.0 | Qt widgets as QarOS AR GUI panels, as a Qt library that needs no ROS 2, no RViz and no Ogre | none | Qt 5.15.2 or Qt 6.5 and newer, the QarOS C++ SDK headers (a copy is carried) |
+| qar_rviz_plugin | 0.3.0 | The RViz2 plugin that streams RViz into QarOS, and web AR panels from a UI model and from the ROS 2 graph | qar_ogre_adapter, qar_qt_streaming | The ROS 2 distribution with its repairs, Qt 5.15.2, colcon |
 
 The installation document of each repository installs the repositories it depends on, with the commands for each, so you can start from any of them.
 

@@ -21,8 +21,17 @@ add_library(qar_ogre_adapter::qar_ar_core ALIAS qar_ar_core)
 
 target_compile_features(qar_ar_core PUBLIC cxx_std_17)
 
+# qar_ar_core/version.hpp: the version of this build (cmake/QarOgreVersion.cmake), generated into
+# the build folder and installed with the other headers.
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/QarOgreVersion.cmake")
+set(QAR_AR_CORE_GENERATED_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/include"
+  CACHE INTERNAL "Generated headers of qar_ar_core")
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/version.hpp.in"
+  "${QAR_AR_CORE_GENERATED_INCLUDE_DIR}/qar_ar_core/version.hpp" @ONLY)
+
 target_include_directories(qar_ar_core PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+  "$<BUILD_INTERFACE:${QAR_AR_CORE_GENERATED_INCLUDE_DIR}>"
   "$<INSTALL_INTERFACE:include>"
 )
 # The QarOS headers of the qaros submodule (qar_streaming.h and qar_streaming_cpp/); only

@@ -4,7 +4,9 @@
 # qar_ogre_adapter: the QarOS integration layer for Ogre applications - qar_ar_core,
 # qar_ogre_streaming and the QarOS C API adapter components capi, session, render, url, gestures.
 cmake_minimum_required(VERSION 3.22)
-project(qar_ogre_adapter VERSION 0.2.0
+# The version comes from the file VERSION and git (cmake/QarOgreVersion.cmake).
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/QarOgreVersion.cmake")
+project(qar_ogre_adapter VERSION ${QAR_OGRE_ADAPTER_VERSION_CORE}
   DESCRIPTION "QarOS integration layer for Ogre applications"
   LANGUAGES CXX)
 
@@ -56,6 +58,8 @@ if(_qar_install)
     INCLUDES DESTINATION include)
   install(DIRECTORY qar_ar_core/include/ qar_ogre_streaming/include/ qar_qar_adapter/include/
     DESTINATION include)
+  install(FILES "${QAR_AR_CORE_GENERATED_INCLUDE_DIR}/qar_ar_core/version.hpp"
+    DESTINATION include/qar_ar_core)
   # The QarOS headers of the submodule, so that the repositories built on this package compile
   # against the same qaros commit.
   install(FILES "${QAROS_SOURCE_DIR}/qar-streaming-c/include/qar_streaming.h" DESTINATION include)

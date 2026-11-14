@@ -96,7 +96,7 @@ These are the structs that a host fills in code. Every default below is the valu
 |---|---|---|---|
 | `program_tag` | `std::string` | empty | Names the program in the peer info that the Hub is told. |
 | `display_name` | `std::string` | empty | The name that the Hub shows in its approval prompt. |
-| `app_version` | `std::string` | `0.1.0` | The version of the program that the Hub is told. |
+| `app_version` | `std::string` | `qar_ar_core::kLibraryVersion`, the version of this qar_ogre_adapter build (`qar_ar_core/version.hpp`) | The version of the program that the Hub is told. |
 | `library_path` | `std::string` | empty | The file of the QarOS library. Empty selects the lookup of the header, which finds the installed QAROS. |
 | `approval_timeout_ms` | `std::uint32_t` | `0` | How long the Hub waits for the person to click Allow. 0 is the default of the Hub, and the Hub takes at most 600000. |
 | `max_targets` | `std::uint32_t` | `8` | How many targets get a stream; a further target is listed as not served. |

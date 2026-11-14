@@ -20,6 +20,7 @@
 
 #include "qar_ar_core/common_name.hpp"
 #include "qar_ar_core/qar_streaming_c.hpp"
+#include "qar_ar_core/version.hpp"
 #include "qar_ogre_streaming/ogre_qar_stereo_stream.hpp"
 #include "qar_ogre_streaming/ogre_qar_streaming_manager.hpp"
 #include "qar_qar_adapter/env_config.hpp"
@@ -49,15 +50,16 @@ struct MainThreadExecutor : qos::IRenderThreadExecutor
 void print_usage()
 {
   std::printf(
-    "Usage: qar_ogre_live_stream_example [--local] [--connect-only] [--seconds N]\n"
-    "  --local         join the QAROS Hub of this PC (the only mode, accepted for older\n"
+    "Usage: qar_ogre_live_stream_example [--local] [--connect-only] [--seconds N] | --version\n"
+    "  --local        join the QAROS Hub of this PC (the only mode, accepted for older\n"
     "                  scripts). QAROS asks once to allow this program, and again after each\n"
     "                  rebuild of it: click Allow in the QAROS window. For a Hub on another PC,\n"
     "                  make the Hub of this PC a member of that Hub in QAROS\n"
     "  --connect-only  join QAROS, print the runtime, the mode, this program's peer, the app\n"
     "                  volume and the targets, and exit; no window, no stream\n"
     "  --seconds N     otherwise: wait for a target (a headset or a Visualizer), stream the\n"
-    "                  scene to the first one that comes up, stop after N s (default 60)\n");
+    "                  scene to the first one that comes up, stop after N s (default 60)\n"
+    "  --version       print the qar_ogre_adapter version and exit\n");
 }
 
 // Prints what the Hub-facing events say, the plain-words status first.
@@ -86,6 +88,10 @@ int main(int argc, char ** argv)
   std::setvbuf(stdout, nullptr, _IONBF, 0);
   bool connect_only = false;
   int seconds = 60;
+  if (argc == 2 && std::string(argv[1]) == "--version") {
+    std::printf("qar_ogre_live_stream_example %s\n", qar_ar_core::kLibraryVersion);
+    return 0;
+  }
   const bool help = argc == 2 && std::string(argv[1]) == "--help";
   bool bad_usage = false;
   for (int i = 1; i < argc && !help && !bad_usage; ++i) {

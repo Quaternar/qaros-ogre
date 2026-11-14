@@ -48,6 +48,7 @@
 #include <vector>
 
 #include "qar_ar_core/qar_streaming_c.hpp"
+#include "qar_ar_core/version.hpp"
 #include "qar_qar_adapter/env_config.hpp"
 #include "qar_qar_adapter/onboarding_status.hpp"
 #include "qar_qar_adapter/qar_capi_session_owner.hpp"
@@ -80,7 +81,8 @@ struct SessionOwnerConfig
 {
   std::string program_tag;                  ///< "rviz2-plugin", ...: goes into the peer info.
   std::string display_name;                 ///< Shown in the Hub's approval prompt.
-  std::string app_version = "0.1.0";
+  /// The version of the program that the Hub is told. Default: the qar_ogre_adapter version.
+  std::string app_version = qar_ar_core::kLibraryVersion;
   std::string library_path;                 ///< Empty: the vendor's lookup (library_load(NULL)).
   std::uint32_t approval_timeout_ms = 0;    ///< 0: the Hub's default; at most 600000.
   std::uint32_t max_targets = 8;            ///< How many targets get a stream.
