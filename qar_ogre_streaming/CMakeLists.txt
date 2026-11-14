@@ -4,7 +4,7 @@
 # qar_ogre_streaming — reusable Ogre<->Qar stereo streaming library.
 #
 # Plain CMake (NOT ament). Zero dependency on rviz_common, rviz_rendering, Qt,
-# ament or ROS. Depends only on: Ogre (via rviz_ogre_vendor), the vendored Qar C
+# ament or ROS. Depends only on: Ogre (via rviz_ogre_vendor), the QarOS C
 # header, and the C++17 standard library. See docs/ARCHITECTURE.md.
 
 # ---------------------------------------------------------------------------

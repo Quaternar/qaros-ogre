@@ -19,6 +19,8 @@ add_executable(qar_ar_core_tests
   spatial_frames_tests.cpp
   spatial_pick_tests.cpp
   timing_log_tests.cpp
+  # The version of the build against the file VERSION.
+  version_tests.cpp
 )
 
 target_link_libraries(qar_ar_core_tests PRIVATE
@@ -27,6 +29,8 @@ target_link_libraries(qar_ar_core_tests PRIVATE
 )
 
 target_compile_features(qar_ar_core_tests PRIVATE cxx_std_17)
+target_compile_definitions(qar_ar_core_tests PRIVATE
+  QAR_TEST_VERSION_FILE="${PROJECT_SOURCE_DIR}/VERSION")
 
 qar_apply_warning_flags(qar_ar_core_tests)
 

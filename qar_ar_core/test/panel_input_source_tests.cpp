@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 //
 // The INPUT seam: the queue the runtime's callback thread pushes into, and the
-// mechanical mapping from the vendored gesture enums.
+// mechanical mapping from the gesture enums of the QarOS C header.
 //
 // Handle-READING (qar_qar_adapter's pointer_sample_from_gesture_event, which calls the
 // SDK's accessors) is deliberately NOT tested here: this suite links no Qar runtime,

@@ -22,14 +22,14 @@ ctest --preset vs2019-x64
 ```text
 Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
         Start   1: check_layering_qar_ar_core
-  1/576 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.13 sec
+  1/546 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.13 sec
         Start   2: check_layering_qar_ogre_streaming
-  2/576 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.13 sec
+  2/546 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.13 sec
         Start   3: check_layering_qar_qar_adapter
-  3/576 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.20 sec
+  3/546 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.20 sec
         Start   4: check_layering_examples
 ...
-100% tests passed, 0 tests failed out of 576
+100% tests passed, 0 tests failed out of 546
 
 Total Test time (real) =  94.95 sec
 ```
@@ -54,9 +54,9 @@ Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
   Test   #6: StereoStreamConfig.DefaultsAreValid
   Test   #7: StereoStreamConfig.RejectsZeroDimensions
 ...
-  Test #576: HubModeRule.AnExplicitRequestWinsAndAutoLooksAtThePairingAndTheInstall
+  Test #546: TargetRule.APresenceTheHeaderDoesNotNameReadsAsUnknown
 
-Total Tests: 576
+Total Tests: 546
 ```
 
 ```powershell
@@ -101,9 +101,9 @@ The unit tests are four GoogleTest executables, `qar_ar_core_tests`, `qar_ogre_s
 | `qar_qar_adapter_tests` | `PanelStateLog`, `RuntimeRecord`, `RuntimeRecordLog`, `PanelLines`, `LogTime`, `LogOnce`, `ThreadNumber` | the line of a change of the state of a panel, the record that the runtime keeps of a panel (a stream that is ours reads match and another one MISMATCH, a change of state, stream or size is a change and nothing else is, the numbering, and the bounded queue), the stamp of a line, and a guard that lets exactly one of many threads through |
 | `qar_qar_adapter_tests` | `RenderFactoryQueue`, `RenderFactoryAttach`, `RenderFactoryLifetime`, `RenderFactoryPending`, `RenderFactoryAsync` | the render sender factory on the session owner, which runs on the fake library: the queues of new and closed peers, the attach and its states, the weak reference to the owner, the pending creations and the asynchronous results |
 | `qar_qar_adapter_tests` | `UrlPanel`, `PanelStateGuard` | the URL panel adapter on the thread of the owner: the queued create, place, state and teardown tasks, the results that `drain_results` hands out, the reattach of a panel, and the keeper that asks a panel for its state again |
-| `qar_qar_adapter_session_tests` | `SessionOwnerLocal`, `SessionOwnerRemote`, `SessionOwnerMode`, `SessionOwnerConfigure`, `SessionOwnerRefusedStart` | joining the Hub of this PC and of another PC on the fake library: the approval, the pairing with a code, the rejoin, the choice of the mode and the settings that are kept for the next connect |
+| `qar_qar_adapter_session_tests` | `SessionOwnerLocal`, `SessionOwnerRefusedStart` | joining the Hub of this PC on the fake library: the approval, its denial and timeout, a busy Hub, a library that cannot be loaded or started, and an attempt that failed at once |
 | `qar_qar_adapter_session_tests` | `SessionOwnerTargets`, `SessionOwnerListener`, `SessionOwnerInvites`, `SessionOwnerTasks`, `SessionOwnerHandOver`, `SessionOwnerTeardown` | the table of targets and the cap of served targets, the listener, the invite of a device, the tasks of the owner thread with the drop rules, the hand-over of the session to the consumer and the bounded teardown |
-| `qar_qar_adapter_session_tests` | `GuiCallGuard`, `IdentityStore`, `OnboardingStatus`, `TargetRule`, `HubModeRule` | the timer of QarOS calls, the identity file and its folder, the plain-words texts of the status codes, the rule that selects the render targets and the rule that selects the Hub mode |
+| `qar_qar_adapter_session_tests` | `GuiCallGuard`, `OnboardingStatus`, `TargetRule` | the timer of QarOS calls, the plain-words texts of the status codes, and the rule that selects the render targets |
 | `qar_qar_adapter_tests` | `RenderConfigDefaults`, `GlSenderContextHandles`, `CopyHookDefaults` | the default app volume is a cube of ten metres whose centre is one metre up; a sender binds its own context on the device context that it was created on and a missing handle binds nothing; a hook without read-back reports no colour |
 
 ## Test doubles
@@ -122,7 +122,7 @@ The tests of the session owner, the render sender factory and the panel adapters
 
 ## What the automated tests do not cover
 
-- **The real runtime and Hub.** The fake follows the contract that the header documents, so a test cannot show that the real runtime answers the same way. The approval by a person, the pairing with the Hub of another PC, the invite of a device, sender creation against a real receiver, panels as the Visualizer draws them and gestures from a real hand need a live QarOS session. Where logic of the adapter is worth testing, move it out of the class that is bound to the session into free functions over plain values, as the target rule and the panel state decision were, and test that.
+- **The real runtime and Hub.** The fake follows the contract that the header documents, so a test cannot show that the real runtime answers the same way. The approval by a person, the invite of a device, sender creation against a real receiver, panels as the Visualizer draws them and gestures from a real hand need a live QarOS session. Where logic of the adapter is worth testing, move it out of the class that is bound to the session into free functions over plain values, as the target rule and the panel state decision were, and test that.
 - **Ogre and the GL hand-off.** The tests never call a real Ogre function, because a unit test has no GL context. The test executable of `qar_ogre_streaming` therefore delay-loads `OgreMain.dll`, which lets it run from a plain shell. Ogre render targets and the extraction of GL textures are checked by running the headless sample, and the copy of the textures into the ones of QarOS needs the runtime, which the live example is meant to check.
 - **A live session with a viewer.** What the QarOS Visualizer shows and how depth and poses look there cannot be tested without a Visualizer. They are Level 2 checks of [Verification](VERIFICATION.md#desktop-visualizer-checks-level-2) with the live example, and the authors of qar_ogre_adapter have not run that example with a Visualizer. The example streams to the first target that comes up, so the behaviour with several targets is not part of it. [What the live sessions showed](VERIFICATION.md#what-the-live-sessions-showed) says what the live sessions of qar_rviz_plugin showed.
 
@@ -136,7 +136,7 @@ CTest registers one guard test per module that this repository holds, named `che
 |---|---|
 | L1, include classes | A module includes only the foreign header families listed for it: the standard library, Qt, Ogre, ROS 2, RViz, platform headers, GoogleTest, stb. |
 | L2, project edges | A module includes only the project modules listed for it, and some edges only through named headers: no upward and no sideways edge. Every example folder has its own entry. |
-| L3, vendored header | Only the wrapper header of the core includes the vendored QarOS C header. |
+| L3, QarOS C header | Only the wrapper header of the core includes the QarOS C header. |
 | L4, core calls no API | The core calls no QarOS C function; it uses the types of the C API only, so it never needs the SDK DLL. |
 | L5, adapter components | Every file of the adapter belongs to one component and includes only headers of its own component and of the components it may use. |
 | L6, loader | The dynamic-loading implementation macro of the C header appears exactly once, in the loader file of the adapter, and nothing defines the dynamic-loading switch except CMake. |
@@ -177,7 +177,7 @@ Fix the include rather than the table: move the code to the layer that may use t
 
 For this repository the guard checks four modules: `qar_ar_core`, `qar_ogre_streaming`, `qar_qar_adapter` and `examples`. CTest registers one test for each of them, `check_layering_qar_ar_core`, `check_layering_qar_ogre_streaming`, `check_layering_qar_qar_adapter` and `check_layering_examples`, and the test `check_layering_selftest`. What the rules mean here:
 
-- `qar_ar_core` includes only the standard library, one platform header and its own headers, and it calls no function of the QarOS C API. Only its wrapper header includes the vendored C header.
+- `qar_ar_core` includes only the standard library, one platform header and its own headers, and it calls no function of the QarOS C API. Only its wrapper header includes the QarOS C header.
 - `qar_ogre_streaming` includes Ogre and `qar_ar_core`, and it reaches the C types through the wrapper header only.
 - `qar_qar_adapter` includes `qar_ar_core` and the two seam headers of `qar_ogre_streaming`, and only the component `render` may include them. Each of the five components includes only its own headers and those of the components that it may use.
 - Every folder under `examples` has its own entry. The headless sample may include `qar_ogre_streaming` and `qar_ar_core`; the live example may in addition include the headers of the component `render`.

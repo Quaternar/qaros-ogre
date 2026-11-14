@@ -1,8 +1,8 @@
 // Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
-// The two decisions of the session owner that need no QarOS call: which peer is a render
-// target, and which onboarding mode a start uses. Header-only, so a test or a host can
+// The decisions of the session owner about peers that need no QarOS call: which peer is a render
+// target, and when a peer is gone. Header-only, so a test or a host can
 // ask the same question the owner asks.
 
 #ifndef QAR_QAR_ADAPTER__TARGET_RULE_HPP_
@@ -12,14 +12,6 @@
 
 namespace qar_qar_adapter
 {
-
-/// @brief How this program joins the QAROS Hub.
-enum class HubMode
-{
-  kAuto,    ///< Decided at connect: a stored pairing, else the installed Hub, else a code.
-  kLocal,   ///< A source app on the Hub's own PC: the Hub asks for approval once, no code.
-  kRemote   ///< A Hub on another PC: a pairing code once, then a stored pairing.
-};
 
 /// @brief True when a peer is one this program renders a stream for.
 ///
@@ -49,35 +41,6 @@ inline bool is_gone(QarPeerPresence presence)
 {
   return presence == QAR_PEER_PRESENCE_OFFLINE || presence == QAR_PEER_PRESENCE_LEAVING ||
          presence == QAR_PEER_PRESENCE_RETIRED;
-}
-
-/// @brief The mode a start uses.
-///
-/// An explicit request wins. In auto mode a stored pairing means remote (this program paired
-/// with another PC's Hub before), an installed QAROS means local, and anything else means remote.
-/// @param reason When not null, receives a short phrase naming the deciding fact.
-inline HubMode resolve_hub_mode(
-  HubMode requested, bool has_remote_identity, bool qaros_installed,
-  const char ** reason = nullptr)
-{
-  const char * why = "set in the settings";
-  HubMode mode = requested;
-  if (requested == HubMode::kAuto) {
-    if (has_remote_identity) {
-      mode = HubMode::kRemote;
-      why = "a pairing with another PC is stored";
-    } else if (qaros_installed) {
-      mode = HubMode::kLocal;
-      why = "QAROS is installed on this PC";
-    } else {
-      mode = HubMode::kRemote;
-      why = "QAROS is not installed on this PC";
-    }
-  }
-  if (reason != nullptr) {
-    *reason = why;
-  }
-  return mode;
 }
 
 }  // namespace qar_qar_adapter

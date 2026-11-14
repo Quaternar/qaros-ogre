@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 //
 // What the tests of the session owner share: an owner on the fake library, a folder of its own
-// for the stored pairing, the log lines it printed, and the events the consumer polled.
+// for the library logs, the log lines it printed, and the events the consumer polled.
 
 #ifndef QAR_QAR_ADAPTER__TEST__SESSION_OWNER_HARNESS_HPP_
 #define QAR_QAR_ADAPTER__TEST__SESSION_OWNER_HARNESS_HPP_
@@ -19,7 +19,6 @@
 #include <vector>
 
 #include "fake_qar_api.hpp"
-#include "qar_qar_adapter/identity_store.hpp"
 #include "qar_qar_adapter/qar_session_owner.hpp"
 
 namespace qar_qar_adapter
@@ -114,20 +113,17 @@ private:
 class Harness
 {
 public:
-  /// @param mode The mode the owner is asked for.
   /// @param installed What the loader says about an installed QAROS.
-  explicit Harness(HubMode mode = HubMode::kLocal, bool installed = true, bool load_ok = true)
+  explicit Harness(bool installed = true, bool load_ok = true)
   : installed_(installed), load_ok_(load_ok)
   {
     static std::atomic<int> counter{0};
     dir_ = (std::filesystem::temp_directory_path() /
-      ("qar_identity_tests_" +
+      ("qar_session_owner_tests_" +
       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "_" +
       std::to_string(counter.fetch_add(1)))).u8string();
-    config_.mode = mode;
     config_.program_tag = "test-program";
     config_.display_name = "Test program on host";
-    config_.identity_dir = dir_;
     config_.log_folder_path = (std::filesystem::u8path(dir_) / "library-logs").u8string();
     config_.log_sink = [this](const std::string & line) {
         std::lock_guard<std::mutex> lock(log_mutex_);
@@ -147,7 +143,6 @@ public:
   QarSessionOwner & owner() { return *owner_; }
   std::shared_ptr<QarSessionOwner> owner_ptr() { return owner_; }
   const std::string & dir() const { return dir_; }
-  std::string identity_path() const { return identity_file_path(dir_); }
   const std::vector<SessionEvent> & events() const { return events_; }
 
   /// Makes the owner; call after the configuration and the fake are set up.

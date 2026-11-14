@@ -21,9 +21,6 @@ constexpr int kStatusNoRuntime = -1;
 enum class OnboardingContext
 {
   kLocal,    ///< Joining the Hub of this PC as a source app.
-  kRemote,   ///< Pairing with the Hub of another PC by a code.
-  kRejoin,   ///< Joining again with the stored pairing.
-  kForget,   ///< Erasing the stored pairing.
   kInvite,   ///< Asking the Hub to start the app of a device.
   kStream    ///< A video or render stream of an open session.
 };
@@ -44,10 +41,7 @@ std::string status_symbol(int code);
 /// @brief The sentence for @p code returned by a call of kind @p context.
 /// @param detail The runtime's message for the result; only copied into @ref StatusText::detail
 ///        and, where a sentence quotes it, into the sentence. May be null.
-/// @param hub_address "host:port" of the Hub a code pairing aimed at; only the remote texts use
-///        it. May be null.
-StatusText describe_status(
-  int code, OnboardingContext context, const char * detail, const char * hub_address = nullptr);
+StatusText describe_status(int code, OnboardingContext context, const char * detail);
 
 }  // namespace qar_qar_adapter
 

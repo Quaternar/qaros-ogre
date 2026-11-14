@@ -1,8 +1,8 @@
 // Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
-// The plain-words table of status codes, and the two decisions of the session owner that need no
-// QarOS call: which peer is a render target, and which mode a start uses.
+// The plain-words table of status codes, and the decisions of the session owner that need no
+// QarOS call: which peer is a render target, and when a peer is gone.
 
 #include <gtest/gtest.h>
 
@@ -14,7 +14,6 @@
 namespace
 {
 
-using qar_qar_adapter::HubMode;
 using qar_qar_adapter::OnboardingContext;
 using qar_qar_adapter::describe_status;
 
@@ -28,11 +27,6 @@ TEST(OnboardingStatus, EveryCodeOfTheTableHasAMessageAndASymbol)
     QAR_STATUS_ONBOARDING_APPROVAL_TIMEOUT,
     QAR_STATUS_ONBOARDING_HUB_NOT_AUTHENTIC,
     QAR_STATUS_ONBOARDING_APP_IDENTITY_MISMATCH,
-    QAR_STATUS_PAKE_ERROR,
-    QAR_STATUS_ONBOARDING_SESSION_NOT_FOUND,
-    QAR_STATUS_ONBOARDING_RE_PAIR_REQUIRED,
-    QAR_STATUS_ONBOARDING_RENEWAL_POSSESSION_UNPROVEN,
-    QAR_STATUS_ONBOARDING_SESSION_STILL_ACTIVE,
     QAR_STATUS_ARGUMENT_NOT_SUPPORTED,
     QAR_STATUS_NOT_IMPLEMENTED,
     QAR_STATUS_TIMEOUT,
@@ -84,20 +78,15 @@ TEST(OnboardingStatus, AHubThatIsNotAuthenticIsNotRetried)
       QAR_STATUS_HUB_TARGET_APP_DEVICE_NOT_INVITABLE, OnboardingContext::kInvite,
       nullptr).retry_offered);
   EXPECT_TRUE(describe_status(
-      QAR_STATUS_SECURE_STORAGE_LOCKED, OnboardingContext::kRejoin, nullptr).retry_offered);
+      QAR_STATUS_SECURE_STORAGE_LOCKED, OnboardingContext::kLocal, nullptr).retry_offered);
 }
 
-TEST(OnboardingStatus, AnUnreachableHubReadsDifferentlyForThisPcAndForAnotherPc)
+TEST(OnboardingStatus, AnUnreachableHubTellsHowToStartQaros)
 {
   const auto local = describe_status(
     QAR_STATUS_ONBOARDING_HUB_UNREACHABLE, OnboardingContext::kLocal, nullptr);
-  const auto remote = describe_status(
-    QAR_STATUS_ONBOARDING_HUB_UNREACHABLE, OnboardingContext::kRemote, nullptr,
-    "hub.example:19120");
   EXPECT_NE(local.message.find("Start QAROS"), std::string::npos);
-  EXPECT_NE(remote.message.find("hub.example:19120"), std::string::npos);
-  EXPECT_NE(remote.message.find("firewall"), std::string::npos);
-  EXPECT_NE(local.message, remote.message);
+  EXPECT_TRUE(local.retry_offered);
 }
 
 TEST(OnboardingStatus, TheFailureOfAnOnboardingQuotesTheRuntimesDetail)
@@ -110,11 +99,11 @@ TEST(OnboardingStatus, TheFailureOfAnOnboardingQuotesTheRuntimesDetail)
 
 TEST(OnboardingStatus, AnArgumentTheHubRefusedIsExplainedPerCall)
 {
-  const auto remote = describe_status(
-    QAR_STATUS_ARGUMENT_NOT_SUPPORTED, OnboardingContext::kRemote, nullptr);
+  const auto join = describe_status(
+    QAR_STATUS_ARGUMENT_NOT_SUPPORTED, OnboardingContext::kLocal, "app tag too long");
   const auto invite = describe_status(
     QAR_STATUS_ARGUMENT_NOT_SUPPORTED, OnboardingContext::kInvite, nullptr);
-  EXPECT_NE(remote.message.find("port"), std::string::npos);
+  EXPECT_NE(join.message.find("app tag too long"), std::string::npos);
   EXPECT_NE(invite.message.find("device"), std::string::npos);
 }
 
@@ -146,24 +135,6 @@ TEST(TargetRule, APresenceTheHeaderDoesNotNameReadsAsUnknown)
   const auto odd = static_cast<QarPeerPresence>(99);
   EXPECT_TRUE(qar_qar_adapter::is_render_target(QAR_PEER_ROLE_TARGET, odd, false));
   EXPECT_FALSE(qar_qar_adapter::is_gone(odd));
-}
-
-TEST(HubModeRule, AnExplicitRequestWinsAndAutoLooksAtThePairingAndTheInstall)
-{
-  using qar_qar_adapter::resolve_hub_mode;
-  for (const bool identity : {false, true}) {
-    for (const bool installed : {false, true}) {
-      EXPECT_EQ(resolve_hub_mode(HubMode::kLocal, identity, installed), HubMode::kLocal);
-      EXPECT_EQ(resolve_hub_mode(HubMode::kRemote, identity, installed), HubMode::kRemote);
-    }
-  }
-  const char * reason = nullptr;
-  EXPECT_EQ(resolve_hub_mode(HubMode::kAuto, true, true, &reason), HubMode::kRemote);
-  EXPECT_NE(std::string(reason).find("pairing"), std::string::npos);
-  EXPECT_EQ(resolve_hub_mode(HubMode::kAuto, true, false), HubMode::kRemote);
-  EXPECT_EQ(resolve_hub_mode(HubMode::kAuto, false, true, &reason), HubMode::kLocal);
-  EXPECT_NE(std::string(reason).find("installed"), std::string::npos);
-  EXPECT_EQ(resolve_hub_mode(HubMode::kAuto, false, false), HubMode::kRemote);
 }
 
 }  // namespace

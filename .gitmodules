@@ -1,0 +1,3 @@
+[submodule "external/qaros"]
+	path = external/qaros
+	url = https://github.com/Quaternar/qaros.git

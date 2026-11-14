@@ -7,7 +7,7 @@ This page lists the public headers of the three modules, the types and functions
 A consumer finds the package with `find_package`, names the components that it needs and links their imported targets. Each component is a static library, so a program links only what it uses:
 
 ```cmake
-find_package(qar_ogre_adapter 0.2.0 CONFIG REQUIRED
+find_package(qar_ogre_adapter 0.2.1 CONFIG REQUIRED
   COMPONENTS qar_ar_core qar_ogre_streaming render url gestures)
 ```
 
@@ -33,7 +33,7 @@ target_link_libraries(qar_ogre_adapter_doc_snippets PRIVATE
 | `url` | `qar_ogre_adapter::url` | `capi` and `qar_ar_core` |
 | `gestures` | `qar_ogre_adapter::gestures` | `capi` and `qar_ar_core` |
 
-Include a header by its path below the `include` folder of its module, for example `qar_ogre_streaming/types.hpp`. Include the QarOS C header only through `qar_ar_core/qar_streaming_c.hpp`: the vendored header has one include guard, so its first inclusion fixes which optional parts exist, and the wrapper defines `QAR_ENABLE_OPENGL` before it.
+Include a header by its path below the `include` folder of its module, for example `qar_ogre_streaming/types.hpp`. Include the QarOS C header only through `qar_ar_core/qar_streaming_c.hpp`: the QarOS C header has one include guard, so its first inclusion fixes which optional parts exist, and the wrapper defines `QAR_ENABLE_OPENGL` before it.
 
 The code is in the namespaces `qar_ar_core`, `qar_ogre_streaming` and `qar_qar_adapter`. `qar_ogre_streaming` defines a `Status` and a `Result`, with the status `RenderThreadRequired`.
 
@@ -45,7 +45,7 @@ Every public header of the repository, by module. The sections below describe th
 
 | Header | What it declares |
 |---|---|
-| `qar_streaming_c.hpp` | the one include of the vendored QarOS header |
+| `qar_streaming_c.hpp` | the one include of the QarOS C header |
 | `pointer_input.hpp` | the vocabulary of AR pointer input: `PointerGesture`, `PointerHand`, `PointerPhase`, `PanelPointerSample`, the interface `IPanelInputSource` and the queue `QueuedPanelInputSource` |
 | `panel_op_result.hpp` | `PanelOpResult`: the outcome of one queued call on a panel |
 | `panel_state_guard.hpp` | `PanelStateGuard`: the decision that keeps a panel in the state that was asked for |
@@ -87,10 +87,9 @@ Four more headers belong to the header-only target `qar_ogre_adapter::qar_ogre_s
 |---|---|---|
 | `qar_capi_session_owner.hpp` | `capi` | `IQarSessionOwner` |
 | `qar_capi_input_slots.hpp` | `capi` | the arena of callback slots |
-| `qar_session_owner.hpp` | `session` | `QarSessionOwner`, `SessionOwnerConfig`, `SessionState`, `SessionEvent`, `TargetInfo`, `ITargetListener`, `ILibraryLoader`, `HubEndpoint`, `DeviceKind`, `wait_for_session` |
-| `identity_store.hpp` | `session` | `IdentityRecord`, `default_identity_dir`, `read_identity`, `write_identity_atomic`, `remove_identity` |
+| `qar_session_owner.hpp` | `session` | `QarSessionOwner`, `SessionOwnerConfig`, `SessionState`, `SessionEvent`, `TargetInfo`, `ITargetListener`, `ILibraryLoader`, `DeviceKind`, `wait_for_session` |
 | `onboarding_status.hpp` | `session` | `StatusText`, `OnboardingContext`, `describe_status` |
-| `target_rule.hpp` | `session` | `HubMode`, `is_render_target`, `is_gone`, `resolve_hub_mode` |
+| `target_rule.hpp` | `session` | `is_render_target`, `is_gone` |
 | `gui_call_guard.hpp` | `capi` | `GuiCallTimer`, `QAR_CALL`, `QAR_GUI_TIMED`, `mark_gui_thread`, `mark_owner_thread` |
 | `panel_state_guard.hpp` | `url` | `PanelStateKeeper`: the decision to ask a panel for its state again |
 | `qar_capi_render_sender_adapter.hpp` | `render` | `QarCApiSenderFactory`, `QarCApiRenderSenderAdapter`, `GlSubmitMode`, `IQarGlTextureCopyHook` |
@@ -103,7 +102,7 @@ Four more headers belong to the header-only target `qar_ogre_adapter::qar_ogre_s
 | `log_time.hpp` | `render`, `url` | `wall_clock_hms_ms`, `hms_ms_of`, `thread_number` and `LogOnce` |
 | `qar_capi_spatial_gesture_source.hpp` | `gestures` | `QarCApiSpatialGestureSource`, `SpatialGestureStats` |
 
-The vendored `third_party/qar/include/qar_streaming.h` is the QarOS C header; [The vendored header](SDK_COMPATIBILITY.md#the-vendored-header) says how it is used.
+The QarOS C header is `qar-streaming-c/include/qar_streaming.h` of the qaros submodule `external/qaros`; [The QarOS header](SDK_COMPATIBILITY.md#the-qaros-header) says how it is used.
 
 ## qar_ar_core
 
@@ -388,22 +387,19 @@ The component holds the session owner. `QarSessionOwner` loads the library, crea
 
 | Member | What it does |
 |---|---|
-| `connect()`, `disconnect()`, `cancel()` | start joining; release the session and keep the stored pairing; stop the wait for an approval, a rejoin or a pairing |
-| `submit_code(code, hub)` | pairs with the Hub of another PC with a pairing code; the code is a secret, it is not stored or logged, and a host or a port of 0 is refused |
-| `forget()` | disconnects, erases the stored pairing in the runtime and deletes the identity file; remote mode only |
-| `configure(mode, remote)` | sets the Hub mode and the host and port that the next `connect()` uses; while the owner joins, runs or stops, the values are kept for the next `connect()` |
+| `connect()`, `disconnect()`, `cancel()` | start joining; release the session; stop the wait for an approval |
 | `set_target_listener(listener)` | sets who hears about targets; a new listener first hears of the targets that have a stream |
-| `poll(out)` | moves the events since the last call into `out`: state changes, progress, targets that come and go, the answers of an invite and of a forget, and log lines |
-| `state()`, `effective_mode()`, `has_remote_identity()`, `targets()`, `self_peer()`, `runtime_description()` | what the owner knows |
+| `poll(out)` | moves the events since the last call into `out`: state changes, progress, targets that come and go, the answer of an invite, and log lines |
+| `state()`, `targets()`, `self_peer()`, `runtime_description()` | what the owner knows |
 | `invite_device(kind, host)` | asks the Hub of this PC to start the app of a HoloLens or a headset; it returns an empty text when the request started and the refusal otherwise, and the answer arrives as an event |
 | `ready()`, `session()`, `post_session_task()` | the interface `IQarSessionOwner` |
 | `task_stats()` | the counters of the task queue for the heartbeat line |
 
-`SessionState` runs from `kIdle` through `kLoading`, `kWaitingForApproval` (this-PC mode: the Hub asks the person at the PC to allow the program), `kRejoining`, `kNeedsCode`, `kPairing` and `kRunning` to `kReconnecting` (joined, but the Hub does not answer; the session stays valid), `kStopping` and `kFailed`. `HubMode` is `kAuto`, `kLocal` or `kRemote`: an explicit request wins, and in auto mode a stored pairing means remote, an installed QAROS means local, and anything else means remote. A source app on the PC of the Hub is `kLocal`: the Hub asks for approval once and no code is needed. A Hub on another PC is `kRemote`: a pairing code once, then a stored pairing.
+`SessionState` runs from `kIdle` through `kLoading`, `kWaitingForApproval` (the Hub asks the person at the PC to allow the program) and `kRunning` to `kReconnecting` (joined, but the Hub does not answer; the session stays valid), `kStopping` and `kFailed`. The owner joins the Hub of its own PC as a local source app (`QarOnboardLocalAppExt`): the Hub asks for approval once, no code is needed, and the program stores nothing. To work with the Hub of another PC, make the Hub of this PC a member of that Hub in QAROS; the program still joins the Hub of its own PC.
 
-`SessionOwnerConfig` names the program (`program_tag`, which names the folders), a second copy of it (`instance`), the display name that the Hub shows in its approval prompt, the mode, the remote host and port, the folder of the identity (`identity_dir`; empty means `default_identity_dir(program_tag, instance)`), the library file (`library_path`), the approval timeout (`approval_timeout_ms`, 0 for the default of the Hub and at most 600000), the cap on served targets (`max_targets`, 8), and the log settings of the library. A test replaces the loader of the real library with an `ILibraryLoader`.
+`SessionOwnerConfig` names the program (`program_tag`, which goes into the peer info), the display name that the Hub shows in its approval prompt, the library file (`library_path`), the approval timeout (`approval_timeout_ms`, 0 for the default of the Hub and at most 600000), the cap on served targets (`max_targets`, 8), and the log settings of the library. A test replaces the loader of the real library with an `ILibraryLoader`.
 
-The identity of a program is kept in the folder `<base>\<program>` or `<base>\<program>.<instance>`, where the base is the environment variable `QAR_PANEL_IDENTITY_DIR` when it is set and `%LOCALAPPDATA%\Quaternar\QarOS-ROS` otherwise. `identity.txt` there holds the onboarding id and the host and port of the paired Hub; it is written in one step and replaces the earlier file whole, and a program that joins the Hub of its own PC writes none. The folder also holds `runtime`, the storage folder that the session owner gives to QAROS in every mode. `describe_status(code, context, detail, hub_address)` turns a status code of a call into plain words for the status strip, and says whether trying the same action again can help.
+The runtime keeps its default storage folder. `describe_status(code, context, detail)` turns a status code of a call into plain words for the status strip, and says whether trying the same action again can help.
 
 ## Component render
 
@@ -540,7 +536,7 @@ std::printf("%d %d %.1f %d | %s from %s, console %d, overwrite the variable of Q
 
 | Call | Thread | Blocking | Failure is reported as |
 |---|---|---|---|
-| constructor of `QarSessionOwner`, `connect`, `submit_code`, `forget`, `configure` | any | none: the work runs on the thread of the owner | a `SessionEvent` from `poll`; nothing is thrown |
+| constructor of `QarSessionOwner`, `connect`, `cancel`, `disconnect` | any | none: the work runs on the thread of the owner | a `SessionEvent` from `poll`; nothing is thrown |
 | `poll`, `invite_device`, `targets`, `ready`, `session` | the consumer thread | none | an event, or the refusal as text |
 | `post_session_task` | any | none | `false` when no session runs |
 | `begin_attach`, `attach_state`, `detach` of `QarCApiSenderFactory` | the consumer thread | none (`attach` waits and is for console programs) | `false` and `last_error()` |
@@ -595,7 +591,6 @@ include\qar_qar_adapter\env_config.hpp
 include\qar_qar_adapter\frame_stall_probe.hpp
 include\qar_qar_adapter\geo_anchor.hpp
 include\qar_qar_adapter\gui_call_guard.hpp
-include\qar_qar_adapter\identity_store.hpp
 include\qar_qar_adapter\log_time.hpp
 include\qar_qar_adapter\onboarding_status.hpp
 include\qar_qar_adapter\panel_state_guard.hpp
@@ -616,11 +611,11 @@ lib\qar_qar_adapter_render.lib
 lib\qar_qar_adapter_session.lib
 lib\qar_qar_adapter_url.lib
 share\qar_ogre_adapter\LICENSE
-share\qar_ogre_adapter\LICENSE.qar_streaming_header
+share\qar_ogre_adapter\LICENSE.qaros
 share\qar_ogre_adapter\cmake\qar_ogre_adapterConfig.cmake
 share\qar_ogre_adapter\cmake\qar_ogre_adapterConfigVersion.cmake
 share\qar_ogre_adapter\cmake\qar_ogre_adapterTargets-relwithdebinfo.cmake
 share\qar_ogre_adapter\cmake\qar_ogre_adapterTargets.cmake
 ```
 
-The command lists every file below the install prefix, relative to it. The package puts the headers of the three modules and the vendored `qar_streaming.h` below `include`, the static libraries below `lib`, and the CMake package files, with the licence of the package and the licence of the QarOS header, below `share/qar_ogre_adapter`.
+The command lists every file below the install prefix, relative to it. The package puts the headers of the three modules and the QarOS headers of the qaros submodule (`qar_streaming.h` and the folder `qar_streaming_cpp`) below `include`, the static libraries below `lib`, and the CMake package files, with the licence of the package and the licence of qaros, below `share/qar_ogre_adapter`.

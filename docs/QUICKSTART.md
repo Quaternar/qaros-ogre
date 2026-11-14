@@ -51,7 +51,8 @@ include\qar_streaming.h        True
 3. Clone this repository and go to the folder of the clone; the remaining steps run there ([Clone this repository](INSTALL.md#clone-this-repository)).
 
 ```powershell
-git clone https://github.com/Quaternar/qaros-ogre "$env:QAR_ROOT\src\qar_ogre_adapter"
+$env:GIT_LFS_SKIP_SMUDGE = 1
+git clone --recurse-submodules https://github.com/Quaternar/qaros-ogre "$env:QAR_ROOT\src\qar_ogre_adapter"
 ```
 ```text
 Cloning into 'C:\qar\src\qar_ogre_adapter'...
@@ -140,14 +141,14 @@ ctest --preset vs2019-x64
 ```text
 Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
         Start   1: check_layering_qar_ar_core
-  1/576 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.17 sec
+  1/546 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.17 sec
         Start   2: check_layering_qar_ogre_streaming
-  2/576 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.15 sec
+  2/546 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.15 sec
         Start   3: check_layering_qar_qar_adapter
-  3/576 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.21 sec
+  3/546 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.21 sec
         Start   4: check_layering_examples
 ...
-100% tests passed, 0 tests failed out of 576
+100% tests passed, 0 tests failed out of 546
 
 Total Test time (real) =  95.12 sec
 ```

@@ -12,8 +12,8 @@
 #                                       timer of QarOS calls on a GUI thread.
 #                                       Every other component links it.
 #   session   qar_qar_adapter_session   the session owner (QarSessionOwner): library
-#                                       load, runtime, joining the QAROS Hub, the
-#                                       targets, the stored pairing, status texts.
+#                                       load, runtime, joining the QAROS Hub of this PC, the
+#                                       targets, status texts.
 #   render    qar_qar_adapter_render    3D stereo streams (IQarRenderSenderAdapter)
 #                                       and the factory that borrows the owner's
 #                                       session (QarCApiSenderFactory). Needs Ogre,
@@ -27,7 +27,7 @@
 
 # ---------------------------------------------------------------------------
 # The QarOS SDK. DYNAMIC LOADING (the vendor-recommended model): no qar-streaming-c.lib,
-# no find_package(qar-streaming-c). With QAR_ENABLE_DYNAMIC_LOADING the vendored single
+# no find_package(qar-streaming-c). With QAR_ENABLE_DYNAMIC_LOADING the QarOS C single
 # header resolves every qar_impl_* symbol from the DLL at run time (qar_library_load()),
 # loaded by its full path with LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR:
 # its own folder is searched first for its dependencies, then the application directory,
@@ -63,7 +63,8 @@ message(STATUS
   "(no import lib linked)")
 
 # One static library per component, all sharing include/ (installed as
-# include/qar_qar_adapter/...). /W4 only (no /permissive-).
+# include/qar_qar_adapter/...). /W4 only (no /permissive-), and /we4996: a call of a QarOS C API
+# function that the header marks deprecated is an error, so none can come back unnoticed.
 function(qar_adapter_component target export_name)
   add_library(${target} STATIC ${ARGN})
   add_library(qar_ogre_adapter::${export_name} ALIAS ${target})
@@ -75,7 +76,7 @@ function(qar_adapter_component target export_name)
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
     "$<INSTALL_INTERFACE:include>")
   if(MSVC)
-    target_compile_options(${target} PRIVATE /W4)
+    target_compile_options(${target} PRIVATE /W4 /we4996)
   endif()
 endfunction()
 
@@ -96,8 +97,7 @@ target_compile_definitions(qar_qar_adapter_capi PUBLIC QAR_ENABLE_DYNAMIC_LOADIN
 qar_adapter_component(qar_qar_adapter_session session
   src/qar_session_owner.cpp
   # Pure units, kept separate so they are unit testable without a QarOS session
-  # (qar_qar_adapter/test): the stored pairing, the status texts, the env-var parsing.
-  src/identity_store.cpp
+  # (qar_qar_adapter/test): the status texts, the env-var parsing.
   src/onboarding_status.cpp
   src/env_config.cpp
 )

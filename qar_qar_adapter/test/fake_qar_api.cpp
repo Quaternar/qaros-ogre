@@ -127,7 +127,6 @@ struct FakeQarApi::State
   int volume_code = 0;
   std::deque<Outcome> onboard_script;
   std::deque<Outcome> invite_script;
-  std::deque<int> forget_script;
   std::vector<FakePeer> initial_peers;
   std::list<Subscription> subscriptions;
   std::vector<std::thread> threads;
@@ -528,50 +527,11 @@ QarResult fake_runtime_onboard_async(
         request.approval_timeout_ms = ext->approval_timeout_ms;
         break;
       }
-      case QAR_STRUCTURE_TYPE_RUNTIME_ONBOARD_CODE_EXT: {
-        const auto * ext = reinterpret_cast<const QarOnboardCodeExt *>(header);
-        request.kind = "code";
-        request.code = ext->code != nullptr ? ext->code : "";
-        break;
-      }
-      case QAR_STRUCTURE_TYPE_RUNTIME_ONBOARD_HOST_EXT: {
-        const auto * ext = reinterpret_cast<const QarOnboardHostExt *>(header);
-        request.has_chained_host = true;
-        request.host = ext->hostname != nullptr ? ext->hostname : "";
-        request.port = ext->port;
-        break;
-      }
       default:
         break;
     }
   }
   return start_onboard(request, result, progress, user, token, fresh_id());
-}
-
-QarResult fake_runtime_rejoin_async(
-  QarRuntime *, const QarRejoinInit * init, qar_runtime_onboard_result_callback_t result,
-  qar_progress_callback_t progress, void * user, QarCancelToken * token)
-{
-  record("runtime_rejoin_async");
-  OnboardRequest request;
-  request.kind = "rejoin";
-  read_presentation(init->presentation, request);
-  char text[64] = {0};
-  fake_uuid_to_string(init->onboarding_id.data, text, sizeof(text));
-  request.id_text = text;
-  return start_onboard(request, result, progress, user, token, init->onboarding_id);
-}
-
-QarResult fake_runtime_forget(QarRuntime *, const QarForgetInit *)
-{
-  record("runtime_forget");
-  std::lock_guard<std::mutex> lock(g_state->mutex);
-  if (g_state->forget_script.empty()) {
-    return ok_result();
-  }
-  const int code = g_state->forget_script.front();
-  g_state->forget_script.pop_front();
-  return code == 0 ? ok_result() : error_result(code);
 }
 
 struct InviteOp
@@ -1362,8 +1322,6 @@ FakeQarApi::FakeQarApi() : state_(std::make_unique<State>())
   g_qar_render_stream_sender_api.render_stream_handle_destroy = &fake_render_stream_handle_destroy;
 
   g_qar_onboarding_api.runtime_onboard_async = &fake_runtime_onboard_async;
-  g_qar_onboarding_api.runtime_rejoin_async = &fake_runtime_rejoin_async;
-  g_qar_onboarding_api.runtime_forget = &fake_runtime_forget;
 
   g_qar_target_apps_api.session_invite_target_app_async = &fake_session_invite_target_app_async;
 
@@ -1471,12 +1429,6 @@ void FakeQarApi::script_invite(const Outcome & outcome)
 {
   std::lock_guard<std::mutex> lock(state_->mutex);
   state_->invite_script.push_back(outcome);
-}
-
-void FakeQarApi::script_forget(int code)
-{
-  std::lock_guard<std::mutex> lock(state_->mutex);
-  state_->forget_script.push_back(code);
 }
 
 void FakeQarApi::set_library_init_code(int code) { state_->library_init_code = code; }

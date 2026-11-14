@@ -136,7 +136,7 @@ overall_pass=true
 
 ## Check the connection to QarOS without a window
 
-The example is built next to the sample: `build\vs2019-x64\examples\qaros_live_stream\RelWithDebInfo\qar_ogre_live_stream_example.exe`. It needs no path to QAROS: the library `qar-streaming-c.dll` is loaded from the installed QAROS. The option `--local`, the default, joins the QAROS Hub of this PC as a source app: QAROS asks once to allow the program, so click Allow in the QAROS window, and it asks again after each rebuild of the program. The option `--hub HOST:PORT --code CODE` pairs with the Hub of another PC instead; the code works once, and the pairing is stored for the next start. With `--connect-only` the example joins, checks the session and exits; it starts no Ogre and opens no window.
+The example is built next to the sample: `build\vs2019-x64\examples\qaros_live_stream\RelWithDebInfo\qar_ogre_live_stream_example.exe`. It needs no path to QAROS: the library `qar-streaming-c.dll` is loaded from the installed QAROS. The option `--local`, the default, joins the QAROS Hub of this PC as a source app: QAROS asks once to allow the program, so click Allow in the QAROS window, and it asks again after each rebuild of the program. For a Hub on another PC, make the Hub of this PC a member of that Hub in QAROS; the example still joins the Hub of this PC. With `--connect-only` the example joins, checks the session and exits; it starts no Ogre and opens no window.
 
 Run it. The first command line sets `PATH` as above, so that the program starts. The command starts the Hub of the installed QAROS when it is not running, so it is not run for this document and no output is shown.
 
@@ -153,7 +153,7 @@ On success the example prints the line with the identifier of the app volume, 32
 example: connected to QarOS: ready=1 app_volume=
 ```
 
-When the session does not run, the example prints a line that has this form, with the state of the owner as a number, and exits with 1. When the attach fails, it prints the reason of the factory instead, and when the Hub of another PC does not know the program it asks for `--hub HOST:PORT --code CODE`.
+When the session does not run, the example prints a line that has this form, with the state of the owner as a number, and exits with 1. When the attach fails, it prints the reason of the factory instead.
 
 ```text
 example: QAROS connect failed
@@ -231,15 +231,13 @@ struct MainThreadExecutor : qos::IRenderThreadExecutor
 };
 ```
 
-**4. Make the session owner and the factory.** `QarSessionOwner` joins the QAROS Hub: it loads the library, creates the runtime and joins as a local app or with a pairing code on a thread of its own, so constructing it does not wait for the Hub. Its configuration names the program, the display name that the Hub shows in its approval prompt, the mode and the log settings of the QarOS library. `QarCApiSenderFactory` is the sender factory of QarOS: it borrows the session of the owner, so it is made from the owner, and its configuration holds the copy hook that is required in render-into mode and the name scope that makes the names of the app volume stable. The copy hook copies the textures that Ogre rendered into the textures that QarOS hands out; without it, QarOS shows a black scene.
+**4. Make the session owner and the factory.** `QarSessionOwner` joins the QAROS Hub: it loads the library, creates the runtime and joins the Hub of its own PC as a local app on a thread of its own, so constructing it does not wait for the Hub. Its configuration names the program, the display name that the Hub shows in its approval prompt and the log settings of the QarOS library. `QarCApiSenderFactory` is the sender factory of QarOS: it borrows the session of the owner, so it is made from the owner, and its configuration holds the copy hook that is required in render-into mode and the name scope that makes the names of the app volume stable. The copy hook copies the textures that Ogre rendered into the textures that QarOS hands out; without it, QarOS shows a black scene.
 
 ```cpp
 const std::string host = host_name();
 qqa::SessionOwnerConfig owner_config;
 owner_config.program_tag = kProgramTag;
 owner_config.display_name = std::string("Ogre live stream example on ") + host;
-owner_config.mode = (!hub_text.empty() || forget) ? qqa::HubMode::kRemote : qqa::HubMode::kLocal;
-owner_config.remote = hub;
 owner_config.log_severity = QAR_LOG_SEVERITY_WARN;
 owner_config.enable_console_logging = false;
 auto owner = std::make_shared<qqa::QarSessionOwner>(owner_config);  // starts its own thread
@@ -252,30 +250,16 @@ config.max_peers = 1;                               // one stream: the first tar
 config.name_scope = qar_ar_core::make_name_scope(kProgramTag, "", host);
 ```
 
-**5. Join and attach.** The owner starts with `connect()`, and `poll()` hands out its events. A console program may wait for the session with `wait_for_session`; a GUI program polls on every tick instead and never waits. The state `kNeedsCode` asks for a pairing code, which `submit_code()` takes. A failure is not thrown: the state of the owner tells whether the session runs, and `last_error()` of the factory says what failed in `attach()`. The app volume is the box that every stream is keyed to; QarOS rejects a stream without one.
+**5. Join and attach.** The owner starts with `connect()`, and `poll()` hands out its events. A console program may wait for the session with `wait_for_session`; a GUI program polls on every tick instead and never waits. A failure is not thrown: the state of the owner tells whether the session runs, and `last_error()` of the factory says what failed in `attach()`. The app volume is the box that every stream is keyed to; QarOS rejects a stream without one.
 
 ```cpp
-if (owner_config.mode == qqa::HubMode::kLocal) {
-  std::printf("example: joining the QAROS Hub of this PC; click Allow if QAROS asks\n");
-} else {
-  std::printf("example: joining the QAROS Hub at %s:%u\n", hub.host.c_str(),
-    static_cast<unsigned>(hub.port));
-}
+std::printf("example: joining the QAROS Hub of this PC; click Allow if QAROS asks\n");
 auto factory = std::make_shared<qqa::QarCApiSenderFactory>(owner, config);
 owner->connect();
 std::vector<qqa::SessionEvent> seen;
 // The approval prompt waits 120 s by default; the wait here is a little longer.
-qqa::SessionState state = qqa::wait_for_session(*owner, std::chrono::seconds(150), &seen);
-if (state == qqa::SessionState::kNeedsCode && !code.empty()) {
-  owner->submit_code(code, hub);
-  code.assign(code.size(), '\0');  // the code works once; do not keep it around
-  state = qqa::wait_for_session(*owner, std::chrono::seconds(60), &seen);
-}
+const qqa::SessionState state = qqa::wait_for_session(*owner, std::chrono::seconds(150), &seen);
 print_events(seen);
-if (state == qqa::SessionState::kNeedsCode) {
-  std::printf("example: not paired with that Hub; run with --hub HOST:PORT --code CODE\n");
-  return 1;
-}
 if (state != qqa::SessionState::kRunning) {
   std::printf("example: QAROS connect failed (state %d)\n", static_cast<int>(state));
   return 1;

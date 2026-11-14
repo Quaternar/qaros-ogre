@@ -27,7 +27,7 @@ Rules (comments and string literals are ignored; every #include line is classifi
                         qar_capi_panels (the QarOS C API behind the panels of qar_qt_streaming) includes
                         the seam of qar_qt_streaming only (qar_qt_streaming/seam/...), qar_ar_core, and the
                         capi headers of qar_qar_adapter (the session headers in its tests): no Qt;
-  L3  vendored header   only qar_ar_core/include/qar_ar_core/qar_streaming_c.hpp includes qar_streaming.h;
+  L3  QarOS C header   only qar_ar_core/include/qar_ar_core/qar_streaming_c.hpp includes qar_streaming.h;
   L4  core calls no API qar_ar_core production code calls no qar_* C function (it uses the C API's types
                         only, so it never needs the SDK DLL or the dynamic-loading tables);
   L5  adapter parts     every qar_qar_adapter file belongs to one component (ADAPTER_COMPONENT) and includes

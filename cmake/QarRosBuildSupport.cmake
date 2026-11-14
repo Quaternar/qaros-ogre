@@ -39,6 +39,31 @@ function(qar_use_ament_environment)
   endif()
 endfunction()
 
+# qar_add_qaros_headers(<qaros checkout>)
+# The QarOS headers from a checkout of the public qaros repository (in this repository the git
+# submodule external/qaros): the interface targets qar-streaming-c-headers (qar_streaming.h) and
+# qar-streaming-cpp (the C++17 headers over it), defined by the checkout's own CMake files. Only
+# the header targets are added; the examples of the checkout are not built.
+function(qar_add_qaros_headers dir)
+  if(TARGET qar-streaming-cpp)
+    return()
+  endif()
+  file(TO_CMAKE_PATH "${dir}" dir)
+  if(NOT EXISTS "${dir}/qar-streaming-c/include/qar_streaming.h"
+      OR NOT EXISTS "${dir}/qar-streaming-cpp/CMakeLists.txt")
+    message(FATAL_ERROR
+      "The qaros checkout ${dir} has no qar-streaming-c/include/qar_streaming.h or no "
+      "qar-streaming-cpp/CMakeLists.txt. Fetch the submodule with "
+      "'git submodule update --init external/qaros' (or clone with --recurse-submodules), "
+      "or set -DQAROS_SOURCE_DIR=<qaros checkout>.")
+  endif()
+  # The header targets need no C language, and the examples of qaros are opt-in
+  # (QAROS_BUILD_EXAMPLES, OFF when qaros is added as a subdirectory).
+  add_subdirectory("${dir}/qar-streaming-c" "${CMAKE_BINARY_DIR}/_qaros/qar-streaming-c" EXCLUDE_FROM_ALL)
+  add_subdirectory("${dir}/qar-streaming-cpp" "${CMAKE_BINARY_DIR}/_qaros/qar-streaming-cpp" EXCLUDE_FROM_ALL)
+  message(STATUS "qaros headers: ${dir}")
+endfunction()
+
 # QAR_PREFIX (-D, else the environment variable): the install prefix of the upstream repositories.
 macro(_qar_use_prefix)
   if("${QAR_PREFIX}" STREQUAL "" AND NOT "$ENV{QAR_PREFIX}" STREQUAL "")
@@ -63,10 +88,20 @@ function(_qar_add_upstream_sources pkg dir version)
   if(NOT EXISTS "${dir}/CMakeLists.txt")
     message(FATAL_ERROR "${_upper}_SOURCE_DIR: ${dir} is not a source checkout (no CMakeLists.txt).")
   endif()
-  # The checkout's top-level project() version must have the requested major.minor.
-  file(READ "${dir}/CMakeLists.txt" _top)
-  if(_top MATCHES "project\\([^)]*VERSION[ \t\r\n]+([0-9]+\\.[0-9]+)")
-    set(_have "${CMAKE_MATCH_1}")
+  # The checkout's version (its VERSION file, else the version of its top-level project()) must
+  # have the requested major.minor.
+  set(_have "")
+  if(EXISTS "${dir}/VERSION")
+    file(STRINGS "${dir}/VERSION" _have LIMIT_COUNT 1)
+    string(STRIP "${_have}" _have)
+    string(REGEX MATCH "^[0-9]+\\.[0-9]+" _have "${_have}")
+  else()
+    file(READ "${dir}/CMakeLists.txt" _top)
+    if(_top MATCHES "project\\([^)]*VERSION[ \t\r\n]+([0-9]+\\.[0-9]+)")
+      set(_have "${CMAKE_MATCH_1}")
+    endif()
+  endif()
+  if(NOT _have STREQUAL "")
     string(REGEX MATCH "^[0-9]+\\.[0-9]+" _want "${version}")
     if(NOT _have STREQUAL _want)
       message(FATAL_ERROR "${_upper}_SOURCE_DIR: ${dir} is version ${_have}, this build needs ${_want}.")
@@ -85,10 +120,11 @@ function(_qar_add_upstream_sources pkg dir version)
         list(APPEND _modules qar_ogre_streaming)
       endif()
     endforeach()
-    if("${QAR_VENDOR_INCLUDE_DIR}" STREQUAL "")
-      set(QAR_VENDOR_INCLUDE_DIR "${dir}/third_party/qar/include" CACHE PATH
-        "Folder with the vendored qar_streaming.h" FORCE)
+    if("${QAROS_SOURCE_DIR}" STREQUAL "")
+      set(QAROS_SOURCE_DIR "${dir}/external/qaros" CACHE PATH
+        "Checkout of the public qaros repository (the git submodule external/qaros)" FORCE)
     endif()
+    qar_add_qaros_headers("${QAROS_SOURCE_DIR}")
   elseif(pkg STREQUAL "qar_qt_streaming")
     # The consumers here (the RViz plugin) use the seam and the Qt core; the backend over the QarOS C++
     # SDK is left out, so no SDK headers are needed to build from source.

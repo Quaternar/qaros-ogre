@@ -28,7 +28,7 @@
 #include <string>
 #include <vector>
 
-// Warning-suppressed include of the vendored QAR C header, which defines the
+// Warning-suppressed include of the QarOS C header, which defines the
 // OpenGL producer path natively (via QAR_ENABLE_OPENGL, set in the wrapper).
 // types.hpp brings the library-internal GlVideoTexture/GlFrameSync types.
 #include "qar_ar_core/common_name.hpp"

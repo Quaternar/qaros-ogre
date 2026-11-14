@@ -16,7 +16,7 @@ The table is generated from the CMake files of the repository. For a variable th
 | `QAR_QT_ROOT` | PATH | unset: the value of the environment variable `QAR_QT_ROOT` is used; the configure step stops when neither is set in the modules that require it | ${_qq_WHAT}. The folder must contain `${_qq_markers}`. | `cmake/QarBuildSupport.cmake` |
 | `QAR_ROS2_INSTALL_ROOT` | PATH | unset: the value of the environment variable `ROS2_INSTALL_ROOT` is used; the configure step stops when neither is set | ROS 2 Humble distribution (ros2-windows). The folder must contain `local_setup.bat`. | `cmake/QarRosBuildSupport.cmake` |
 | `QAR_SDK_ROOT` | PATH | `$ENV{QAR_SDK_ROOT}` | Root of the QarOS SDK install tree (bin, include) | `qar_qar_adapter/CMakeLists.txt` |
-| `QAR_VENDOR_INCLUDE_DIR` | PATH | `${CMAKE_CURRENT_SOURCE_DIR}/third_party/qar/include` | Folder with the vendored qar_streaming.h | `CMakeLists.txt`, `cmake/QarRosBuildSupport.cmake` |
+| `QAROS_SOURCE_DIR` | PATH | `${CMAKE_CURRENT_SOURCE_DIR}/external/qaros` | Checkout of the public qaros repository (the git submodule external/qaros) | `CMakeLists.txt`, `cmake/QarRosBuildSupport.cmake` |
 
 The build type is `RelWithDebInfo`, as [Build conventions](DEVELOPING.md#build-conventions) explains. Two compile definitions are usage requirements and not options: `QAR_ENABLE_OPENGL` comes with `qar_ar_core` and `QAR_ENABLE_DYNAMIC_LOADING` with the component `capi`, so that every target that links the component receives them. Nobody defines them by hand.
 
@@ -46,7 +46,6 @@ The table lists every variable that code or a script of this repository reads or
 | `QAR_ADAPTER_FRAME_TRACE` | - | Off. | Presence test, read once per process. | Writes a per-frame CSV, `qar_frame_trace_<yyyyMMdd_HHmmss>_<tag>.csv`, into the QarOS log folder; the tag is derived from the peer id. |
 | `QAR_ADAPTER_FLIP_Y` | `qar_qar_adapter/src/qar_capi_render_sender_adapter.cpp` | Off. | Presence test. | Flips Y in the copy from the Ogre texture to the QarOS texture (diagnostic). |
 | `QAR_ADAPTER_PROBE_EVERY` | `qar_qar_adapter/src/qar_capi_render_sender_adapter.cpp` | `600` frames: the probe of the first copied frame is always written, then one every 600 frames, six probes at most. | Read with `strtol` in base 10 without an error check, when the copy hook sets itself up: a value above 0 replaces 600; anything else, including 0 and garbage, leaves only the probe of the first copied frame. | Writes a copy and depth probe to standard error at the first copied frame and then every N copied frames, six probes at most: a `---- probe #<n> at frame <n> ----` header, a depth histogram and an ASCII depth map. |
-| `QAR_PANEL_IDENTITY_DIR` | `qar_qar_adapter/src/identity_store.cpp` | `%LOCALAPPDATA%\Quaternar\QarOS-ROS`. | Any non-empty text is the base folder; an empty value counts as unset. The folder of one program is `<base>\<program>` or `<base>\<program>.<instance>`; the program name and the instance keep only letters, digits, `-` and `_`, any other character becomes `-`. | Base folder of the identity file (`identity.txt`, the stored pairing with a Hub on another PC) and of the QarOS storage of the program. Without the variable the base is the application data folder of the Windows account. A program never uses the default folder of the QAROS installation, which belongs to the Hub. |
 | `QAR_GUI_CALL_WARN_MS` | `qar_qar_adapter/src/gui_call_guard.cpp` | `20` ms. | Read once per process with `strtod`. A number above 0 is the limit; an empty value, text without a number, `0` and a negative number give the default. | Limit of a QarOS call that runs on the GUI thread. A call that takes longer is logged as a line that starts with `[qar-gui-call]` and ends with `took %.0f ms on the GUI thread (limit %.0f ms)`, the first 5 times per call name and then once in 100. |
 | `QAR_POSE_WORLD` | `qar_ar_core/src/spatial_frames.cpp`, `qar_ogre_streaming/src/qar_pose_conversion.cpp` | Unset: identity (the library default). A host with a ROS world needs `zup`. | Case-sensitive: exactly `zup` enables the Y-up to Z-up basis change; anything else is identity. The pose conversion reads it once per process; the spatial-pick code reads it on every call. | Conversion between the QarOS world (Y up) and the ROS world (Z up) for head poses and for spatial picks; the two readers must agree. The library default (identity) differs from the value that a ROS host needs (`zup`), so a host that does not set it sees poses in the wrong basis. |
 | `QAR_POSE_YAW_DEG` | `qar_ar_core/src/spatial_frames.cpp`, `qar_ogre_streaming/src/qar_pose_conversion.cpp` | `180`. | Read with `std::stof`: a numeric prefix is used, garbage gives the default, `nan` is accepted as NaN. Degrees. | Yaw about the ROS +Z axis, applied after the basis change (`zup` mode only). |
@@ -56,9 +55,6 @@ The table lists every variable that code or a script of this repository reads or
 | `QAR_DEPTH_SHADER_SCALE` | `qar_ogre_streaming/src/ogre_stereo_render_target.cpp` | `1.0`. | Metric mode only: read with `std::stof` and accepted when it is greater than 0, otherwise 1.0. | Multiplier on the metric depth that the depth shader writes. |
 | `TEMP` | `qar_qar_adapter/src/qar_capi_render_sender_adapter.cpp`, `scripts/qar_locations.ps1`, `scripts/run_ogre_sample.ps1`, `qar_qar_adapter/src/qar_session_owner.cpp` | None. | The adapter reads `TEMP`, then `TMP`, and uses `<folder>\quaternar` as the QarOS log folder; with neither set it uses the relative folder `quaternar`. Scripts use `$env:TEMP` for scratch files. | Default QarOS log folder and trace folder when the host passes no log folder; scratch folder of several scripts. |
 | `TMP` | `qar_qar_adapter/src/qar_capi_render_sender_adapter.cpp`, `qar_qar_adapter/src/qar_session_owner.cpp` | None. | Read only when `TEMP` is unset. | Fallback of `TEMP` for the default QarOS log folder. |
-| `LOCALAPPDATA` | `qar_qar_adapter/src/identity_store.cpp` | Set by Windows. | A folder. When it is empty, the program takes `AppData\Local` under `USERPROFILE`. | Base of the folder in which a program that joins the QAROS Hub keeps its identity and its stored pairing, `Quaternar\<product>\<program>` below it; a script reads it to find the endpoint file of the Hub. |
-| `USERPROFILE` | `qar_qar_adapter/src/identity_store.cpp` | Set by Windows. | Read only when `LOCALAPPDATA` is unset or empty. | Fallback of `LOCALAPPDATA` for the identity folder: `AppData\Local` under the profile folder. |
-| `HOME` | `qar_qar_adapter/src/identity_store.cpp` | None. | A folder; read on Linux only, when `QAR_PANEL_IDENTITY_DIR` is unset. | Base of the identity folder on Linux: `.local/share/Quaternar/QarOS-ROS` under it. |
 | `COMPUTERNAME` | `examples/qaros_live_stream/main.cpp` | Set by Windows. | The example reads it first; an empty value falls back to `HOSTNAME`, and when both are empty the name is `this-pc`. | Host name that the example `qaros_live_stream` puts into the name that the Hub shows in its approval prompt. |
 | `HOSTNAME` | `examples/qaros_live_stream/main.cpp` | None. | Read when `COMPUTERNAME` is empty. | Fallback of `COMPUTERNAME` for the name in the approval prompt of the example `qaros_live_stream`. |
 | `AMENT_PREFIX_PATH` | `cmake/QarRosBuildSupport.cmake` | None. | A list separated by `;` (`:` on other systems). A program that loads ROS message type support reads it through `_dupenv_s` (MSVC) or `getenv` and searches it after the prefixes that the host adds explicitly. | The ament index of the ROS 2 distribution, through which the type-support libraries of ROS message packages (`<pkg>__rosidl_typesupport_*`) are found. The shared CMake support module prepends the distribution root to it for the configure process,. |
@@ -66,7 +62,7 @@ The table lists every variable that code or a script of this repository reads or
 | `QAR_QT_ROOT` | `cmake/QarBuildSupport.cmake` | None: the configure step stops with an error that names this variable when it needs the kit and finds no Qt in another way. | A folder. The shared CMake support module uses it when the cache variable `QAR_QT_ROOT` is unset or empty, puts it in front of `CMAKE_PREFIX_PATH` and checks that it holds `lib/cmake/Qt5/Qt5Config.cmake` or `lib/cmake/Qt6/Qt6Config.cmake`. Scripts use it when the `-QtRoot` parameter is omitted. | Root of the Qt kit that the build uses: the Qt 5.15.2 `msvc2019_64` kit of the documentation, or a Qt 6 kit. |
 | `QAR_DEPS_ROOT` | `scripts/fetch_dependencies.ps1` | None: a script that needs it stops with an error that names the parameter and this variable. | A folder. Scripts use it when the `-DepsRoot` parameter is omitted. | Dependency root of the setup kit: the downloads folder and the build trees of the distribution repairs live below it. |
 | `QAR_PREFIX` | `cmake/QarRosBuildSupport.cmake` | None: the configure step continues without it, and a script that needs it stops with an error that names the parameter and this variable. | One folder, or several separated by semicolons (CMake reads the value as a list); every folder must exist. CMake prepends them to `CMAKE_PREFIX_PATH`. Scripts use it when the `-Prefix` parameter is omitted. | Install prefix of the repositories: the libraries are installed into it, and a repository that depends on them finds them through it. |
-| `QAR_SDK_ROOT` | `qar_qar_adapter/CMakeLists.txt`, `scripts/update_qar_headers.ps1`, `CMakePresets.json` | None. | A folder. CMake uses it when the cache variable `QAR_SDK_ROOT` is unset or empty. Where the build checks the SDK library, an unset or wrong value only gives a configure warning, because nothing links against the SDK; where the build looks for the QarOS headers, the `include` folder of the root is used when it holds the folder of the QarOS C++ SDK headers and `qar_streaming.h`. Scripts use it when the `-SdkRoot` parameter is omitted. | Root of the installed QAROS, the folder that holds `bin` and `include` and that the installer records as `InstallFolder` in the registry. It is used by the configure-time check, by the search for the QarOS headers and by the scripts that need the install tree; at run time the library is found by the vendor lookup (the registry, `QAROS_RUNTIME_DIR`, `PATH`) or by the library path of the owner configuration. |
+| `QAR_SDK_ROOT` | `qar_qar_adapter/CMakeLists.txt`, `CMakePresets.json` | None. | A folder. CMake uses it when the cache variable `QAR_SDK_ROOT` is unset or empty. Where the build checks the SDK library, an unset or wrong value only gives a configure warning, because nothing links against the SDK; where the build looks for the QarOS headers, the `include` folder of the root is used when it holds the folder of the QarOS C++ SDK headers and `qar_streaming.h`. Scripts use it when the `-SdkRoot` parameter is omitted. | Root of the installed QAROS, the folder that holds `bin` and `include` and that the installer records as `InstallFolder` in the registry. It is used by the configure-time check, by the search for the QarOS headers and by the scripts that need the install tree; at run time the library is found by the vendor lookup (the registry, `QAROS_RUNTIME_DIR`, `PATH`) or by the library path of the owner configuration. |
 | `PYTHONPATH` | `cmake/QarRosBuildSupport.cmake` | None. | The shared CMake support module puts `<ROS2_INSTALL_ROOT>/Lib/site-packages` in front of the existing value for the configure process when that folder exists. | Lets the ament CMake modules import `ament_package` from the Python of the ROS 2 distribution while a project is configured. |
 | `PATH` | `scripts/qar_locations.ps1`, `scripts/run_ogre_sample.ps1` | None. | Read by the Windows loader. | The folders in which Windows looks for the DLLs of a program that it starts: the Qt, Ogre and ROS DLL folders must be on it for a program that imports them. The scripts prepend them. Set by `scripts/qar_locations.ps1`, `scripts/run_ogre_sample.ps1`. |
 
@@ -98,13 +94,9 @@ These are the structs that a host fills in code. Every default below is the valu
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `mode` | `HubMode` | `kAuto` | How the program joins the Hub; see [Enumerations](#enumerations). |
-| `remote` | `HubEndpoint` | empty host, port 0 | The host and the onboarding port of the Hub on another PC, as the prefill of the remote mode. The port has no default. |
-| `program_tag` | `std::string` | empty | Names the program, and the folder of its identity. |
-| `instance` | `std::string` | empty | A second program of the same kind on one PC; it becomes part of the folder of the identity and of the common names. |
+| `program_tag` | `std::string` | empty | Names the program in the peer info that the Hub is told. |
 | `display_name` | `std::string` | empty | The name that the Hub shows in its approval prompt. |
-| `app_version` | `std::string` | `0.1.0` | The version of the program that the Hub is told. |
-| `identity_dir` | `std::string` | empty | The folder of the identity. Empty selects `default_identity_dir(program_tag, instance)`. |
+| `app_version` | `std::string` | `qar_ar_core::kLibraryVersion`, the version of this qar_ogre_adapter build (`qar_ar_core/version.hpp`) | The version of the program that the Hub is told. |
 | `library_path` | `std::string` | empty | The file of the QarOS library. Empty selects the lookup of the header, which finds the installed QAROS. |
 | `approval_timeout_ms` | `std::uint32_t` | `0` | How long the Hub waits for the person to click Allow. 0 is the default of the Hub, and the Hub takes at most 600000. |
 | `max_targets` | `std::uint32_t` | `8` | How many targets get a stream; a further target is listed as not served. |
@@ -181,9 +173,6 @@ These are the structs that a host fills in code. Every default below is the valu
 
 | Enumeration | Value | Meaning |
 |---|---|---|
-| `HubMode` | `kAuto`, the default | A stored pairing means another PC's Hub, an installed QAROS means the Hub of this PC, anything else means another PC's Hub. |
-| `HubMode` | `kLocal` | A source app on the PC of the Hub: the Hub asks once to allow the program and no code is needed. |
-| `HubMode` | `kRemote` | The Hub of another PC: a pairing code once, then a stored pairing. |
 | `GlSubmitMode` | `kRenderIntoQarTextures`, the default | QarOS owns the textures of a frame and the adapter copies the rendered textures into them. |
 | `GlSubmitMode` | `kSupplyOwnTextureIds` | The adapter passes the ids of its own textures. Against the SDK it cannot work, because QarOS overwrites them. |
 
@@ -247,24 +236,18 @@ $env:PATH = "$env:ROS2_INSTALL_ROOT\opt\rviz_ogre_vendor\bin;$env:PATH"
 & .\build\vs2019-x64\examples\qaros_live_stream\RelWithDebInfo\qar_ogre_live_stream_example.exe --help
 ```
 ```text
-Usage: qar_ogre_live_stream_example [--local | --hub HOST:PORT [--code CODE] | --forget]
-                                    [--connect-only] [--seconds N]
-  --local         join the QAROS Hub of this PC (the default). QAROS asks once to allow
-                  this program, and again after each rebuild of it: click Allow in the
-                  QAROS window
-  --hub H:P       join the Hub of another PC at host H and onboarding port P (the port is
-                  shown with the pairing code in the Visualizer of that PC)
-  --code CODE     the pairing code that the Hub of that PC shows for a new device
-                  (see the QAROS documentation); it works once. Only the first join
-                  needs it: the pairing is stored for the next start
-  --forget        erase the stored pairing with another PC's Hub and exit
+Usage: qar_ogre_live_stream_example [--local] [--connect-only] [--seconds N]
+  --local         join the QAROS Hub of this PC (the only mode, accepted for older
+                  scripts). QAROS asks once to allow this program, and again after each
+                  rebuild of it: click Allow in the QAROS window. For a Hub on another PC,
+                  make the Hub of this PC a member of that Hub in QAROS
   --connect-only  join QAROS, print the runtime, the mode, this program's peer, the app
                   volume and the targets, and exit; no window, no stream
   --seconds N     otherwise: wait for a target (a headset or a Visualizer), stream the
                   scene to the first one that comes up, stop after N s (default 60)
 ```
 
-The example joins the Hub of this PC with `--local`, the default, or the Hub of another PC with `--hub HOST:PORT` and the pairing code `--code CODE`; `--forget` erases a stored pairing, `--connect-only` joins, prints what it found and exits, and the example streams for 60 seconds unless `--seconds` says otherwise.
+The example joins the Hub of this PC; `--local` is accepted and changes nothing. To work with the Hub of another PC, make the Hub of this PC a member of that Hub in QAROS; the program still joins the Hub of its own PC. `--connect-only` joins, prints what it found and exits, and the example streams for 60 seconds unless `--seconds` says otherwise.
 
 ### Parameters of the scripts
 
@@ -283,9 +266,3 @@ The example joins the Hub of this PC with `--local`, the default, or the Hub of 
 | `-OutDir` | - | string | empty | Output folder for PNGs and reports. Default: %TEMP%\qar_ogre_sample. |
 | `-Ros2Root` | `-Ros2DistroRoot`, `-Ros2InstallRoot` | string | empty | ROS 2 Humble distribution root. Default: the environment variable ROS2_INSTALL_ROOT. |
 
-`scripts\update_qar_headers.ps1` copies the QarOS header of an SDK into the repository; [Updating the QarOS header](SDK_COMPATIBILITY.md#updating-the-qaros-header) says when to run it:
-
-| Parameter | Alias | Type | Default | Meaning |
-|---|---|---|---|---|
-| `-SdkRoot` | `-QarSdkRoot` | string | none | Root of the QarOS SDK install tree (the folder with include\qar_streaming.h). Default: the environment variable QAR_SDK_ROOT. Required. |
-| `-RepoRoot` | - | string | `(Resolve-Path "$PSScriptRoot\..").Path` | Root of the repository that receives the header: the script writes third_party\qar\include\qar_streaming.h below it. Default: the parent of the folder that holds this script. |

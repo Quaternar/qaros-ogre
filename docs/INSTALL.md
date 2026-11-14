@@ -319,16 +319,17 @@ The runtime initialisation leaves the field `runtime_binaries_folder_path` empty
 
 Nothing in this stack links against QAROS. At configure time, CMake reads `QAR_SDK_ROOT` only to check that `bin\qar-streaming-c.dll` exists below it; when the variable is not set or the DLL is missing, it prints a warning and continues. A build and the whole test suite therefore work without QAROS; only the programs that connect to QAROS need the installation at run time.
 
-How a program joins the QAROS Hub is described by QuaternAR: [Onboarding and sessions](https://docs.quaternar.com/docs/next/developer-guide/onboarding-and-sessions/) and [Source applications](https://docs.quaternar.com/docs/next/operator-guide/source-applications/). A program that runs on the PC of the Hub joins as a local source app, and the Hub asks its operator once to allow it; a Hub on another PC needs a pairing code.
+How a program joins the QAROS Hub is described by QuaternAR: [Onboarding and sessions](https://docs.quaternar.com/docs/next/developer-guide/onboarding-and-sessions/) and [Source applications](https://docs.quaternar.com/docs/next/operator-guide/source-applications/). A program that runs on the PC of the Hub joins as a local source app, and the Hub asks its operator once to allow it. For a Hub on another PC, make the Hub of this PC a member of that Hub; the program still joins the Hub of its own PC.
 
 ## Python environment
 
 ### Clone this repository
 
-The next steps use the scripts and the `requirements.txt` of this repository, so clone it first.
+The next steps use the scripts and the `requirements.txt` of this repository, so clone it first. The clone needs `--recurse-submodules`: the QarOS headers come from the submodule `external/qaros`, a checkout of the public qaros repository. That repository stores some images in Git LFS, which the build does not need, so `GIT_LFS_SKIP_SMUDGE=1` skips them. In an existing clone, fetch the submodule with `git submodule update --init`.
 
 ```powershell
-git clone https://github.com/Quaternar/qaros-ogre "$env:QAR_ROOT\src\qar_ogre_adapter"
+$env:GIT_LFS_SKIP_SMUDGE = 1
+git clone --recurse-submodules https://github.com/Quaternar/qaros-ogre "$env:QAR_ROOT\src\qar_ogre_adapter"
 ```
 ```text
 Cloning into 'C:\qar\src\qar_ogre_adapter'...
@@ -470,19 +471,19 @@ ctest --preset vs2019-x64
 ```text
 Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
         Start   1: check_layering_qar_ar_core
-  1/576 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.17 sec
+  1/546 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.17 sec
         Start   2: check_layering_qar_ogre_streaming
-  2/576 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.15 sec
+  2/546 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.15 sec
         Start   3: check_layering_qar_qar_adapter
-  3/576 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.21 sec
+  3/546 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.21 sec
         Start   4: check_layering_examples
 ...
-100% tests passed, 0 tests failed out of 576
+100% tests passed, 0 tests failed out of 546
 
 Total Test time (real) =  95.12 sec
 ```
 
-Install it into the prefix. The install puts the libraries of the three modules `qar_ar_core`, `qar_ogre_streaming` and `qar_qar_adapter` and the vendored QarOS C header below `$env:QAR_PREFIX`, together with the CMake package that the other repositories of this stack find there.
+Install it into the prefix. The install puts the libraries of the three modules `qar_ar_core`, `qar_ogre_streaming` and `qar_qar_adapter` and the QarOS C and C++ headers of the qaros submodule below `$env:QAR_PREFIX`, together with the CMake package that the other repositories of this stack find there.
 
 ```powershell
 cmake --install build\vs2019-x64 --config RelWithDebInfo --prefix $env:QAR_PREFIX
@@ -494,7 +495,9 @@ cmake --install build\vs2019-x64 --config RelWithDebInfo --prefix $env:QAR_PREFI
 ...
 -- Installing: C:\qar\install/include/qar_qar_adapter/target_rule.hpp
 -- Installing: C:\qar\install/include/qar_streaming.h
--- Installing: C:\qar\install/share/qar_ogre_adapter/LICENSE.qar_streaming_header
+-- Installing: C:\qar\install/include/qar_streaming_cpp/Runtime.hpp
+...
+-- Installing: C:\qar\install/share/qar_ogre_adapter/LICENSE.qaros
 -- Installing: C:\qar\install/share/qar_ogre_adapter/LICENSE
 -- Installing: C:\qar\install/share/qar_ogre_adapter/cmake/qar_ogre_adapterTargets.cmake
 -- Installing: C:\qar\install/share/qar_ogre_adapter/cmake/qar_ogre_adapterTargets-relwithdebinfo.cmake
@@ -504,10 +507,10 @@ cmake --install build\vs2019-x64 --config RelWithDebInfo --prefix $env:QAR_PREFI
 
 ## Install smoke test
 
-The folder `docs/snippets/consumer` of the repository holds a small project that uses the installed package the way your own project does. It is not part of the repository build; it configures on its own against `QAR_PREFIX`. It asks for the version 0.2.0 of the package and for the components `qar_ar_core`, `qar_ogre_streaming`, `render`, `url` and `gestures`, and it links their targets. The installed headers are UTF-8 text without a byte order mark, and some comments contain characters outside ASCII; compile your own code with `/utf-8`, as this repository does.
+The folder `docs/snippets/consumer` of the repository holds a small project that uses the installed package the way your own project does. It is not part of the repository build; it configures on its own against `QAR_PREFIX`. It asks for the version 0.2.1 of the package and for the components `qar_ar_core`, `qar_ogre_streaming`, `render`, `url` and `gestures`, and it links their targets. The installed headers are UTF-8 text without a byte order mark, and some comments contain characters outside ASCII; compile your own code with `/utf-8`, as this repository does.
 
 ```cmake
-find_package(qar_ogre_adapter 0.2.0 CONFIG REQUIRED
+find_package(qar_ogre_adapter 0.2.1 CONFIG REQUIRED
   COMPONENTS qar_ar_core qar_ogre_streaming render url gestures)
 ```
 
@@ -538,7 +541,7 @@ cmake --build build\consumer --config RelWithDebInfo
 .\build\consumer\RelWithDebInfo\qar_ogre_adapter_consumer.exe
 ```
 ```text
-qar_ogre_adapter 0.2.0
+qar_ogre_adapter 0.2.1
 targets: qar_ogre_adapter::qar_ar_core qar_ogre_adapter::qar_ogre_streaming qar_ogre_adapter::render qar_ogre_adapter::url qar_ogre_adapter::gestures
 QarOS library loaded: no
 status text: Ok

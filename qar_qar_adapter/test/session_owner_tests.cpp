@@ -1,20 +1,20 @@
 // Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
-// The session owner on a fake QarOS library: joining the Hub of this PC, joining a Hub on
-// another PC, the list of targets, and the teardown. No test loads the real library.
+// The session owner on a fake QarOS library: joining the Hub of this PC, the list of targets,
+// and the teardown. No test loads the real library.
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <atomic>
 #include <cstring>
-#include <fstream>
 #include <iterator>
 #include <set>
 #include <stdexcept>
 #include <thread>
 
+#include "qar_ar_core/version.hpp"
 #include "qar_qar_adapter/gui_call_guard.hpp"
 #include "session_owner_harness.hpp"
 
@@ -43,9 +43,6 @@ namespace
 using qar_qar_adapter::DeviceKind;
 using qar_qar_adapter::QarSessionOwner;
 using qar_qar_adapter::QarSessionOwnerTestAccess;
-using qar_qar_adapter::HubEndpoint;
-using qar_qar_adapter::HubMode;
-using qar_qar_adapter::IdentityRecord;
 using qar_qar_adapter::SessionEvent;
 using qar_qar_adapter::SessionState;
 using qar_qar_adapter::TargetInfo;
@@ -56,20 +53,6 @@ using qar_qar_adapter::test::Outcome;
 using qar_qar_adapter::test::RecordingListener;
 using qar_qar_adapter::test::make_peer;
 using namespace std::chrono_literals;
-
-constexpr const char * kIdText = "a0a1a2a3-a4a5-a6a7-a8a9-aaabacadaeaf";
-
-void store_identity(const Harness & harness)
-{
-  IdentityRecord record;
-  record.id = kIdText;
-  record.host = "hub.example";
-  record.port = 19120;
-  record.paired_unix_s = 1700000000;
-  std::string error;
-  ASSERT_TRUE(qar_qar_adapter::write_identity_atomic(harness.identity_path(), record, error))
-    << error;
-}
 
 bool has_event(const Harness & h, SessionEvent::Kind kind)
 {
@@ -99,16 +82,14 @@ TEST(SessionOwnerLocal, ApprovalJoinsTheSessionAndHandsItOverAfterTheConsumerDra
 
   ASSERT_TRUE(h.wait_for([&h] { return h.owner().ready(); }));
   EXPECT_NE(h.owner().session(), nullptr);
-  EXPECT_EQ(h.owner().effective_mode(), HubMode::kLocal);
 
   const auto requests = h.fake().onboard_requests();
   ASSERT_EQ(requests.size(), 1u);
   EXPECT_EQ(requests[0].kind, "local");
   EXPECT_EQ(requests[0].approval_timeout_ms, 45000u);
   EXPECT_EQ(requests[0].display_name, "Test program on host");
-  EXPECT_EQ(requests[0].app_version, "0.1.0");
+  EXPECT_EQ(requests[0].app_version, qar_ar_core::kLibraryVersion);
   EXPECT_EQ(requests[0].custom_info, "qaros-ros;program=test-program");
-  EXPECT_FALSE(requests[0].has_chained_host);
 
   const auto states = h.events();
   std::vector<SessionState> seen;
@@ -122,13 +103,10 @@ TEST(SessionOwnerLocal, ApprovalJoinsTheSessionAndHandsItOverAfterTheConsumerDra
   EXPECT_EQ(seen, expected);
 
   EXPECT_TRUE(h.logged("QAROS: runtime 0.9.0-fake release v0 from "));
-  EXPECT_TRUE(h.logged("QAROS: hub mode local ("));
   EXPECT_TRUE(h.logged("QAROS: state waiting_for_approval"));
   EXPECT_TRUE(h.logged("QAROS: state running"));
   EXPECT_TRUE(h.logged("QAROS: joined as peer eeeeeeee (local) in "));
   EXPECT_EQ(h.owner().runtime_description().find("0.9.0-fake release v0 from "), 0u);
-  EXPECT_FALSE(std::filesystem::exists(std::filesystem::u8path(h.identity_path())))
-    << "the local mode stores nothing";
 }
 
 TEST(SessionOwnerLocal, EveryQarOsCallOfACommandRunsOnTheOwnerThread)
@@ -243,7 +221,7 @@ TEST(SessionOwnerLocal, ShutdownWhileWaitingForApprovalDoesNotHang)
 
 TEST(SessionOwnerLocal, ALibraryThatCannotBeLoadedFailsWithTheNoRuntimeCause)
 {
-  Harness h(HubMode::kLocal, true, /*load_ok=*/false);
+  Harness h(true, /*load_ok=*/false);
   h.start();
   h.owner().connect();
   ASSERT_TRUE(h.wait_state(SessionState::kFailed));
@@ -300,267 +278,6 @@ TEST(SessionOwnerLocal, TheApprovalTimeoutIsClampedToTenMinutes)
   ASSERT_TRUE(h.connect_and_run());
   ASSERT_EQ(h.fake().onboard_requests().size(), 1u);
   EXPECT_EQ(h.fake().onboard_requests()[0].approval_timeout_ms, 600000u);
-}
-
-// ---------------------------------------------------------------------------------------------
-// Which mode a start uses
-// ---------------------------------------------------------------------------------------------
-
-TEST(SessionOwnerMode, AutoChoosesTheLocalModeWhenQarOsIsInstalledAndNothingIsPaired)
-{
-  Harness h(HubMode::kAuto, /*installed=*/true);
-  h.start();
-  ASSERT_TRUE(h.connect_and_run());
-  EXPECT_EQ(h.owner().effective_mode(), HubMode::kLocal);
-  EXPECT_TRUE(h.logged("QAROS: hub mode local (QAROS is installed on this PC)"));
-}
-
-TEST(SessionOwnerMode, AutoAsksForACodeWhenQarOsIsNotInstalled)
-{
-  Harness h(HubMode::kAuto, /*installed=*/false);
-  h.start();
-  h.owner().connect();
-  ASSERT_TRUE(h.wait_state(SessionState::kNeedsCode));
-  EXPECT_EQ(h.owner().effective_mode(), HubMode::kRemote);
-  EXPECT_EQ(h.fake().onboard_requests().size(), 0u);
-  EXPECT_TRUE(h.logged("QAROS: hub mode remote (QAROS is not installed on this PC)"));
-}
-
-TEST(SessionOwnerMode, AStoredPairingBeatsTheInstalledHub)
-{
-  Harness h(HubMode::kAuto, /*installed=*/true);
-  store_identity(h);
-  h.start();
-  EXPECT_TRUE(h.owner().has_remote_identity());
-  ASSERT_TRUE(h.connect_and_run());
-  EXPECT_EQ(h.owner().effective_mode(), HubMode::kRemote);
-  ASSERT_EQ(h.fake().onboard_requests().size(), 1u);
-  EXPECT_EQ(h.fake().onboard_requests()[0].kind, "rejoin");
-}
-
-TEST(SessionOwnerMode, ADamagedIdentityFileIsReportedAndTreatedAsAbsent)
-{
-  Harness h(HubMode::kAuto, /*installed=*/true);
-  std::filesystem::create_directories(std::filesystem::u8path(h.dir()));
-  {
-    std::ofstream file(std::filesystem::u8path(h.identity_path()), std::ios::binary);
-    file << "format=1\nonboarding_id=\nhub_host=x\n";
-  }
-  h.start();
-  ASSERT_TRUE(h.connect_and_run());
-  EXPECT_EQ(h.owner().effective_mode(), HubMode::kLocal);
-  EXPECT_TRUE(h.logged("identity file damaged: pair again"));
-  EXPECT_TRUE(std::filesystem::exists(std::filesystem::u8path(h.identity_path())))
-    << "the file stays until a pairing replaces it";
-}
-
-// ---------------------------------------------------------------------------------------------
-// Another PC's Hub (remote mode)
-// ---------------------------------------------------------------------------------------------
-
-TEST(SessionOwnerRemote, ARejoinWithTheStoredPairingNeedsNoCode)
-{
-  Harness h(HubMode::kRemote);
-  store_identity(h);
-  h.start();
-  h.owner().connect();
-  ASSERT_TRUE(h.wait_state(SessionState::kRunning));
-  const auto requests = h.fake().onboard_requests();
-  ASSERT_EQ(requests.size(), 1u);
-  EXPECT_EQ(requests[0].kind, "rejoin");
-  EXPECT_EQ(requests[0].id_text, kIdText);
-  EXPECT_NE(h.state_event(SessionState::kRejoining), nullptr);
-  EXPECT_TRUE(h.logged("QAROS: joined as peer eeeeeeee (rejoin) in "));
-}
-
-TEST(SessionOwnerRemote, ARejoinThatTheHubDoesNotKnowAsksForACode)
-{
-  Harness h(HubMode::kRemote);
-  store_identity(h);
-  Outcome unknown;
-  unknown.code = QAR_STATUS_ONBOARDING_SESSION_NOT_FOUND;
-  h.fake().script_onboard(unknown);
-  h.start();
-  h.owner().connect();
-  ASSERT_TRUE(h.wait_state(SessionState::kNeedsCode));
-  const SessionEvent * event = h.state_event(SessionState::kNeedsCode);
-  ASSERT_NE(event, nullptr);
-  EXPECT_EQ(event->status.code, QAR_STATUS_ONBOARDING_SESSION_NOT_FOUND);
-  EXPECT_NE(event->status.message.find("not paired"), std::string::npos);
-}
-
-TEST(SessionOwnerRemote, ARejoinThatMustBePairedAgainAsksForACode)
-{
-  Harness h(HubMode::kRemote);
-  store_identity(h);
-  Outcome repair;
-  repair.code = QAR_STATUS_ONBOARDING_RE_PAIR_REQUIRED;
-  h.fake().script_onboard(repair);
-  h.start();
-  h.owner().connect();
-  ASSERT_TRUE(h.wait_state(SessionState::kNeedsCode));
-  EXPECT_EQ(h.state_event(SessionState::kNeedsCode)->status.code,
-    QAR_STATUS_ONBOARDING_RE_PAIR_REQUIRED);
-}
-
-TEST(SessionOwnerRemote, ACodeIsSentWithTheHubAndTheIdentityIsStoredBeforeTheSessionRuns)
-{
-  Harness h(HubMode::kRemote);
-  bool stored_at_subscribe = false;
-  const std::string path = h.identity_path();
-  h.fake().set_call_hook([&stored_at_subscribe, path](const std::string & name) {
-      if (name == "peer_subscribe_updates") {
-        stored_at_subscribe = std::filesystem::exists(std::filesystem::u8path(path));
-      }
-    });
-  h.start();
-  h.owner().connect();
-  ASSERT_TRUE(h.wait_state(SessionState::kNeedsCode));
-  EXPECT_FALSE(h.owner().has_remote_identity());
-
-  h.owner().submit_code("48151623", HubEndpoint{"hub.example", 19120});
-  ASSERT_TRUE(h.wait_state(SessionState::kRunning));
-  EXPECT_TRUE(stored_at_subscribe) << "the identity file exists before the session is announced";
-  EXPECT_TRUE(h.owner().has_remote_identity());
-
-  const auto requests = h.fake().onboard_requests();
-  ASSERT_EQ(requests.size(), 1u);
-  EXPECT_EQ(requests[0].kind, "code");
-  EXPECT_EQ(requests[0].code, "48151623");
-  EXPECT_EQ(requests[0].host, "hub.example");
-  EXPECT_EQ(requests[0].port, 19120);
-  EXPECT_NE(h.state_event(SessionState::kPairing), nullptr);
-  EXPECT_TRUE(h.logged("QAROS: joined as peer eeeeeeee (pairing) in "));
-
-  for (const std::string & line : h.log_lines()) {
-    EXPECT_EQ(line.find("48151623"), std::string::npos) << "the code is never logged: " << line;
-  }
-  IdentityRecord record;
-  std::string error;
-  ASSERT_EQ(qar_qar_adapter::read_identity(h.identity_path(), record, error),
-    qar_qar_adapter::IdentityRead::kOk) << error;
-  EXPECT_EQ(record.host, "hub.example");
-  EXPECT_EQ(record.port, 19120);
-  EXPECT_EQ(record.id.size(), 36u);
-  std::ifstream file(std::filesystem::u8path(h.identity_path()), std::ios::binary);
-  const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-  EXPECT_EQ(text.find("48151623"), std::string::npos) << "the file holds no code";
-}
-
-TEST(SessionOwnerRemote, AWrongCodeAsksForTheNextOne)
-{
-  Harness h(HubMode::kRemote);
-  Outcome wrong;
-  wrong.code = QAR_STATUS_PAKE_ERROR;
-  h.fake().script_onboard(wrong);
-  h.start();
-  h.owner().connect();
-  ASSERT_TRUE(h.wait_state(SessionState::kNeedsCode));
-  h.owner().submit_code("11111111", HubEndpoint{"hub.example", 19120});
-  ASSERT_TRUE(h.wait_for([&h] {
-        return h.fake().onboard_requests().size() == 1u &&
-               h.owner().state() == SessionState::kNeedsCode &&
-               std::count_if(h.events().begin(), h.events().end(), [](const SessionEvent & e) {
-          return e.kind == SessionEvent::Kind::kState && e.state == SessionState::kNeedsCode &&
-          e.status.code == QAR_STATUS_PAKE_ERROR;
-        }) == 1;
-      }));
-  EXPECT_FALSE(std::filesystem::exists(std::filesystem::u8path(h.identity_path())));
-
-  h.owner().submit_code("22222222", HubEndpoint{"hub.example", 19120});
-  ASSERT_TRUE(h.wait_state(SessionState::kRunning));
-  EXPECT_EQ(h.fake().onboard_requests().size(), 2u);
-}
-
-TEST(SessionOwnerRemote, APortOfZeroIsRefusedBeforeAnyCall)
-{
-  Harness h(HubMode::kRemote);
-  h.start();
-  h.owner().connect();
-  ASSERT_TRUE(h.wait_state(SessionState::kNeedsCode));
-  h.owner().submit_code("12345678", HubEndpoint{"hub.example", 0});
-  ASSERT_TRUE(h.wait_for([&h] {
-        return std::any_of(h.events().begin(), h.events().end(), [](const SessionEvent & e) {
-          return e.kind == SessionEvent::Kind::kState && e.status.code ==
-          QAR_STATUS_ARGUMENT_NOT_SUPPORTED;
-        });
-      }));
-  EXPECT_EQ(h.owner().state(), SessionState::kNeedsCode);
-  EXPECT_EQ(h.fake().onboard_requests().size(), 0u);
-}
-
-TEST(SessionOwnerRemote, CancelWhilePairingGoesBackToTheCodePrompt)
-{
-  Harness h(HubMode::kRemote);
-  Outcome waiting;
-  waiting.wait_for_release = true;
-  h.fake().script_onboard(waiting);
-  h.start();
-  h.owner().connect();
-  ASSERT_TRUE(h.wait_state(SessionState::kNeedsCode));
-  h.owner().submit_code("12345678", HubEndpoint{"hub.example", 19120});
-  ASSERT_TRUE(h.wait_state(SessionState::kPairing));
-  h.owner().cancel();
-  ASSERT_TRUE(h.wait_state(SessionState::kNeedsCode));
-  EXPECT_EQ(h.fake().onboard_results_fired(), 1);
-  EXPECT_EQ(h.fake().live_sessions(), 0);
-}
-
-TEST(SessionOwnerRemote, ForgetReleasesTheSessionFirstThenForgetsAndDeletesTheFile)
-{
-  Harness h(HubMode::kRemote);
-  store_identity(h);
-  h.start();
-  ASSERT_TRUE(h.connect_and_run());
-  h.owner().forget();
-  ASSERT_TRUE(h.wait_for([&h] { return has_event(h, SessionEvent::Kind::kForgetDone); }));
-  ASSERT_TRUE(h.wait_state(SessionState::kIdle));
-
-  const int destroyed = h.fake().first_index("session_handle_destroy");
-  const int forgotten = h.fake().first_index("runtime_forget");
-  ASSERT_GE(destroyed, 0);
-  ASSERT_GE(forgotten, 0);
-  EXPECT_LT(destroyed, forgotten) << "the session is released before the slot is erased";
-  EXPECT_FALSE(std::filesystem::exists(std::filesystem::u8path(h.identity_path())));
-  EXPECT_FALSE(h.owner().has_remote_identity());
-  const auto done = std::find_if(h.events().begin(), h.events().end(),
-      [](const SessionEvent & e) { return e.kind == SessionEvent::Kind::kForgetDone; });
-  ASSERT_NE(done, h.events().end());
-  EXPECT_EQ(done->status.code, 0);
-}
-
-TEST(SessionOwnerRemote, ForgetOfAPairingTheHubNoLongerKnowsStillDeletesTheFile)
-{
-  Harness h(HubMode::kRemote);
-  store_identity(h);
-  h.fake().script_forget(QAR_STATUS_ONBOARDING_SESSION_NOT_FOUND);
-  h.start();
-  ASSERT_TRUE(h.connect_and_run());
-  h.owner().forget();
-  ASSERT_TRUE(h.wait_for([&h] { return has_event(h, SessionEvent::Kind::kForgetDone); }));
-  EXPECT_FALSE(std::filesystem::exists(std::filesystem::u8path(h.identity_path())));
-}
-
-TEST(SessionOwnerRemote, ForgetWithoutAnySessionNeedsOnlyTheRuntime)
-{
-  Harness h(HubMode::kRemote);
-  store_identity(h);
-  h.start();
-  h.owner().forget();
-  ASSERT_TRUE(h.wait_for([&h] { return has_event(h, SessionEvent::Kind::kForgetDone); }));
-  EXPECT_EQ(h.fake().count("runtime_forget"), 1);
-  EXPECT_EQ(h.fake().count("runtime_onboard_async"), 0);
-  EXPECT_EQ(h.fake().count("runtime_rejoin_async"), 0);
-  EXPECT_FALSE(std::filesystem::exists(std::filesystem::u8path(h.identity_path())));
-}
-
-TEST(SessionOwnerRemote, ForgetInTheLocalModeIsIgnored)
-{
-  Harness h(HubMode::kLocal);
-  h.start();
-  h.owner().forget();
-  ASSERT_TRUE(h.wait_for([&h] { return h.logged("forget ignored"); }));
-  EXPECT_EQ(h.fake().count("runtime_forget"), 0);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -739,65 +456,10 @@ TEST(SessionOwnerTargets, AHubThatComesBackWithinTheGraceTimeIsNeverReported)
 }
 
 // ---------------------------------------------------------------------------------------------
-// configure(): the mode of the next connect without a new owner
-// ---------------------------------------------------------------------------------------------
-
-TEST(SessionOwnerConfigure, AnIdleOwnerUsesTheNewModeAtTheNextConnectAndNeverMakesALibraryCall)
-{
-  Harness h(HubMode::kLocal);
-  h.start();
-  h.owner().configure(HubMode::kRemote, HubEndpoint{"hub.example", 19120});
-  EXPECT_TRUE(h.fake().calls().empty()) << "configure() calls no QAROS function";
-  h.owner().connect();
-  ASSERT_TRUE(h.wait_state(SessionState::kNeedsCode));
-  EXPECT_EQ(h.owner().effective_mode(), HubMode::kRemote);
-  EXPECT_TRUE(h.fake().onboard_requests().empty()) << "no local approval was asked for";
-  const std::thread::id owner_thread = h.owner_thread();
-  for (const auto & call : h.fake().calls()) {
-    EXPECT_EQ(call.thread, owner_thread) << call.name;
-  }
-}
-
-TEST(SessionOwnerConfigure, ARunningOwnerKeepsTheSettingsAndAppliesThemAtTheNextConnect)
-{
-  Harness h(HubMode::kLocal);
-  h.start();
-  ASSERT_TRUE(h.connect_and_run());
-  h.owner().configure(HubMode::kRemote, HubEndpoint{"hub.example", 19120});
-  ASSERT_TRUE(h.wait_for([&h] { return h.logged("settings kept for the next connect"); }));
-  EXPECT_EQ(h.owner().state(), SessionState::kRunning) << "a running session is not touched";
-  EXPECT_TRUE(h.owner().ready());
-  EXPECT_EQ(h.owner().effective_mode(), HubMode::kLocal);
-
-  h.owner().disconnect();
-  ASSERT_TRUE(h.wait_state(SessionState::kIdle));
-  h.owner().connect();
-  ASSERT_TRUE(h.wait_state(SessionState::kNeedsCode));
-  EXPECT_EQ(h.owner().effective_mode(), HubMode::kRemote);
-  EXPECT_EQ(h.fake().count("runtime_create"), 1) << "the runtime is made once";
-  EXPECT_EQ(h.fake().count("library_init"), 1) << "the library is started once";
-  EXPECT_EQ(h.fake().count("runtime_handle_destroy"), 0);
-  EXPECT_EQ(h.fake().count("library_unload"), 0);
-}
-
-TEST(SessionOwnerConfigure, AFailedOwnerAppliesTheSettingsAtOnce)
-{
-  Harness h(HubMode::kLocal, /*installed=*/true, /*load_ok=*/false);
-  h.start();
-  h.owner().connect();
-  ASSERT_TRUE(h.wait_state(SessionState::kFailed));
-  h.owner().configure(HubMode::kRemote, HubEndpoint{"first.example", 1});
-  ASSERT_TRUE(h.wait_for([&h] { return h.owner().effective_mode() == HubMode::kRemote; }));
-  h.owner().configure(HubMode::kLocal, HubEndpoint{"second.example", 2});
-  ASSERT_TRUE(h.wait_for([&h] { return h.owner().effective_mode() == HubMode::kLocal; }));
-  EXPECT_FALSE(h.logged("settings kept for the next connect")) << "failed counts as idle";
-}
-
-// ---------------------------------------------------------------------------------------------
 // Invites
 // ---------------------------------------------------------------------------------------------
 
-TEST(SessionOwnerInvites, ADeviceIsInvitedByItsKindAndAddressInTheLocalMode)
+TEST(SessionOwnerInvites, ADeviceIsInvitedByItsKindAndAddress)
 {
   Harness h;
   h.start();
@@ -833,16 +495,8 @@ TEST(SessionOwnerInvites, ARefusedInviteReportsTheHubsAnswer)
   EXPECT_FALSE(done->status.retry_offered);
 }
 
-TEST(SessionOwnerInvites, TheRemoteModeAndAnEmptyAddressAreRefusedWithoutACall)
+TEST(SessionOwnerInvites, AnInviteBeforeTheJoinAndAnEmptyAddressAreRefusedWithoutACall)
 {
-  {
-    Harness remote(HubMode::kRemote);
-    store_identity(remote);
-    remote.start();
-    ASSERT_TRUE(remote.connect_and_run());
-    EXPECT_NE(remote.owner().invite_device(DeviceKind::kHeadset, "quest-1"), "");
-    EXPECT_EQ(remote.fake().count("session_invite_target_app_async"), 0);
-  }
   Harness local;
   local.start();
   EXPECT_NE(local.owner().invite_device(DeviceKind::kHeadset, "quest-1"), "")
@@ -1454,27 +1108,6 @@ TEST(SessionOwnerTasks, ABacklogOfTasksDelaysTheHubDownTimerByOneTaskAtMost)
     .count();
   EXPECT_LT(took_s, 3.0 + 1.0 + 0.5) << "the grace time plus the task that was running";
   EXPECT_LT(ran.load(), 8) << "the backlog was still there";
-}
-
-TEST(SessionOwnerTasks, AForgetThatWasIgnoredLeavesNoDrainDeadlineBehind)
-{
-  Harness h;
-  h.start();
-  ASSERT_TRUE(h.connect_and_run());
-  h.owner().forget();
-  ASSERT_TRUE(h.wait_for([&h] { return h.logged("forget ignored"); }));
-  EXPECT_EQ(h.owner().state(), SessionState::kRunning) << "the session goes on";
-
-  // The deadline that forget() armed ran out meanwhile; a task of the session that goes on still
-  // runs.
-  std::this_thread::sleep_for(std::chrono::seconds(9));
-  std::atomic<bool> ran{false};
-  std::atomic<bool> dropped{false};
-  ASSERT_TRUE(h.owner().post_session_task("after", [&ran](QarSession *) { ran = true; },
-      [&dropped] { dropped = true; }));
-  ASSERT_TRUE(h.wait_for([&] { return ran.load() || dropped.load(); }));
-  EXPECT_TRUE(ran.load());
-  EXPECT_FALSE(dropped.load());
 }
 
 TEST(SessionOwnerTasks, TasksOfAnEarlierSessionNeverRun)

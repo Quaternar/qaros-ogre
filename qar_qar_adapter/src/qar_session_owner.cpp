@@ -10,7 +10,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <ctime>
 #include <deque>
 #include <filesystem>
 #include <map>
@@ -20,7 +19,6 @@
 #include <utility>
 
 #include "qar_qar_adapter/gui_call_guard.hpp"
-#include "qar_qar_adapter/identity_store.hpp"
 
 #ifdef _WIN32
 #  ifndef WIN32_LEAN_AND_MEAN
@@ -82,9 +80,6 @@ const char * state_name(SessionState state)
     case SessionState::kIdle: return "idle";
     case SessionState::kLoading: return "loading";
     case SessionState::kWaitingForApproval: return "waiting_for_approval";
-    case SessionState::kRejoining: return "rejoining";
-    case SessionState::kNeedsCode: return "needs_code";
-    case SessionState::kPairing: return "pairing";
     case SessionState::kRunning: return "running";
     case SessionState::kReconnecting: return "reconnecting";
     case SessionState::kStopping: return "stopping";
@@ -309,21 +304,14 @@ struct Msg
   enum class Type
   {
     // commands (kTask: a call of the consumer, run in order with the others)
-    kConnect, kSubmitCode, kCancel, kDisconnect, kForget, kConfigure, kShutdown, kTask,
+    kConnect, kCancel, kDisconnect, kShutdown, kTask,
     // from QAROS threads
     kOnboardResult, kProgress, kInviteResult, kHubPresence
   };
   Type type = Type::kConnect;
-  // kSubmitCode, kConfigure
-  std::string code;
-  HubEndpoint hub;
-  // kConfigure
-  HubMode mode = HubMode::kAuto;
   // kOnboardResult, kProgress
   std::uint64_t attempt = 0;
   QarResult result{};
-  QarOnboardingId onboarding_id{};
-  bool has_onboarding_id = false;
   QarSession * session = nullptr;
   QarActionSeverity severity = QAR_ACTION_SEVERITY_INFO;
   float percent = -1.0f;
@@ -355,10 +343,9 @@ struct ListenerScope
 
 bool is_command(Msg::Type type)
 {
-  return type == Msg::Type::kConnect || type == Msg::Type::kSubmitCode ||
-         type == Msg::Type::kCancel || type == Msg::Type::kDisconnect ||
-         type == Msg::Type::kForget || type == Msg::Type::kConfigure ||
-         type == Msg::Type::kShutdown || type == Msg::Type::kTask;
+  return type == Msg::Type::kConnect || type == Msg::Type::kCancel ||
+         type == Msg::Type::kDisconnect || type == Msg::Type::kShutdown ||
+         type == Msg::Type::kTask;
 }
 
 }  // namespace
@@ -405,21 +392,15 @@ struct QarSessionOwner::Impl
     TargetInfo info;
   };
 
-  // One onboarding or rejoin attempt. The init blocks and the strings they point at live here,
-  // because the library may read them until the result callback has fired.
+  // One onboarding attempt. The init blocks and the strings they point at live here, because
+  // the library may read them until the result callback has fired.
   struct OpCtx
   {
     Impl * impl = nullptr;
     std::uint64_t attempt = 0;
-    OnboardingContext kind = OnboardingContext::kLocal;
     QarOnboardInit onboard{};
-    QarRejoinInit rejoin{};
     QarOnboardLocalAppExt local{};
-    QarOnboardCodeExt code_ext{};
-    QarOnboardHostExt host_ext{};
     std::string display_name, app_version, custom_info;
-    std::string code;
-    HubEndpoint hub;
     QarCancelToken * token = nullptr;
     bool cancel_requested = false;
     Clock::time_point started = Clock::now();
@@ -444,15 +425,13 @@ struct QarSessionOwner::Impl
   // --- constants of the program -----------------------------------------------------------
   SessionOwnerConfig cfg;
   std::unique_ptr<ILibraryLoader> loader;
-  std::string identity_dir, identity_path, storage_dir;
 
   // --- state seen by every thread -----------------------------------------------------------
   std::atomic<SessionState> state{SessionState::kIdle};
-  std::atomic<HubMode> mode{HubMode::kAuto};
   std::atomic<bool> consumer_ready{false};
-  // Tasks are accepted from the hand-over of the session (poll()) until a disconnect, a forget or
-  // the destructor is called, or the state leaves running. `task_closing` is set on the caller's
-  // thread by those three, so a task cannot be posted after them even while the session is up.
+  // Tasks are accepted from the hand-over of the session (poll()) until a disconnect or the
+  // destructor is called, or the state leaves running. `task_closing` is set on the caller's
+  // thread by those two, so a task cannot be posted after them even while the session is up.
   std::atomic<bool> accepting_tasks{false};
   std::atomic<bool> task_closing{false};
   // Counts up on the owner thread each time a session is released. A task carries the number it
@@ -467,7 +446,6 @@ struct QarSessionOwner::Impl
   std::map<std::string, std::uint64_t> slow_task_counts;
   // Owner thread only: how often each QarOS call was reported as slow.
   std::map<std::string, std::uint64_t> slow_call_counts;
-  std::atomic<bool> identity_present{false};
   std::atomic<QarSession *> session_for_consumer{nullptr};
 
   // --- the inbox of the owner thread ---------------------------------------------------------
@@ -523,31 +501,15 @@ struct QarSessionOwner::Impl
   bool library_initialised = false;
   bool leak_on_destroy = false;
   bool busy_retried = false;
-  OnboardingContext retry_kind = OnboardingContext::kLocal;
   bool retry_armed = false;
   Clock::time_point retry_at{};
   bool hub_down_armed = false;
   Clock::time_point hub_down_at{};
   Clock::time_point joining_started{};
-  bool config_pending = false;
-  HubMode pending_mode = HubMode::kAuto;
-  HubEndpoint pending_remote;
 
   explicit Impl(SessionOwnerConfig config, std::unique_ptr<ILibraryLoader> library_loader)
   : cfg(std::move(config)), loader(std::move(library_loader))
   {
-    mode.store(cfg.mode);
-    identity_dir = cfg.identity_dir.empty() ?
-      default_identity_dir(cfg.program_tag, cfg.instance) : cfg.identity_dir;
-    if (!identity_dir.empty()) {
-      identity_path = identity_file_path(identity_dir);
-      storage_dir = (std::filesystem::u8path(identity_dir) / "runtime").u8string();
-    }
-    IdentityRecord record;
-    std::string error;
-    identity_present.store(
-      !identity_path.empty() &&
-      read_identity(identity_path, record, error) != IdentityRead::kAbsent);
     thread = std::thread([this] { run(); });
   }
 
@@ -694,11 +656,8 @@ struct QarSessionOwner::Impl
   {
     switch (message.type) {
       case Msg::Type::kConnect: on_connect(); break;
-      case Msg::Type::kSubmitCode: on_submit_code(message); break;
       case Msg::Type::kCancel: on_cancel(); break;
-      case Msg::Type::kDisconnect: on_disconnect(false); break;
-      case Msg::Type::kForget: on_disconnect(true); break;
-      case Msg::Type::kConfigure: on_configure(message); break;
+      case Msg::Type::kDisconnect: on_disconnect(); break;
       case Msg::Type::kOnboardResult: on_onboard_result(message); break;
       case Msg::Type::kProgress: on_progress(message); break;
       case Msg::Type::kInviteResult: on_invite_result(message); break;
@@ -812,7 +771,7 @@ struct QarSessionOwner::Impl
     if (retry_armed && now >= retry_at) {
       retry_armed = false;
       if (state.load() == SessionState::kLoading) {
-        start_attempt(retry_kind);
+        start_attempt();
       }
     }
     if (hub_down_armed && now >= hub_down_at) {
@@ -829,10 +788,9 @@ struct QarSessionOwner::Impl
   // Starting
   // =========================================================================================
 
-  void fail(
-    int code, const char * detail, OnboardingContext context, const char * address = nullptr)
+  void fail(int code, const char * detail, OnboardingContext context)
   {
-    StatusText cause = describe_status(code, context, detail, address);
+    StatusText cause = describe_status(code, context, detail);
     set_state(SessionState::kFailed, &cause);
   }
 
@@ -872,10 +830,8 @@ struct QarSessionOwner::Impl
       }
     }
 
+    // A local app persists nothing, so the runtime keeps its default storage folder.
     QarRuntimeInit init = qar_runtime_init_default();
-    if (!storage_dir.empty()) {
-      init.storage_folder_path = storage_dir.c_str();
-    }
     QarResult result{};
 #ifdef _WIN32
     if (guarded_runtime_create(&init, &runtime, &result) != 0) {
@@ -941,35 +897,11 @@ struct QarSessionOwner::Impl
     return true;
   }
 
-  void apply_config(HubMode new_mode, const HubEndpoint & remote)
-  {
-    cfg.mode = new_mode;
-    cfg.remote = remote;
-    mode.store(new_mode);
-    config_pending = false;
-  }
-
-  void on_configure(const Msg & message)
-  {
-    const SessionState now_state = state.load();
-    if (now_state == SessionState::kIdle || now_state == SessionState::kFailed) {
-      apply_config(message.mode, message.hub);
-      return;
-    }
-    config_pending = true;
-    pending_mode = message.mode;
-    pending_remote = message.hub;
-    log(std::string("settings kept for the next connect (state ") + state_name(now_state) + ")");
-  }
-
   void on_connect()
   {
     const SessionState now_state = state.load();
     if (now_state != SessionState::kIdle && now_state != SessionState::kFailed) {
       return;
-    }
-    if (config_pending) {
-      apply_config(pending_mode, pending_remote);
     }
     busy_retried = false;
     retry_armed = false;
@@ -981,36 +913,7 @@ struct QarSessionOwner::Impl
       return;
     }
 
-    IdentityRecord record;
-    std::string error;
-    bool has_identity = false;
-    if (!identity_path.empty()) {
-      const IdentityRead read = read_identity(identity_path, record, error);
-      has_identity = (read == IdentityRead::kOk);
-      identity_present.store(read != IdentityRead::kAbsent);
-      if (read == IdentityRead::kMalformed) {
-        log("identity file damaged: pair again (" + error + ")");
-        SessionEvent event;
-        event.kind = SessionEvent::Kind::kLog;
-        event.text = "The stored pairing is damaged. Pair again with a code.";
-        push(std::move(event));
-      }
-    }
-    std::string installed_folder;
-    const bool installed = loader->installed_bin_folder(installed_folder);
-    const char * reason = "";
-    const HubMode chosen = resolve_hub_mode(cfg.mode, has_identity, installed, &reason);
-    mode.store(chosen);
-    log(std::string("hub mode ") + (chosen == HubMode::kLocal ? "local" : "remote") + " (" +
-      reason + ")");
-
-    if (chosen == HubMode::kLocal) {
-      start_attempt(OnboardingContext::kLocal);
-    } else if (has_identity) {
-      start_attempt(OnboardingContext::kRejoin);
-    } else {
-      set_state(SessionState::kNeedsCode);
-    }
+    start_attempt();
   }
 
   void fill_presentation(OpCtx & ctx, QarPeerPresentation & presentation)
@@ -1029,14 +932,12 @@ struct QarSessionOwner::Impl
   {
     auto * ctx = static_cast<OpCtx *>(user_state);
     Impl * impl = ctx->impl;
+    // A local app gets no onboarding id worth keeping: the program persists nothing.
+    (void)id;
     Msg message;
     message.type = Msg::Type::kOnboardResult;
     message.attempt = ctx->attempt;
     message.result = status;
-    if (id != nullptr) {
-      message.onboarding_id = *id;
-      message.has_onboarding_id = true;
-    }
     message.session = session_handle;
     impl->post(std::move(message));
   }
@@ -1057,89 +958,39 @@ struct QarSessionOwner::Impl
     impl->post(std::move(message));
   }
 
-  // Starts a local onboarding, a rejoin, or (after submit_code) a code pairing, according to
-  // @p kind. The code and the Hub of a pairing are in op->code and op->hub already.
-  void start_attempt(OnboardingContext kind, std::unique_ptr<OpCtx> prepared = nullptr)
+  // Starts the onboarding as a local app of the Hub of this PC (QarOnboardLocalAppExt).
+  void start_attempt()
   {
-    std::unique_ptr<OpCtx> ctx = prepared ? std::move(prepared) : std::make_unique<OpCtx>();
+    auto ctx = std::make_unique<OpCtx>();
     ctx->impl = this;
     ctx->attempt = next_attempt++;
-    ctx->kind = kind;
     ctx->started = Clock::now();
-
-    if (kind == OnboardingContext::kRejoin) {
-      IdentityRecord record;
-      std::string error;
-      if (read_identity(identity_path, record, error) != IdentityRead::kOk) {
-        set_state(SessionState::kNeedsCode);
-        return;
-      }
-      ctx->hub.host = record.host;
-      ctx->hub.port = record.port;
-      QarOnboardingId id = qar_onboarding_id_default();
-      if (failed(qar_uuid_from_string(record.id.c_str(), id.data))) {
-        log("identity file damaged: pair again (the id is not a UUID)");
-        set_state(SessionState::kNeedsCode);
-        return;
-      }
-      ctx->rejoin = qar_rejoin_init_default();
-      ctx->rejoin.onboarding_id = id;
-      fill_presentation(*ctx, ctx->rejoin.presentation);
-    } else {
-      ctx->onboard = qar_onboard_init_default();
-      fill_presentation(*ctx, ctx->onboard.presentation);
-      if (kind == OnboardingContext::kLocal) {
-        ctx->local = qar_onboard_local_app_ext_default();
-        ctx->local.approval_timeout_ms = std::min(cfg.approval_timeout_ms, kMaxApprovalTimeoutMs);
-        ctx->onboard.header.next = &ctx->local.header;
-      } else {
-        ctx->code_ext = qar_onboard_code_ext_default();
-        ctx->code_ext.code = ctx->code.c_str();
-        ctx->host_ext = qar_onboard_host_ext_default();
-        ctx->host_ext.hostname = ctx->hub.host.c_str();
-        ctx->host_ext.port = ctx->hub.port;
-        ctx->code_ext.header.next = &ctx->host_ext.header;
-        ctx->onboard.header.next = &ctx->code_ext.header;
-      }
-    }
+    ctx->onboard = qar_onboard_init_default();
+    fill_presentation(*ctx, ctx->onboard.presentation);
+    ctx->local = qar_onboard_local_app_ext_default();
+    ctx->local.approval_timeout_ms = std::min(cfg.approval_timeout_ms, kMaxApprovalTimeoutMs);
+    ctx->onboard.header.next = &ctx->local.header;
 
     if (failed(qar_cancel_token_create(&ctx->token)) || ctx->token == nullptr) {
       ctx->token = nullptr;
-      fail(QAR_STATUS_UNCLASSIFIED, "the cancel token cannot be created", kind);
+      fail(QAR_STATUS_UNCLASSIFIED, "the cancel token cannot be created", OnboardingContext::kLocal);
       return;
     }
 
-    SessionState next_state = SessionState::kWaitingForApproval;
-    if (kind == OnboardingContext::kRejoin) {
-      next_state = SessionState::kRejoining;
-    } else if (kind == OnboardingContext::kRemote) {
-      next_state = SessionState::kPairing;
-    }
-    set_state(next_state);
+    set_state(SessionState::kWaitingForApproval);
 
-    QarResult result{};
     OpCtx * raw = ctx.get();
-    if (kind == OnboardingContext::kRejoin) {
-      result = qar_runtime_rejoin_async(
-        runtime, &raw->rejoin, &Impl::onboard_result_trampoline, &Impl::progress_trampoline, raw,
-        raw->token);
-    } else {
-      result = qar_runtime_onboard_async(
-        runtime, &raw->onboard, &Impl::onboard_result_trampoline, &Impl::progress_trampoline, raw,
-        raw->token);
-    }
-    // The library copied the code before the call returned.
-    std::fill(raw->code.begin(), raw->code.end(), '\0');
-    raw->code.clear();
+    const QarResult result = qar_runtime_onboard_async(
+      runtime, &raw->onboard, &Impl::onboard_result_trampoline, &Impl::progress_trampoline, raw,
+      raw->token);
     if (failed(result)) {
       const std::string detail = result_message(result);
       const int code = static_cast<int>(result.code);
       qar_cancel_token_handle_destroy(raw->token);
       raw->token = nullptr;
-      const HubEndpoint hub = raw->hub;
       // The library may still call the result callback with this context.
       refused_attempts.push_back(std::move(ctx));
-      handle_failure(code, kind, detail, hub);
+      handle_failure(code, detail);
       return;
     }
     op = std::move(ctx);
@@ -1149,52 +1000,9 @@ struct QarSessionOwner::Impl
   // Commands
   // =========================================================================================
 
-  void on_submit_code(Msg & message)
-  {
-    if (state.load() != SessionState::kNeedsCode) {
-      return;
-    }
-    if (message.hub.host.empty() || message.hub.port == 0) {
-      refuse_code(describe_status(
-          QAR_STATUS_ARGUMENT_NOT_SUPPORTED, OnboardingContext::kRemote, nullptr));
-      return;
-    }
-    if (message.code.empty()) {
-      StatusText cause;
-      cause.code = QAR_STATUS_ARGUMENT_NOT_SUPPORTED;
-      cause.symbol = status_symbol(cause.code);
-      cause.message = "Type the pairing code the Hub shows.";
-      cause.retry_offered = true;
-      refuse_code(cause);
-      return;
-    }
-    auto ctx = std::make_unique<OpCtx>();
-    ctx->code = std::move(message.code);
-    ctx->hub = message.hub;
-    joining_started = Clock::now();
-    start_attempt(OnboardingContext::kRemote, std::move(ctx));
-  }
-
-  void refuse_code(const StatusText & cause)
-  {
-    SessionEvent event;
-    event.kind = SessionEvent::Kind::kState;
-    event.state = SessionState::kNeedsCode;
-    event.status = cause;
-    push(std::move(event));
-    log("status " + cause.symbol + ": " + cause.message);
-  }
-
   void on_cancel()
   {
-    const SessionState current = state.load();
-    if (current == SessionState::kNeedsCode) {
-      set_state(SessionState::kIdle);
-      return;
-    }
-    if ((current == SessionState::kWaitingForApproval || current == SessionState::kRejoining ||
-      current == SessionState::kPairing) && op)
-    {
+    if (state.load() == SessionState::kWaitingForApproval && op) {
       op->cancel_requested = true;
       qar_cancel_token_cancel(op->token);
     }
@@ -1239,9 +1047,7 @@ struct QarSessionOwner::Impl
       }
       return;
     }
-    const OnboardingContext kind = op->kind;
     const bool cancelled = op->cancel_requested;
-    const HubEndpoint hub = op->hub;
     const double elapsed = seconds_since(op->started);
     finish_attempt();
 
@@ -1250,8 +1056,7 @@ struct QarSessionOwner::Impl
       if (message.session != nullptr) {
         qar_session_handle_destroy(message.session);
       }
-      set_state(
-        kind == OnboardingContext::kRemote ? SessionState::kNeedsCode : SessionState::kIdle);
+      set_state(SessionState::kIdle);
       return;
     }
     if (!ok) {
@@ -1260,25 +1065,19 @@ struct QarSessionOwner::Impl
       }
       const int code = failed(message.result) ? static_cast<int>(message.result.code) :
         static_cast<int>(QAR_STATUS_ONBOARDING_FAILED);
-      handle_failure(code, kind, result_message(message.result), hub);
+      handle_failure(code, result_message(message.result));
       return;
     }
-    on_joined(message, kind, hub, elapsed);
+    on_joined(message, elapsed);
   }
 
-  void handle_failure(int code, OnboardingContext kind, const std::string & detail,
-    const HubEndpoint & hub)
+  void handle_failure(int code, const std::string & detail)
   {
-    const std::string address = hub.host.empty() ? std::string() :
-      hub.host + ":" + std::to_string(hub.port);
-    StatusText cause = describe_status(code, kind, detail.c_str(), address.c_str());
+    StatusText cause = describe_status(code, OnboardingContext::kLocal, detail.c_str());
 
-    if (code == QAR_STATUS_HUB_LIFECYCLE_OPERATION_RUNNING && !busy_retried &&
-      kind != OnboardingContext::kRemote)
-    {
+    if (code == QAR_STATUS_HUB_LIFECYCLE_OPERATION_RUNNING && !busy_retried) {
       busy_retried = true;
       retry_armed = true;
-      retry_kind = kind;
       retry_at = Clock::now() + kBusyRetryDelay;
       SessionEvent event;
       event.kind = SessionEvent::Kind::kProgress;
@@ -1288,45 +1087,12 @@ struct QarSessionOwner::Impl
       store_state(SessionState::kLoading);
       return;
     }
-
-    const bool needs_pairing =
-      code == QAR_STATUS_PAKE_ERROR || code == QAR_STATUS_ONBOARDING_SESSION_NOT_FOUND ||
-      code == QAR_STATUS_ONBOARDING_RE_PAIR_REQUIRED ||
-      code == QAR_STATUS_ONBOARDING_RENEWAL_POSSESSION_UNPROVEN;
-    if (kind == OnboardingContext::kRemote ||
-      (kind == OnboardingContext::kRejoin && needs_pairing))
-    {
-      set_state(SessionState::kNeedsCode, &cause);
-    } else {
-      set_state(SessionState::kFailed, &cause);
-    }
+    set_state(SessionState::kFailed, &cause);
   }
 
-  void on_joined(Msg & message, OnboardingContext kind, const HubEndpoint & hub, double elapsed)
+  void on_joined(Msg & message, double elapsed)
   {
     session = message.session;
-
-    if (kind == OnboardingContext::kRemote && message.has_onboarding_id) {
-      char text[64] = {0};
-      IdentityRecord record;
-      if (!failed(qar_uuid_to_string(message.onboarding_id.data, text, sizeof(text)))) {
-        record.id = text;
-        record.host = hub.host;
-        record.port = hub.port;
-        record.paired_unix_s = static_cast<std::int64_t>(std::time(nullptr));
-        std::string error;
-        if (identity_path.empty() || !write_identity_atomic(identity_path, record, error)) {
-          log("identity file not written: " +
-            (identity_path.empty() ? std::string("no folder") : error));
-          SessionEvent event;
-          event.kind = SessionEvent::Kind::kLog;
-          event.text = "The pairing could not be stored; the next start needs a code again.";
-          push(std::move(event));
-        } else {
-          identity_present.store(true);
-        }
-      }
-    }
 
     {
       QarPeerSpec * mine = nullptr;
@@ -1355,8 +1121,6 @@ struct QarSessionOwner::Impl
     }
     query_initial_peers();
 
-    const char * how = kind == OnboardingContext::kLocal ? "local" :
-      (kind == OnboardingContext::kRejoin ? "rejoin" : "pairing");
     char seconds[32];
     std::snprintf(seconds, sizeof(seconds), "%.1f", elapsed);
     QarPeerId mine_id{};
@@ -1364,7 +1128,7 @@ struct QarSessionOwner::Impl
       std::lock_guard<std::mutex> lock(targets_mutex);
       mine_id = self;
     }
-    log("joined as peer " + peer_hex8(mine_id) + " (" + how + ") in " + seconds + " s");
+    log("joined as peer " + peer_hex8(mine_id) + " (local) in " + seconds + " s");
 
     drain_deadline.store(0);
     {
@@ -1871,27 +1635,18 @@ struct QarSessionOwner::Impl
     drop_queued_tasks("the session ended");
   }
 
-  void on_disconnect(bool forgetting)
+  void on_disconnect()
   {
     const SessionState current = state.load();
     if (current == SessionState::kStopping) {
       return;
     }
-    if (current == SessionState::kLoading && retry_armed && !forgetting) {
+    if (current == SessionState::kLoading && retry_armed) {
       retry_armed = false;
       set_state(SessionState::kIdle);
       return;
     }
-    if (forgetting && !identity_present.load() && mode.load() != HubMode::kRemote &&
-      cfg.mode != HubMode::kRemote)
-    {
-      log("forget ignored: no pairing with another PC is stored");
-      task_closing.store(false);
-      // The session goes on, so the drain deadline forget() armed must not drop its tasks.
-      drain_deadline.store(0);
-      return;
-    }
-    if (!forgetting && current == SessionState::kIdle) {
+    if (current == SessionState::kIdle) {
       return;
     }
     const bool had_work = op || session != nullptr;
@@ -1900,52 +1655,7 @@ struct QarSessionOwner::Impl
     }
     abort_attempt();
     release_session();
-    if (forgetting) {
-      forget_pairing();
-    }
     set_state(SessionState::kIdle);
-  }
-
-  void forget_pairing()
-  {
-    SessionEvent event;
-    event.kind = SessionEvent::Kind::kForgetDone;
-    event.status.message = "The pairing was erased.";
-    IdentityRecord record;
-    std::string error;
-    const IdentityRead read =
-      identity_path.empty() ? IdentityRead::kAbsent : read_identity(identity_path, record, error);
-    bool erase_file = true;
-    if (read == IdentityRead::kOk) {
-      QarOnboardingId id = qar_onboarding_id_default();
-      if (!ensure_runtime(OnboardingContext::kForget)) {
-        erase_file = false;
-        event.status = describe_status(kStatusNoRuntime, OnboardingContext::kForget, nullptr);
-      } else if (!failed(qar_uuid_from_string(record.id.c_str(), id.data))) {
-        QarForgetInit init = qar_forget_init_default();
-        init.onboarding_id = id;
-        const QarResult result = qar_runtime_forget(runtime, &init);
-        if (failed(result)) {
-          const int code = static_cast<int>(result.code);
-          erase_file = (code == QAR_STATUS_ONBOARDING_SESSION_NOT_FOUND);
-          if (!erase_file) {
-            event.status = describe_status(
-              code, OnboardingContext::kForget, result_message(result).c_str());
-          }
-        }
-      }
-    }
-    if (erase_file && !identity_path.empty()) {
-      if (remove_identity(identity_path)) {
-        identity_present.store(false);
-      } else {
-        erase_file = false;
-        event.status.code = QAR_STATUS_UNCLASSIFIED;
-        event.status.message = "The identity file could not be deleted.";
-      }
-    }
-    log(std::string("forget ") + (erase_file ? "done" : "failed: " + event.status.message));
-    push(std::move(event));
   }
 
   // The whole teardown of the owner: everything the owner created, in order.
@@ -2008,15 +1718,6 @@ void QarSessionOwner::connect()
   impl_->post(std::move(message));
 }
 
-void QarSessionOwner::submit_code(std::string code, HubEndpoint hub)
-{
-  Msg message;
-  message.type = Msg::Type::kSubmitCode;
-  message.code = std::move(code);
-  message.hub = std::move(hub);
-  impl_->post(std::move(message));
-}
-
 void QarSessionOwner::cancel()
 {
   Msg message;
@@ -2030,24 +1731,6 @@ void QarSessionOwner::disconnect()
   impl_->arm_drain();
   Msg message;
   message.type = Msg::Type::kDisconnect;
-  impl_->post(std::move(message));
-}
-
-void QarSessionOwner::forget()
-{
-  impl_->task_closing.store(true);
-  impl_->arm_drain();
-  Msg message;
-  message.type = Msg::Type::kForget;
-  impl_->post(std::move(message));
-}
-
-void QarSessionOwner::configure(HubMode mode, HubEndpoint remote)
-{
-  Msg message;
-  message.type = Msg::Type::kConfigure;
-  message.mode = mode;
-  message.hub = std::move(remote);
   impl_->post(std::move(message));
 }
 
@@ -2122,16 +1805,6 @@ void QarSessionOwner::poll(std::vector<SessionEvent> & out)
 SessionState QarSessionOwner::state() const
 {
   return impl_->state.load();
-}
-
-HubMode QarSessionOwner::effective_mode() const
-{
-  return impl_->mode.load();
-}
-
-bool QarSessionOwner::has_remote_identity() const
-{
-  return impl_->identity_present.load();
 }
 
 std::vector<TargetInfo> QarSessionOwner::targets() const
@@ -2214,10 +1887,6 @@ std::string QarSessionOwner::invite_device(DeviceKind kind, const std::string & 
   if (!ready()) {
     return "QAROS is not connected yet.";
   }
-  if (impl_->mode.load() != HubMode::kLocal) {
-    return "Only a program on the Hub's own PC can invite a device; invite it in the Visualizer "
-           "of the Hub.";
-  }
   const std::size_t first = host.find_first_not_of(" \t");
   const std::size_t last = host.find_last_not_of(" \t");
   if (first == std::string::npos) {
@@ -2283,9 +1952,7 @@ SessionState wait_for_session(
       seen->insert(seen->end(), events.begin(), events.end());
     }
     const SessionState current = owner.state();
-    if ((current == SessionState::kRunning && owner.ready()) ||
-      current == SessionState::kFailed || current == SessionState::kNeedsCode)
-    {
+    if ((current == SessionState::kRunning && owner.ready()) || current == SessionState::kFailed) {
       return current;
     }
     if (Clock::now() >= end) {

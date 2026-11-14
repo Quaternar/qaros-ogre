@@ -1,7 +1,7 @@
 // Copyright 2026 QuaternAR
 // SPDX-License-Identifier: MIT
 //
-// A stand-in for the QarOS library, for the tests of the session owner. The vendored header
+// A stand-in for the QarOS library, for the tests of the session owner. The QarOS C header
 // resolves every call through the function tables g_qar_*_api (dynamic loading); this fake fills
 // the entries the owner can reach with functions of its own, so no test loads the real library.
 //
@@ -81,17 +81,12 @@ struct VolumeRequest
   float app_scale = 0.0f;
 };
 
-/// What an onboarding or rejoin call was given.
+/// What an onboarding call was given.
 struct OnboardRequest
 {
-  std::string kind;                 ///< "local", "code" or "rejoin".
-  std::string code;
-  std::string host;
-  std::uint16_t port = 0;
+  std::string kind;                 ///< "local".
   std::uint32_t approval_timeout_ms = 0;
   std::string display_name, app_version, custom_info;
-  std::string id_text;              ///< The onboarding id of a rejoin, as UUID text.
-  bool has_chained_host = false;
 };
 
 /// One GUI panel of the fake session, as the tests see it.
@@ -116,10 +111,9 @@ public:
   FakeQarApi & operator=(const FakeQarApi &) = delete;
 
   // --- scripting (before the owner connects) ---------------------------------------------
-  /// Outcomes of onboard and rejoin calls, used in order; the default is success.
+  /// Outcomes of onboard calls, used in order; the default is success.
   void script_onboard(const Outcome & outcome);
   void script_invite(const Outcome & outcome);
-  void script_forget(int code);
   void set_library_init_code(int code);
   void set_runtime_create_code(int code);
   /// The status qar_app_volumes_get_or_create returns (0 is success).
