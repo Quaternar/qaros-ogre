@@ -507,10 +507,10 @@ cmake --install build\vs2019-x64 --config RelWithDebInfo --prefix $env:QAR_PREFI
 
 ## Install smoke test
 
-The folder `docs/snippets/consumer` of the repository holds a small project that uses the installed package the way your own project does. It is not part of the repository build; it configures on its own against `QAR_PREFIX`. It asks for the version 0.3.0 of the package and for the components `qar_ar_core`, `qar_ogre_streaming`, `render`, `url` and `gestures`, and it links their targets. The installed headers are UTF-8 text without a byte order mark, and some comments contain characters outside ASCII; compile your own code with `/utf-8`, as this repository does.
+The folder `docs/snippets/consumer` of the repository holds a small project that uses the installed package the way your own project does. It is not part of the repository build; it configures on its own against `QAR_PREFIX`. It asks for the version 0.2.1 of the package and for the components `qar_ar_core`, `qar_ogre_streaming`, `render`, `url` and `gestures`, and it links their targets. The installed headers are UTF-8 text without a byte order mark, and some comments contain characters outside ASCII; compile your own code with `/utf-8`, as this repository does.
 
 ```cmake
-find_package(qar_ogre_adapter 0.3.0 CONFIG REQUIRED
+find_package(qar_ogre_adapter 0.2.1 CONFIG REQUIRED
   COMPONENTS qar_ar_core qar_ogre_streaming render url gestures)
 ```
 
@@ -541,7 +541,7 @@ cmake --build build\consumer --config RelWithDebInfo
 .\build\consumer\RelWithDebInfo\qar_ogre_adapter_consumer.exe
 ```
 ```text
-qar_ogre_adapter 0.3.0
+qar_ogre_adapter 0.2.1
 targets: qar_ogre_adapter::qar_ar_core qar_ogre_adapter::qar_ogre_streaming qar_ogre_adapter::render qar_ogre_adapter::url qar_ogre_adapter::gestures
 QarOS library loaded: no
 status text: Ok

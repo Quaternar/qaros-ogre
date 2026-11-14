@@ -7,7 +7,7 @@ cmake_minimum_required(VERSION 3.22)
 project(qar_ogre_adapter_consumer LANGUAGES CXX)
 
 # [qar-snippet:find]
-find_package(qar_ogre_adapter 0.3.0 CONFIG REQUIRED
+find_package(qar_ogre_adapter 0.2.1 CONFIG REQUIRED
   COMPONENTS qar_ar_core qar_ogre_streaming render url gestures)
 # [qar-snippet-end:find]
 

@@ -42,10 +42,10 @@ in [docs/DEVELOPING.md](docs/DEVELOPING.md) and [docs/TESTING.md](docs/TESTING.m
 
 | HEAD | Version | Example |
 |---|---|---|
-| tagged `vX.Y.Z` | `X.Y.Z` | `0.3.0` |
-| tagged `vX.Y.Z-rc.N` | `X.Y.Z-rc.N` | `0.3.0-rc.1` |
-| any other commit | `X.Y.Z-dev.<commits since the last v* tag>+<short sha>` | `0.3.0-dev.4+1a2b3c4d` |
-| no git checkout (source archive) | `X.Y.Z-dev` | `0.3.0-dev` |
+| tagged `vX.Y.Z` | `X.Y.Z` | `0.2.1` |
+| tagged `vX.Y.Z-rc.N` | `X.Y.Z-rc.N` | `0.2.1-rc.1` |
+| any other commit | `X.Y.Z-dev.<commits since the last v* tag>+<short sha>` | `0.2.1-dev.4+1a2b3c4d` |
+| no git checkout (source archive) | `X.Y.Z-dev` | `0.2.1-dev` |
 
 - A tag whose `X.Y.Z` differs from `VERSION` stops the CMake configure. `-DQAR_OGRE_ADAPTER_VERSION_FULL=<version>`
   replaces the derived part; its `X.Y.Z` must equal `VERSION` too.

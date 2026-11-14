@@ -7,7 +7,7 @@ This page lists the public headers of the three modules, the types and functions
 A consumer finds the package with `find_package`, names the components that it needs and links their imported targets. Each component is a static library, so a program links only what it uses:
 
 ```cmake
-find_package(qar_ogre_adapter 0.3.0 CONFIG REQUIRED
+find_package(qar_ogre_adapter 0.2.1 CONFIG REQUIRED
   COMPONENTS qar_ar_core qar_ogre_streaming render url gestures)
 ```
 
