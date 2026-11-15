@@ -55,6 +55,7 @@ in [docs/DEVELOPING.md](docs/DEVELOPING.md) and [docs/TESTING.md](docs/TESTING.m
   least one minor version earlier where possible. A `PATCH` version only fixes. While the major
   version is 0, the CMake package accepts a request only for the same minor version.
 - Tags go on `main`; there are no release branches.
+- This repository follows the shared QAROS versioning scheme: [ADR-0001: One versioning scheme for every QAROS repository](https://github.com/Quaternar/qaros/blob/main/docs/adr/0001-one-versioning-scheme.md).
 
 To release `X.Y.Z`:
 
