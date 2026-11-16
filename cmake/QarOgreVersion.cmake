@@ -3,16 +3,18 @@
 #
 # The version of qar_ogre_adapter. Include it before project() (the top-level CMakeLists.txt) and
 # in every module that reports the version (qar_ar_core); it sets in the including scope
-#   QAR_OGRE_ADAPTER_VERSION_CORE      X.Y.Z, read from VERSION at the repository root, the only copy
+#   QAR_OGRE_ADAPTER_VERSION_CORE      X.Y.Z, read from VERSION at the repository root, the only copy:
+#                                      the last release. project() and the package version use it.
 #   QAR_OGRE_ADAPTER_VERSION_RESOLVED  the version a build reports:
-#     HEAD tagged vX.Y.Z        X.Y.Z
-#     HEAD tagged vX.Y.Z-rc.N   X.Y.Z-rc.N
-#     any other commit          X.Y.Z-dev.<commits since the last v* tag>+<short sha>
-#     no git checkout           X.Y.Z-dev (a source archive)
-# A tag whose X.Y.Z differs from VERSION stops the configure. -DQAR_OGRE_ADAPTER_VERSION_FULL=<v>
-# replaces the git part (a release build passes the release version); its X.Y.Z must equal
-# VERSION as well. The value is fixed when CMake configures: configure again after a new commit
-# or tag. The release steps are in AGENTS.md, section "Versions and releases".
+#     HEAD tagged vX.Y.Z        X.Y.Z (the release commit)
+#     any other commit          X.Y.(Z+1)-dev.<commits since the last v* tag>+<short sha>
+#     no git checkout           X.Y.(Z+1)-dev (a source archive)
+# A build of any commit but a release reports the next patch, so it sorts after the release it
+# builds on and before the next one. A tag whose X.Y.Z differs from VERSION stops the configure.
+# -DQAR_OGRE_ADAPTER_VERSION_FULL=<v> replaces the git part: a release X.Y.Z must equal VERSION,
+# a development (-dev...) or pull request (-pr.N) build must be X.Y.(Z+1) of VERSION. The value
+# is fixed when CMake configures: configure again after a new commit or tag. How a version is
+# released is in AGENTS.md, section "Versions and releases".
 
 include_guard(DIRECTORY)
 find_package(Git QUIET)
@@ -41,27 +43,43 @@ function(_qar_ogre_version_resolve root out_core out_full)
   endif()
   file(STRINGS "${file}" core LIMIT_COUNT 1)
   string(STRIP "${core}" core)
-  if(NOT core MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+  if(NOT core MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)$")
     message(FATAL_ERROR "${file} must hold X.Y.Z, found '${core}'.")
   endif()
+  # VERSION is the last release; any other build is a pre-release of the next patch.
+  math(EXPR next_patch "${CMAKE_MATCH_3} + 1")
+  set(next "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.${next_patch}")
 
   if(NOT "${QAR_OGRE_ADAPTER_VERSION_FULL}" STREQUAL "")
     set(full "${QAR_OGRE_ADAPTER_VERSION_FULL}")
-    if(NOT full MATCHES "^([0-9]+\\.[0-9]+\\.[0-9]+)([-+][0-9A-Za-z.+-]+)?$")
+    if(NOT full MATCHES "^([0-9]+\\.[0-9]+\\.[0-9]+)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$")
       message(FATAL_ERROR "QAR_OGRE_ADAPTER_VERSION_FULL '${full}' is not a version.")
     endif()
-    if(NOT CMAKE_MATCH_1 STREQUAL core)
-      message(FATAL_ERROR "QAR_OGRE_ADAPTER_VERSION_FULL ${full} does not match VERSION ${core}.")
+    set(full_core "${CMAKE_MATCH_1}")
+    set(full_pre "${CMAKE_MATCH_2}")
+    if(full_pre STREQUAL "")
+      if(NOT full_core STREQUAL core)
+        message(FATAL_ERROR
+          "QAR_OGRE_ADAPTER_VERSION_FULL ${full} is a release, so it must be VERSION ${core}.")
+      endif()
+    elseif(full_pre MATCHES "^-(dev|pr)([.]|$)")
+      if(NOT full_core STREQUAL next)
+        message(FATAL_ERROR "QAR_OGRE_ADAPTER_VERSION_FULL ${full}: a development or pull request "
+          "build is the next patch ${next}, as VERSION ${core} is the last release.")
+      endif()
+    else()
+      message(FATAL_ERROR "QAR_OGRE_ADAPTER_VERSION_FULL ${full}: use ${core} for the release, "
+        "${next}-dev.<n> or ${next}-pr.<n> for any other build.")
     endif()
   elseif(NOT GIT_FOUND OR NOT EXISTS "${root}/.git")
-    set(full "${core}-dev")
+    set(full "${next}-dev")
   else()
     _qar_ogre_version_git("${root}" tag describe --tags --exact-match --match "v[0-9]*" HEAD)
-    if(tag MATCHES "^v([0-9]+\\.[0-9]+\\.[0-9]+)(-rc\\.[0-9]+)?$")
+    if(tag MATCHES "^v([0-9]+\\.[0-9]+\\.[0-9]+)$")
       if(NOT CMAKE_MATCH_1 STREQUAL core)
         message(FATAL_ERROR "Tag ${tag} does not match VERSION ${core}. Fix VERSION or the tag.")
       endif()
-      set(full "${CMAKE_MATCH_1}${CMAKE_MATCH_2}")
+      set(full "${core}")
     else()
       _qar_ogre_version_git("${root}" last describe --tags --abbrev=0 --match "v[0-9]*" HEAD)
       if(last)
@@ -74,9 +92,9 @@ function(_qar_ogre_version_resolve root out_core out_full)
       endif()
       _qar_ogre_version_git("${root}" sha rev-parse --short=8 HEAD)
       if(sha STREQUAL "")
-        set(full "${core}-dev.${count}")
+        set(full "${next}-dev.${count}")
       else()
-        set(full "${core}-dev.${count}+${sha}")
+        set(full "${next}-dev.${count}+${sha}")
       endif()
     endif()
   endif()

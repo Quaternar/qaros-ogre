@@ -7,9 +7,10 @@
 #ifndef QAR_AR_CORE__VERSION_HPP_
 #define QAR_AR_CORE__VERSION_HPP_
 
-/// The version of this qar_ogre_adapter build: X.Y.Z, X.Y.Z-rc.N or X.Y.Z-dev.N+<sha>.
+/// The version of this qar_ogre_adapter build: X.Y.Z for a release, else the next patch
+/// X.Y.(Z+1)-dev.N+<sha> (or X.Y.(Z+1)-pr.N for a pull request build).
 #define QAR_OGRE_ADAPTER_VERSION "@QAR_OGRE_ADAPTER_VERSION_RESOLVED@"
-/// X.Y.Z of this build, the content of the VERSION file.
+/// X.Y.Z of the last release, the content of the VERSION file.
 #define QAR_OGRE_ADAPTER_VERSION_CORE "@QAR_OGRE_ADAPTER_VERSION_CORE@"
 
 namespace qar_ar_core
@@ -17,7 +18,7 @@ namespace qar_ar_core
 
 /// The version of this qar_ogre_adapter build (QAR_OGRE_ADAPTER_VERSION).
 inline constexpr const char kLibraryVersion[] = QAR_OGRE_ADAPTER_VERSION;
-/// X.Y.Z of this build (QAR_OGRE_ADAPTER_VERSION_CORE).
+/// X.Y.Z of the last release (QAR_OGRE_ADAPTER_VERSION_CORE).
 inline constexpr const char kLibraryVersionCore[] = QAR_OGRE_ADAPTER_VERSION_CORE;
 
 }  // namespace qar_ar_core
