@@ -1,0 +1,37 @@
+{
+  "version_files": [
+    {
+      "path": "VERSION",
+      "pattern": "^(?P<version>\\d+\\.\\d+\\.\\d+)$"
+    },
+    {
+      "path": "README.md",
+      "pattern": "^qar_ogre_adapter (?P<version>\\d+\\.\\d+\\.\\d+) is "
+    },
+    {
+      "path": "cmake/qar_ogre_adapterConfig.cmake.in",
+      "pattern": "find_package\\(qar_ogre_adapter (?P<version>\\d+\\.\\d+\\.\\d+) CONFIG"
+    },
+    {
+      "path": "docs/API.md",
+      "pattern": "find_package\\(qar_ogre_adapter (?P<version>\\d+\\.\\d+\\.\\d+) CONFIG"
+    },
+    {
+      "path": "docs/INSTALL.md",
+      "pattern": "(?:find_package\\(qar_ogre_adapter |^qar_ogre_adapter |asks for the version )(?P<version>\\d+\\.\\d+\\.\\d+)",
+      "count": 3
+    },
+    {
+      "path": "docs/VERIFICATION.md",
+      "pattern": "^qar_ogre_adapter (?P<version>\\d+\\.\\d+\\.\\d+)$"
+    },
+    {
+      "path": "docs/snippets/consumer/CMakeLists.txt",
+      "pattern": "find_package\\(qar_ogre_adapter (?P<version>\\d+\\.\\d+\\.\\d+) CONFIG"
+    }
+  ],
+  "changelog": "CHANGELOG.md",
+  "release": {
+    "github_release": true
+  }
+}

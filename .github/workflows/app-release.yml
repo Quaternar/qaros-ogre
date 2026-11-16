@@ -1,0 +1,28 @@
+name: App release
+
+# Every merge to main that changes behaviour is a release: the "Release bump" check on pull
+# requests shows the bump (a release:major|minor|patch|none label, else the Conventional Commit
+# title), and a push to main writes the version, moves the changelog, commits
+# "chore(release): vX.Y.Z", tags it and starts the release build. The logic is the reusable
+# workflow of Quaternar/qaros; the rules are its ADR-0002:
+# https://github.com/Quaternar/qaros/blob/main/docs/adr/0002-app-release-on-merge.md
+# The files that carry the version: .github/app-release.json.
+# Secret QAROS_RELEASE_TOKEN: only needed if main is ever protected against the workflow token.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    types: [opened, edited, synchronize, reopened, labeled, unlabeled]
+  workflow_dispatch:
+
+jobs:
+  app-release:
+    uses: Quaternar/qaros/.github/workflows/app-release.yml@main
+    permissions:
+      contents: write
+      actions: write
+      pull-requests: read
+    secrets:
+      release_token: ${{ secrets.QAROS_RELEASE_TOKEN }}

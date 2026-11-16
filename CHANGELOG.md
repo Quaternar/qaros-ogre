@@ -20,7 +20,7 @@ written and how a version is released is in [AGENTS.md](AGENTS.md).
 
 ### Features
 
-- The version of a build comes from the file `VERSION` and git tags (`X.Y.Z`, `X.Y.Z-rc.N`, `X.Y.Z-dev.N+<sha>`); `qar_ar_core/version.hpp` reports it as `QAR_OGRE_ADAPTER_VERSION` and `qar_ar_core::kLibraryVersion`, and the live example prints it with `--version` ([#5](https://github.com/Quaternar/qaros-ogre/pull/5)).
+- The version of a build comes from the file `VERSION`, the last release, and git tags (`X.Y.Z` on a release tag, the next patch `X.Y.(Z+1)-dev.N+<sha>` on any other commit); `qar_ar_core/version.hpp` reports it as `QAR_OGRE_ADAPTER_VERSION` and `qar_ar_core::kLibraryVersion`, and the live example prints it with `--version` ([#5](https://github.com/Quaternar/qaros-ogre/pull/5)).
 
 ### Enhancements
 
