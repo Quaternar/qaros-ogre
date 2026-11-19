@@ -160,6 +160,22 @@ double parse_tick_ms_env(const char * value, double default_ms)
   return parsed;
 }
 
+double parse_render_recycle_seconds(const char * value, double default_s)
+{
+  if (value == nullptr) {
+    return default_s;
+  }
+  char * end = nullptr;
+  const double parsed = std::strtod(value, &end);
+  if (end == value) {
+    return default_s;
+  }
+  if (!std::isfinite(parsed) || parsed < 0.0 || parsed > 3600.0) {
+    return default_s;
+  }
+  return parsed;
+}
+
 bool parse_log_severity(const char * text, LogSeverity & out)
 {
   if (text == nullptr) {

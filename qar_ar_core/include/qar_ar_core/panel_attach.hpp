@@ -71,6 +71,10 @@ struct PanelAttachDecision
   bool change_size = false;
   /// Reattached: the panel was HIDDEN or MINIMIZED; `qar_gui_panels_set_state(VISIBLE)`.
   bool show = false;
+  /// Reattached: the panel is VISIBLE and its content is replaced. A browser panel is hidden
+  /// before its page is changed and shown again after it, so that the page switch happens on a
+  /// panel that is not drawn. A stream panel does not use it.
+  bool hide_before_swap = false;
   /// RetryWithSuffix: "-v2" for a panel of the other content type, "-r1" .. "-r8" for a closed
   /// one (the number is @c retries_done + 1). Empty otherwise.
   std::string retry_suffix;

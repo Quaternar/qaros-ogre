@@ -11,6 +11,7 @@
 #include "qar_ar_core/timing_log.hpp"
 
 #include <algorithm>
+#include <map>
 #include <array>
 #include <cctype>
 #include <chrono>
@@ -22,6 +23,7 @@
 #include <ctime>
 #include <filesystem>
 #include <functional>
+#include <mutex>
 #include <system_error>
 #include <string>
 #include <thread>
@@ -194,6 +196,31 @@ void trace_msg(const char * msg)
   std::fflush(stderr);
 }
 
+/// A step of the render thread's GL work that takes this long or longer is reported: the render
+/// thread can do nothing else meanwhile, and a stall of the GPU shows here first.
+constexpr double kSlowGlStepMs = 250.0;
+
+/// Reports the step @p step (copy-into-qar, glFinish, fence or readback-probe) that began at
+/// @p started when it took kSlowGlStepMs or longer: the first five of each step, then one in a
+/// hundred. @p on_worker names the thread: a frame worker's step is not a stall of the GUI thread.
+void note_gl_step(
+  const char * step, std::chrono::steady_clock::time_point started, bool on_worker = false)
+{
+  const double ms = std::chrono::duration<double, std::milli>(
+    std::chrono::steady_clock::now() - started).count();
+  if (ms < kSlowGlStepMs) { return; }
+  static std::atomic<unsigned> reported[4];
+  const std::size_t slot = std::strcmp(step, "copy-into-qar") == 0 ? 0 :
+    std::strcmp(step, "glFinish") == 0 ? 1 : std::strcmp(step, "fence") == 0 ? 3 : 2;
+  const unsigned n = ++reported[slot];
+  if (n > 5 && (n % 100) != 0) { return; }
+  std::fprintf(
+    stderr, "[qar-gl-call] %s WARNING %s took %.0f ms on the %s (limit %.0f ms)\n",
+    wall_clock_hms_ms().c_str(), step, ms, on_worker ? "frame worker" : "GUI thread",
+    kSlowGlStepMs);
+  std::fflush(stderr);
+}
+
 /// Render a QarResult as "<what> failed: code=N msg=...".
 ///
 /// A bare "<call> failed" says nothing when a session refuses to start — the reason
@@ -287,6 +314,14 @@ void gl_finish_current_thread()
         : nullptr;
     }();
   if (fn != nullptr) { fn(); }
+}
+
+/// gl_finish_current_thread(), timed.
+void gl_finish_timed()
+{
+  const std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
+  gl_finish_current_thread();
+  note_gl_step("glFinish", started);
 }
 #endif  // _WIN32
 
@@ -611,6 +646,16 @@ public:
     row_.valid = false;
   }
 
+  /// @brief Hands the handle of an in-flight row to the caller, who destroys it, and closes the
+  /// row without a CSV line. Null when no row is open.
+  QarRenderFrameInfo * take_row_handle()
+  {
+    QarRenderFrameInfo * const handle = row_.handle;
+    row_.handle = nullptr;
+    row_.valid = false;
+    return handle;
+  }
+
   /// @brief Call at the very top of submit_opengl_stereo_frame(). render_done_us is
   /// stamped here rather than threaded through IQarRenderSenderAdapter's signature:
   /// render_targets_phase()/fence_phase() (fence_phase is a no-op today) already ran
@@ -731,6 +776,906 @@ private:
   std::uint64_t changed_rows_ = 0;
 };
 
+namespace
+{
+
+void publish_ray(
+  qar_ar_core::PointingRaySlot & slot, QarRenderSender * stream, const QarPose & eye_pose,
+  FrameBreaker & breaker, bool & logged_hands_tracked, bool & logged_hands_missing)
+{
+  // Drain the device's hand stream. Documented as "returns the last sample, or
+  // both hands untracked when nothing arrived since the previous call" -- so a
+  // failure and an empty drain are the same thing to us, an invalid ray, and
+  // publishing that invalid ray is how "the hands went away" reaches the
+  // picker instead of a stale aim.
+  QarDeviceHandsWithJoints hands = qar_device_hand_with_joints_default();
+  const std::chrono::steady_clock::time_point hands_start = std::chrono::steady_clock::now();
+  const QarResult hands_result = QAR_CALL(qar_render_sender_last_hands, stream, &hands);
+  breaker.note("last_hands", hands_start);
+
+  qar_ar_core::PointingRayInputs inputs;
+  if (!qar_result_is_error(hands_result)) {
+    inputs = qar_ar_core::pointing_ray_inputs_from_hands(
+      hands, QAR_HANDEDNESS_RIGHT, qar_ar_core::HandRayJoint::IndexTip);
+  }
+  inputs.has_eye = true;
+  inputs.eye_position = eye_pose.position;
+  inputs.timestamp_s = static_cast<double>(hands.device_timestamp.unix_ns) * 1e-9;
+
+  // The hand itself, published WITH the ray it produced. The ray says where the
+  // operator is aiming; the probe says where their hand is, and only the second
+  // one can test the vendor's claim that a gesture's action_point is a scene
+  // intersection rather than the hand. Same poll, same frame, one publish -- a
+  // consumer must never pair this frame's ray with another frame's hand.
+  qar_ar_core::HandJointsProbe probe;
+  if (!qar_result_is_error(hands_result)) {
+    probe = qar_ar_core::hand_joints_probe_from(hands);
+  }
+  probe.has_eye = true;
+  probe.eye_position = eye_pose.position;
+  probe.timestamp_s = inputs.timestamp_s;
+
+  const qar_ar_core::PointingRay ray = qar_ar_core::pointing_ray_from(inputs);
+  slot.publish(ray, probe);
+
+  // One line each way, ever. The question the log has to answer is simply
+  // "does this device send hands?", and that is a one-shot fact.
+  if (ray.valid && !logged_hands_tracked) {
+    logged_hands_tracked = true;
+    std::fprintf(
+      stderr,
+      "[qar-adapter] hands: the device IS sending hand joints - AR pointing ray is live "
+      "(%s, %s of the %s hand). origin=(%.3f, %.3f, %.3f) dir=(%.3f, %.3f, %.3f) room\n",
+      qar_ar_core::to_string(ray.kind), qar_ar_core::to_string(ray.joint),
+      ray.hand == QAR_HANDEDNESS_LEFT ? "left" : "right",
+      static_cast<double>(ray.origin.x), static_cast<double>(ray.origin.y),
+      static_cast<double>(ray.origin.z), static_cast<double>(ray.direction.x),
+      static_cast<double>(ray.direction.y), static_cast<double>(ray.direction.z));
+    std::fflush(stderr);
+  } else if (!ray.valid && !logged_hands_missing) {
+    logged_hands_missing = true;
+    std::fprintf(
+      stderr,
+      "[qar-adapter] hands: no AR pointing ray yet - %s (qar_render_sender_last_hands "
+      "code=%d). Plane pick targets fall back to projecting the reported action "
+      "point onto the plane.\n",
+      ray.error.c_str(), static_cast<int>(hands_result.code));
+    std::fflush(stderr);
+  }
+}
+
+}  // namespace
+
+// ===========================================================================
+//  The frame calls on a worker thread
+// ===========================================================================
+//
+// The state that the render thread and the worker thread of one sender share. The worker is the
+// only thread that makes a QarOS frame call of this sender; the render thread reads and writes
+// the slot under `m`, which no thread holds across a QarOS call. The slot goes
+//
+//   kIdle -> kOpen       the worker reserved a frame and published its poses and textures
+//   kOpen -> kRendering  the render thread took it (begin_frame)
+//   kRendering -> kOpen  the render thread did not submit it (a render error, a frame the
+//                        scheduler shed): the next begin_frame offers the same frame again
+//   kRendering -> kShowing  the render thread rendered, copied and finished the GL work, and
+//                        handed the frame over (submit_opengl_stereo_frame)
+//   kShowing -> kIdle    the worker showed it
+//
+// A frame cycle lasts from a successful try-begin to its show-frame; the QarOS header has no call
+// that ends one in any other way, and it does not say what a second try-begin inside an open cycle
+// does. So the worker calls try-begin only while the slot is idle, and every frame it began ends
+// in a show-frame: the rendered one, or, when the frame cannot be rendered (a view getter failed,
+// the textures could not be read), one of whatever the textures hold.
+// A paused or blocked worker leaves the slot as it is; the render thread never waits for it.
+struct RenderFrameCore
+{
+  enum class Slot { kIdle, kOpen, kRendering, kShowing };
+
+  /// One frame the worker reserved.
+  struct Cycle
+  {
+    QarPose left_pose{};
+    QarFov left_fov{};
+    QarPose right_pose{};
+    QarFov right_fov{};
+    /// The frame as the runtime filled it: the ids of its destination textures.
+    QarVideoFrameOpenGl gl{};
+    /// The runtime gave no textures (the layout of the frames was not known yet): the render
+    /// thread learns the layout from its frame and drops the cycle.
+    bool no_ids = false;
+    std::uint64_t frame_index = 0;
+    /// The frame follows a stall of the frames shown; see FrameStallDetector.
+    bool stalled = false;
+    StallReport stall;
+    /// The fence behind the copy into the textures of the runtime; the worker waits for it before
+    /// it shows the frame. Null: the render thread waited for the GPU itself.
+    void * fence_sync = nullptr;
+  };
+
+  // Fixed before the worker starts.
+  std::string peer_label;
+  QarNearFar near_far{};
+  float depth_scale = 1.0f;
+  std::shared_ptr<qar_ar_core::PointingRaySlot> ray_slot;
+  std::shared_ptr<IReleaseLane> lane;
+  std::shared_ptr<std::atomic<bool>> context_released;
+  std::shared_ptr<FrameBreaker> breaker;
+  std::string trace_path;
+  /// The hook that reads the colour back after a stall when the cycle carries a fence.
+  std::shared_ptr<IQarGlTextureCopyHook> copy_hook;
+
+  // Shared, guarded by `m`.
+  std::mutex m;
+  Slot slot = Slot::kIdle;
+  Cycle cycle;
+  /// The textures the runtime fills are described by `layout`: the layout the sender settled on
+  /// (read before the first frame), then the layout of the last frame the render thread submitted.
+  bool layout_known = false;
+  QarVideoFrameOpenGl layout{};
+  /// Why the last poll reserved no frame, when it is more than "not ready yet". An error stays
+  /// until a frame is published.
+  std::string detail;
+  bool detail_is_error = false;
+  bool detail_reported = false;
+  /// The result of the last show that failed; empty after a show that succeeded.
+  std::string show_failure;
+  /// Our frame of the cycle that is being shown, kept for the read-back after a stall when that
+  /// read-back runs on the worker (the cycle carries a fence).
+  bool stall_frame_valid = false;
+  qar_ogre_streaming::QarOpenGlStereoFrame stall_frame;
+
+  // The GL fence the render thread ends its copy with, and the worker waits for. The setup is
+  // fixed before the worker starts; the worker binds its context before the first poll.
+  FrameFenceSetup fence;
+  /// 0 not in use (no setup, or not bound yet), 1 the worker bound its context, 2 the bind failed.
+  std::atomic<int> fence_state{0};
+  /// The worker is waiting for the GPU for the notice time or longer.
+  std::atomic<bool> gpu_waiting{false};
+
+  // Read by the render thread without the lock.
+  std::atomic<bool> closed{false};
+  std::atomic<bool> leaving{false};
+  std::atomic<bool> prime{true};
+  std::atomic<double> tick_ms{0.1};
+  std::atomic<std::uint64_t> trace_rows{0};
+  std::atomic<std::uint64_t> trace_changed_rows{0};
+
+  // The worker's alone.
+  QarRenderSender * stream = nullptr;
+  std::uint64_t frame_index = 0;
+  FrameStallDetector stall_detector;
+  LogOnce first_show_noted;
+  bool logged_hands_tracked = false;
+  bool logged_hands_missing = false;
+  std::unique_ptr<FrameTraceState> trace;
+  std::unique_ptr<RenderTimingState> timing;
+  std::uint64_t error_count = 0;
+  /// Does the runtime ask this sender for frames; see RenderRecycleWatch.
+  RenderRecycleWatch recycle_watch;
+  /// Set by the worker when it closed the sender for want of render requests.
+  std::atomic<bool> recycled{false};
+
+  /// The last holder of the state may be any thread, the render thread among them. The handle the
+  /// trace kept for a frame the worker never finished is left to the runtime: destroying it here
+  /// would be a QarOS call on whichever thread drops the last reference.
+  ~RenderFrameCore()
+  {
+    if (trace) { (void)trace->take_row_handle(); }
+  }
+};
+
+namespace
+{
+
+/// The one line about the first frame shown: the thread that showed it and its texture ids.
+void print_first_show_line(const std::string & peer_label, const QarVideoFrameOpenGl & gl)
+{
+  // The texture ids as the frame was shown with them: in render-into mode the runtime's own
+  // destination textures, which is what the receiving side reads.
+  SenderTextureIds ids;
+  const std::size_t count = gl.textures_count;
+  ids.colour[0] = count > 0 ? gl.textures[0].texture : 0u;
+  ids.colour[1] = count > 1 ? gl.textures[1].texture : 0u;
+  ids.depth[0] = count > 2 ? gl.textures[2].texture : 0u;
+  ids.depth[1] = count > 3 ? gl.textures[3].texture : 0u;
+  if (count > 0) {
+    ids.width = gl.textures[0].size.width;
+    ids.height = gl.textures[0].size.height;
+  }
+  std::fprintf(
+    stderr, "[qar-adapter] %s %s\n", wall_clock_hms_ms().c_str(),
+    format_first_show_line(peer_label, thread_number(), ids).c_str());
+  std::fflush(stderr);
+}
+
+void set_worker_detail(RenderFrameCore & c, std::string text, bool error)
+{
+  // The owner stopped waiting for this worker: what its calls answer from now on is no answer.
+  if (frame_worker_calls_blocked()) { return; }
+  if (error) {
+    const std::uint64_t count = ++c.error_count;
+    if (count <= 5 || (count % 100) == 0) {
+      std::fprintf(
+        stderr, "[qar-adapter] %s peer %s frame call failed (%llu): %s\n",
+        wall_clock_hms_ms().c_str(), c.peer_label.c_str(),
+        static_cast<unsigned long long>(count), text.c_str());
+      std::fflush(stderr);
+    }
+  }
+  std::lock_guard<std::mutex> lock(c.m);
+  // A poll that merely finds no frame ready does not wipe the last error: it stays the skip
+  // detail until a frame is published.
+  if (!error && text.empty() && c.detail_is_error) { return; }
+  c.detail = std::move(text);
+  c.detail_is_error = error;
+  c.detail_reported = false;
+}
+
+void destroy_frame_info(QarRenderFrameInfo * info)
+{
+  if (info != nullptr) { QAR_CALL(qar_render_frame_info_handle_destroy, info); }
+}
+
+constexpr const char * kFrameCallsStopped = "frame calls stopped: a frame call blocked";
+
+/// The one line about a sender that the runtime asks for no frames and that is made again.
+void print_recycle_line(
+  const std::string & peer_label, const RenderRecycleWatch & watch,
+  std::chrono::steady_clock::time_point now)
+{
+  std::fprintf(
+    stderr,
+    "[qar-adapter] %s peer %s no render request for %lld s after the stream reconnected "
+    "(the runtime answers %d); the 3D sender is made again\n",
+    wall_clock_hms_ms().c_str(), peer_label.c_str(), watch.seconds_without_frame(now),
+    watch.last_code());
+  std::fflush(stderr);
+}
+
+/// What a failed try-begin answers, for the judgement of RenderRecycleWatch.
+RenderRecycleWatch::Answer recycle_answer_of(const QarResult & r)
+{
+  if (qar_result_has_code(r, QAR_STATUS_MEDIA_STREAMING_STREAM_IS_RECONNECTING)) {
+    return RenderRecycleWatch::Answer::kReconnecting;
+  }
+  if (qar_result_has_code(r, QAR_STATUS_MEDIA_STREAMING_STREAM_IS_PAUSED) ||
+    qar_result_has_code(r, QAR_STATUS_RENDERING_PRODUCER_APP_VOLUME_UNRESOLVED))
+  {
+    return RenderRecycleWatch::Answer::kNotYet;
+  }
+  return RenderRecycleWatch::Answer::kError;
+}
+
+/// Worker thread: ends a frame cycle that was begun and cannot be rendered. The only call that
+/// ends a cycle is show-frame, and a cycle left open is not a state the QarOS header describes,
+/// so the frame is shown with whatever its textures hold. The call is made also while the breaker
+/// pauses the frame calls: the pause holds back the next try-begin, not the end of this cycle.
+void end_unrendered_cycle(RenderFrameCore & c, std::string detail, bool error)
+{
+  if (c.trace) { c.trace->abandon_row(); }
+  QarRenderFrameShow show = qar_render_frame_show_default();
+  show.rendered_near_far = c.near_far;
+  show.depth_scale = c.depth_scale;
+  const std::chrono::steady_clock::time_point show_start = std::chrono::steady_clock::now();
+  const QarResult r = QAR_CALL(qar_render_sender_show_frame, c.stream, &show);
+  c.breaker->note("show_frame", show_start);
+  {
+    std::lock_guard<std::mutex> lock(c.m);
+    c.slot = RenderFrameCore::Slot::kIdle;
+  }
+  if (qar_result_is_error(r)) {
+    set_worker_detail(c, result_text("show_frame", r), true);
+  } else {
+    set_worker_detail(c, std::move(detail), error);
+  }
+}
+
+/// Worker thread, before the first frame: the layout the sender settled on describes the textures
+/// the runtime fills, so the first frame already has its texture ids.
+void learn_sender_layout(RenderFrameCore & c)
+{
+  QarVideoFrameLayout sender_layout{};
+  const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+  const QarResult r = QAR_CALL(qar_render_sender_layout, c.stream, &sender_layout);
+  c.breaker->note("sender_layout", start);
+  if (qar_result_is_error(r) || sender_layout.textures_count == 0 ||
+    sender_layout.textures_count > QAR_MAX_FRAME_TEXTURES ||
+    sender_layout.views_count > QAR_MAX_FRAME_VIEWS)
+  {
+    return;
+  }
+  QarVideoFrameOpenGl gl{};
+  gl.textures_count = sender_layout.textures_count;
+  for (std::size_t i = 0; i < sender_layout.textures_count; ++i) {
+    gl.textures[i].size = sender_layout.textures[i];
+    gl.textures[i].texture = 0u;
+  }
+  gl.texture_views_count = sender_layout.views_count;
+  for (std::size_t i = 0; i < sender_layout.views_count; ++i) {
+    gl.texture_views[i] = sender_layout.views[i];
+  }
+  std::lock_guard<std::mutex> lock(c.m);
+  if (!c.layout_known) {
+    c.layout = gl;
+    c.layout_known = true;
+  }
+}
+
+/// Worker thread, before its first poll: binds the context of the fence setup for good. A bind
+/// that fails leaves the sender to wait for the GPU on the render thread, and says so.
+void bind_fence_context_once(RenderFrameCore & c)
+{
+  if (c.fence_state.load() != 0 || !c.fence.usable()) { return; }
+  const int err = c.fence.context->bind();
+  if (err == 0) {
+    c.fence_state.store(1);
+    return;
+  }
+  c.fence_state.store(2);
+  std::fprintf(
+    stderr,
+    "[qar-adapter] %s peer %s the frame worker could not bind its GL context (err=%d); this "
+    "sender waits for the GPU on the GUI thread\n",
+    wall_clock_hms_ms().c_str(), c.peer_label.c_str(), err);
+  std::fflush(stderr);
+}
+
+/// Worker thread: waits until the GPU has finished the copy of @p cycle. The wait is made in
+/// slices, between which the stop flag is looked at. After the notice time it is reported once and
+/// the sender's skip detail names the frame and the time.
+/// @return true when the fence is signalled (or cannot be waited for), false when the sender is
+/// leaving: the frame is then not shown and the fence is not deleted.
+bool wait_for_gpu(RenderFrameCore & c, const RenderFrameCore::Cycle & cycle)
+{
+  const GlFenceOps & ops = c.fence.ops;
+  const std::uint64_t slice_ns = static_cast<std::uint64_t>(
+    std::chrono::duration_cast<std::chrono::nanoseconds>(c.fence.timings.slice).count());
+  const std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
+  bool noticed = false;
+  for (;;) {
+    if (c.leaving.load() || frame_worker_calls_blocked()) {
+      c.gpu_waiting.store(false);
+      // The fence is this sender's: it goes with the sender, on the thread whose context is bound.
+      ops.remove(cycle.fence_sync);
+      return false;
+    }
+    const int waited_result = ops.wait(cycle.fence_sync, slice_ns);
+    if (waited_result > 0) {
+      break;
+    }
+    if (waited_result < 0) {
+      // The wait itself failed (for example a fence of another share group): it cannot be
+      // repeated. The frame is shown without the guarantee, and the next ones are finished by the
+      // GUI thread.
+      c.fence_state.store(2);
+      std::fprintf(
+        stderr,
+        "[qar-adapter] %s peer %s the frame worker could not wait for its fence; this sender "
+        "waits for the GPU on the GUI thread\n",
+        wall_clock_hms_ms().c_str(), c.peer_label.c_str());
+      std::fflush(stderr);
+      break;
+    }
+    const std::chrono::steady_clock::duration waited = std::chrono::steady_clock::now() - started;
+    if (waited >= c.fence.timings.notice) {
+      const double seconds = std::chrono::duration<double>(waited).count();
+      char text[96];
+      std::snprintf(
+        text, sizeof(text), "waiting for the GPU: frame %llu for %.1f s",
+        static_cast<unsigned long long>(cycle.frame_index), seconds);
+      if (!noticed) {
+        noticed = true;
+        c.gpu_waiting.store(true);
+        std::fprintf(
+          stderr,
+          "[qar-adapter] %s peer %s frame worker waiting for the GPU (frame %llu) for %.1f s\n",
+          wall_clock_hms_ms().c_str(), c.peer_label.c_str(),
+          static_cast<unsigned long long>(cycle.frame_index), seconds);
+        std::fflush(stderr);
+      }
+      set_worker_detail(c, text, false);
+    }
+  }
+  ops.remove(cycle.fence_sync);
+  if (noticed) {
+    c.gpu_waiting.store(false);
+    std::fprintf(
+      stderr, "[qar-adapter] %s peer %s the GPU finished frame %llu after %.1f s\n",
+      wall_clock_hms_ms().c_str(), c.peer_label.c_str(),
+      static_cast<unsigned long long>(cycle.frame_index),
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
+    std::fflush(stderr);
+    set_worker_detail(c, std::string(), false);
+  }
+  return true;
+}
+
+/// Worker thread: reserves the next frame when the slot is idle. Try-begin and, when a frame is
+/// ready, its poses, fields of view and hands, then the textures of the runtime; the result is
+/// published in the slot. A frame that is begun is always either published or ended with a
+/// show-frame; a second try-begin never follows before that.
+void worker_poll(RenderFrameCore & c, bool from_prime)
+{
+  // The first poll runs before any frame can be handed over, so the render thread knows how its
+  // sender waits for the GPU before its first submit.
+  bind_fence_context_once(c);
+  {
+    std::lock_guard<std::mutex> lock(c.m);
+    if (c.slot != RenderFrameCore::Slot::kIdle) { return; }
+  }
+  if (c.leaving.load() || c.stream == nullptr) { return; }
+  if (c.breaker->blocked()) {
+    set_worker_detail(c, kFrameCallsStopped, false);
+    return;
+  }
+
+  QarRenderFrameInfo * info = nullptr;
+  bool ready = false;
+  if (c.trace) { c.trace->note_try_begin_frame_call(from_prime); }
+  const std::int64_t poll_start_us = c.timing ? qar_ar_core::timing_epoch_us() : 0;
+  const std::chrono::steady_clock::time_point call_start = std::chrono::steady_clock::now();
+  const QarResult r = QAR_CALL(qar_render_sender_try_begin_frame, c.stream, &info, &ready);
+  c.breaker->note("try_begin_frame", call_start);
+  if (c.timing) { c.timing->note_poll_call(poll_start_us); }
+  const bool began = qar_result_is_success(r) && ready && info != nullptr;
+  if (c.breaker->tripped() && !began) {
+    destroy_frame_info(info);
+    set_worker_detail(c, kFrameCallsStopped, false);
+    return;
+  }
+  // A sender that the runtime asks for no frames is closed, and the producer makes a new one.
+  {
+    const std::chrono::steady_clock::time_point answered = std::chrono::steady_clock::now();
+    const RenderRecycleWatch::Answer answer = qar_result_is_error(r)
+      ? recycle_answer_of(r)
+      : (began ? RenderRecycleWatch::Answer::kBegan : RenderRecycleWatch::Answer::kNotReady);
+    if (!c.closed.load() &&
+      c.recycle_watch.note(answer, static_cast<int>(r.code), answered))
+    {
+      print_recycle_line(c.peer_label, c.recycle_watch, answered);
+      c.recycled.store(true);
+      c.closed.store(true);
+    }
+  }
+  if (qar_result_is_error(r)) {
+    destroy_frame_info(info);
+    // Two answers mean "not yet", not a failure of the sender: the app volume is not resolved in
+    // the Hub yet, or the receiver paused the stream because its display is not visible.
+    if (qar_result_has_code(r, QAR_STATUS_RENDERING_PRODUCER_APP_VOLUME_UNRESOLVED)) {
+      set_worker_detail(c, "app volume not resolved yet", false);
+    } else if (qar_result_has_code(r, QAR_STATUS_MEDIA_STREAMING_STREAM_IS_PAUSED)) {
+      set_worker_detail(c, "paused by the receiver (its display is not visible)", false);
+    } else if (qar_result_has_code(r, QAR_STATUS_RENDERING_PRODUCER_STREAM_IS_CLOSED)) {
+      c.closed.store(true);
+      set_worker_detail(c, "try_begin_frame: producer stream is closed", true);
+    } else {
+      set_worker_detail(c, result_text("try_begin_frame", r), true);
+    }
+    return;
+  }
+  if (c.timing) {
+    if (began) { c.timing->note_ready(from_prime); }
+    else { c.timing->note_pending(); }
+  }
+  if (!began) {
+    destroy_frame_info(info);
+    set_worker_detail(c, std::string(), false);
+    return;
+  }
+  // From here on a frame cycle is open.
+  if (c.trace) { c.trace->note_ready(/*is_prime_call=*/false, info); }
+  if (c.breaker->tripped()) {
+    destroy_frame_info(info);
+    end_unrendered_cycle(c, kFrameCallsStopped, false);
+    return;
+  }
+
+  // A frame whose pose or field of view cannot be read is not rendered: what a failed getter
+  // leaves behind is a zero quaternion, which is no orientation.
+  RenderFrameCore::Cycle cycle;
+  struct ViewRead { const char * what; QarResult result; };
+  const ViewRead view_reads[] = {
+    {"qar_render_frame_info_get_view_pose(0)",
+      QAR_CALL(qar_render_frame_info_get_view_pose, info, 0, &cycle.left_pose)},
+    {"qar_render_frame_info_get_view_fov(0)",
+      QAR_CALL(qar_render_frame_info_get_view_fov, info, 0, &cycle.left_fov)},
+    {"qar_render_frame_info_get_view_pose(1)",
+      QAR_CALL(qar_render_frame_info_get_view_pose, info, 1, &cycle.right_pose)},
+    {"qar_render_frame_info_get_view_fov(1)",
+      QAR_CALL(qar_render_frame_info_get_view_fov, info, 1, &cycle.right_fov)},
+  };
+  for (const ViewRead & read : view_reads) {
+    if (qar_result_is_error(read.result)) {
+      destroy_frame_info(info);
+      end_unrendered_cycle(c, result_text(read.what, read.result), true);
+      return;
+    }
+  }
+
+  // The AR pointing ray, while both halves are in hand.
+  if (c.ray_slot) {
+    publish_ray(
+      *c.ray_slot, c.stream, cycle.left_pose, *c.breaker, c.logged_hands_tracked,
+      c.logged_hands_missing);
+    if (c.breaker->tripped()) {
+      destroy_frame_info(info);
+      end_unrendered_cycle(c, kFrameCallsStopped, false);
+      return;
+    }
+  }
+
+  c.stall_detector.frame_ready(
+    std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(),
+    StallPoint{cycle.left_pose.position.x, cycle.left_pose.position.y,
+      cycle.left_pose.position.z},
+    StallPoint{cycle.right_pose.position.x, cycle.right_pose.position.y,
+      cycle.right_pose.position.z});
+  cycle.frame_index = c.frame_index++;
+  if (c.timing) { c.timing->note_consume(cycle.frame_index); }
+  if (c.trace) {
+    // The trace keeps the handle until just before the frame is shown (the pose re-read).
+    c.trace->begin_row(
+      cycle.frame_index, c.prime.load(), c.tick_ms.load(), cycle.left_pose, cycle.right_pose,
+      info);
+  } else {
+    destroy_frame_info(info);
+  }
+
+  // The textures of the runtime for this frame, described by the layout the sender settled on
+  // (read before the first frame) or, later, by the layout of the last frame the render thread
+  // submitted.
+  bool layout_known = false;
+  {
+    std::lock_guard<std::mutex> lock(c.m);
+    layout_known = c.layout_known;
+  }
+  if (!layout_known) {
+    learn_sender_layout(c);
+    if (c.breaker->tripped()) {
+      end_unrendered_cycle(c, kFrameCallsStopped, false);
+      return;
+    }
+  }
+  {
+    std::lock_guard<std::mutex> lock(c.m);
+    layout_known = c.layout_known;
+    cycle.gl = c.layout;
+  }
+  const std::chrono::steady_clock::time_point frame_start = std::chrono::steady_clock::now();
+  const QarResult fr = QAR_CALL(qar_render_sender_frame_opengl, c.stream, &cycle.gl);
+  c.breaker->note("frame_opengl", frame_start);
+  if (c.breaker->tripped()) {
+    end_unrendered_cycle(c, kFrameCallsStopped, false);
+    return;
+  }
+  if (qar_result_is_error(fr)) {
+    if (layout_known) {
+      end_unrendered_cycle(c, result_text("frame_opengl", fr), true);
+      return;
+    }
+    cycle.gl = QarVideoFrameOpenGl{};
+    cycle.no_ids = true;
+  } else if (!layout_known && cycle.gl.textures_count == 0) {
+    cycle.no_ids = true;
+  }
+  cycle.stalled = c.stall_detector.take(cycle.stall);
+
+  std::lock_guard<std::mutex> lock(c.m);
+  c.cycle = std::move(cycle);
+  c.slot = RenderFrameCore::Slot::kOpen;
+  c.detail.clear();
+  c.detail_is_error = false;
+}
+
+/// Worker thread: shows the frame the render thread handed over, then reserves the next one.
+void worker_show(RenderFrameCore & c)
+{
+  RenderFrameCore::Cycle cycle;
+  {
+    std::lock_guard<std::mutex> lock(c.m);
+    if (c.slot != RenderFrameCore::Slot::kShowing) { return; }
+    cycle = c.cycle;
+  }
+  if (c.stream == nullptr) {
+    if (cycle.fence_sync != nullptr) { c.fence.ops.remove(cycle.fence_sync); }
+    std::lock_guard<std::mutex> lock(c.m);
+    c.slot = RenderFrameCore::Slot::kIdle;
+    return;
+  }
+  // The copy into the textures of the runtime ends with a fence: the frame is shown when the GPU
+  // has finished it. A sender that is told to leave while it waits shows nothing; the destroy of
+  // its stream ends the cycle.
+  if (cycle.fence_sync != nullptr && !wait_for_gpu(c, cycle)) {
+    return;
+  }
+
+  bool show_ok = false;
+  QarResult shown{};
+  {
+    SubmitTimingGuard submit_timing(c.timing.get());
+    if (c.trace) {
+      c.trace->note_render_done();
+      // The pose re-read, right before show_frame, while the frame's handle is still alive.
+      c.trace->note_pre_show();
+    }
+    QarRenderFrameShow show = qar_render_frame_show_default();
+    show.rendered_near_far = c.near_far;
+    // Metric metres by default; scaled to whatever encoding the consumer expects.
+    show.depth_scale = c.depth_scale;
+    const std::chrono::steady_clock::time_point show_start = std::chrono::steady_clock::now();
+    shown = QAR_CALL(qar_render_sender_show_frame, c.stream, &show);
+    c.breaker->note("show_frame", show_start);
+    show_ok = qar_result_is_success(shown);
+    submit_timing.show_returned(show_ok);
+    if (c.trace) {
+      c.trace->note_show_done(show_ok);
+      c.trace_rows.store(c.trace->rows_written());
+      c.trace_changed_rows.store(c.trace->changed_rows());
+    }
+  }
+  if (show_ok) {
+    if (c.first_show_noted.first()) { print_first_show_line(c.peer_label, cycle.gl); }
+    c.stall_detector.frame_shown(
+      std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
+  }
+  // The first frame after a stall: its colour is read back from our own texture. With a fence
+  // the render thread leaves the read-back to this thread, whose context is bound; the GPU has
+  // finished the frame, and the next one is not rendered before the slot is idle.
+  if (cycle.fence_sync != nullptr && cycle.stalled) {
+    qar_ogre_streaming::QarOpenGlStereoFrame frame;
+    bool have_frame = false;
+    {
+      std::lock_guard<std::mutex> lock(c.m);
+      have_frame = c.stall_frame_valid;
+      if (have_frame) {
+        frame = c.stall_frame;
+        c.stall_frame_valid = false;
+      }
+    }
+    if (have_frame) {
+      float rgb[3] = {0.0f, 0.0f, 0.0f};
+      const std::chrono::steady_clock::time_point probe_start = std::chrono::steady_clock::now();
+      const bool have_colour = c.copy_hook && c.copy_hook->mean_left_colour(frame, rgb);
+      note_gl_step("readback-probe", probe_start, /*on_worker=*/true);
+      std::fprintf(
+        stderr, "[qar-adapter] %s %s\n", wall_clock_hms_ms().c_str(),
+        format_stall_line(cycle.stall, have_colour, rgb).c_str());
+      std::fflush(stderr);
+    }
+  }
+  {
+    std::lock_guard<std::mutex> lock(c.m);
+    c.slot = RenderFrameCore::Slot::kIdle;
+    if (!frame_worker_calls_blocked()) {
+      c.show_failure = show_ok ? std::string() : result_text("show_frame", shown);
+    }
+  }
+  // The frame is out; start the wait for the next one at once so that it runs during the gap
+  // before the next tick (QAR_ADAPTER_PRIME).
+  if (show_ok && c.prime.load() && !c.leaving.load() && !c.breaker->tripped()) {
+    worker_poll(c, /*from_prime=*/true);
+  }
+}
+
+/// Worker thread, once, when the sender is released: the handles go to the lane, which destroys
+/// them on the thread that owns the session. A frame cycle that is still open ends with the
+/// destroy of the stream; a show-frame on a stream that is going away would only be one more
+/// call that may wait.
+void worker_leave(RenderFrameCore & c)
+{
+  // The names of the textures of this stream are free for the next one.
+  if (c.copy_hook) { c.copy_hook->forget_texture_targets(); }
+  QarRenderFrameInfo * const traced = c.trace ? c.trace->take_row_handle() : nullptr;
+  QarRenderSender * const stream = c.stream;
+  c.stream = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(c.m);
+    c.slot = RenderFrameCore::Slot::kIdle;
+  }
+  // The fence context goes before the flag of the stream is set: the context is current on this
+  // thread alone, so it is released and deleted here and nowhere else.
+  if (c.fence.context != nullptr) {
+    c.fence.context->release_and_delete();
+  }
+  if (traced == nullptr && stream == nullptr) { return; }
+  const std::shared_ptr<std::atomic<bool>> released = c.context_released;
+  const std::string label = c.peer_label;
+  const auto destroy = [traced, stream, released, label] {
+      if (traced != nullptr) { QAR_CALL(qar_render_frame_info_handle_destroy, traced); }
+      if (stream != nullptr) {
+        const auto started = std::chrono::steady_clock::now();
+        QAR_CALL(qar_render_stream_handle_destroy, stream);
+        const auto took = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - started).count();
+        std::fprintf(
+          stderr, "[qar-adapter] %s peer %s 3D stream released (qar_render_stream_handle_destroy "
+          "took %lld ms)\n", wall_clock_hms_ms().c_str(), label.c_str(),
+          static_cast<long long>(took));
+        std::fflush(stderr);
+      }
+      // The stream that used the GL context of this sender is gone.
+      if (released != nullptr) { released->store(true); }
+    };
+  if (!c.lane->post_release("render-stream-release", destroy)) {
+    std::fprintf(
+      stderr, "[qar-adapter] %s peer %s stream handle left unreleased (the owner thread is gone)\n",
+      wall_clock_hms_ms().c_str(), c.peer_label.c_str());
+    std::fflush(stderr);
+  }
+}
+
+}  // namespace
+
+bool QarCApiRenderSenderAdapter::begin_frame_on_worker(
+  qar_ogre_streaming::QarFrameInfo & out_info)
+{
+  out_info = qar_ogre_streaming::QarFrameInfo{};
+  out_info.should_render = false;
+  last_skip_detail_.clear();
+  RenderFrameCore & c = *core_;
+
+  // The worker is inside a QarOS call that does not return: say which, and ask for nothing.
+  FrameWorker::Wait waited;
+  if (worker_->waiting(&waited)) {
+    char seconds[32];
+    std::snprintf(seconds, sizeof(seconds), "%.1f", waited.seconds);
+    last_skip_detail_ = "waiting for QarOS: " + waited.call + " for " + seconds + " s";
+    return true;
+  }
+  if (breaker_->tripped()) {
+    // The worker looks at the breaker when it is kicked, and lets the probe frame through once the
+    // pause is over.
+    worker_->kick();
+    last_skip_detail_ = kFrameCallsStopped;
+    return true;
+  }
+
+  bool kick = false;
+  bool report_error = false;
+  std::string detail;
+  {
+    std::lock_guard<std::mutex> lock(c.m);
+    switch (c.slot) {
+      case RenderFrameCore::Slot::kOpen:
+      case RenderFrameCore::Slot::kRendering:
+        {
+          // A frame taken earlier and never submitted (a render error, a frame the scheduler shed
+          // after it had begun) is offered again: its cycle is still open in QarOS, and the
+          // worker reserves no other before it is shown.
+          const RenderFrameCore::Cycle & cycle = c.cycle;
+          out_info.frame_index = cycle.frame_index;
+          out_info.predicted_display_time = QarTimePoint{static_cast<std::int64_t>(
+              std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count())};
+          out_info.left_eye.pose = cycle.left_pose;
+          out_info.left_eye.fov = cycle.left_fov;
+          out_info.left_eye.near_far = near_far_;
+          out_info.right_eye.pose = cycle.right_pose;
+          out_info.right_eye.fov = cycle.right_fov;
+          out_info.right_eye.near_far = near_far_;
+          out_info.should_render = true;
+          c.slot = RenderFrameCore::Slot::kRendering;
+          consecutive_pending_ = 0;
+          return true;
+        }
+      case RenderFrameCore::Slot::kIdle:
+        kick = true;
+        break;
+      case RenderFrameCore::Slot::kShowing:
+        break;
+    }
+    detail = c.detail.empty() ? c.show_failure : c.detail;
+    if (c.detail_is_error && !c.detail_reported) {
+      c.detail_reported = true;
+      report_error = true;
+    }
+  }
+  if (kick) { worker_->kick(); }
+  ++consecutive_pending_;
+  if (!detail.empty()) {
+    last_skip_detail_ = detail;
+    return !report_error;
+  }
+  // The begin-frame wait has not completed. In the steady state this is just the viewer pacing us
+  // below our tick rate; the count tells it from a producer that is wedged.
+  last_skip_detail_ =
+    "begin-frame pending (no render request from the viewer); consecutive=" +
+    std::to_string(consecutive_pending_);
+  return true;
+}
+
+bool QarCApiRenderSenderAdapter::submit_on_worker(
+  const qar_ogre_streaming::QarOpenGlStereoFrame & frame)
+{
+  RenderFrameCore & c = *core_;
+  RenderFrameCore::Cycle cycle;
+  {
+    std::lock_guard<std::mutex> lock(c.m);
+    if (c.slot != RenderFrameCore::Slot::kRendering) {
+      last_skip_detail_ = "no frame cycle is open";
+      return false;
+    }
+    // The runtime fills the textures of the next frame according to this layout.
+    fill_frame_layout(c.layout, frame, /*supply_ids=*/false);
+    c.layout_known = true;
+    cycle = c.cycle;
+  }
+
+  // The frame cycle is open in QarOS: whatever happens below, it ends with a show-frame, which the
+  // worker makes when the frame is handed over. A frame that could not be written into the
+  // textures of the runtime is shown as they are.
+  const char * unwritten = nullptr;
+  // The fence that the worker waits for before it shows the frame; null when this thread waits
+  // for the GPU itself.
+  void * fence_sync = nullptr;
+  // RENDER-INTO: copy our rendered Ogre color/depth INTO the textures the runtime handed out
+  // before the frame is shown (see GlSubmitMode).
+  if (cycle.no_ids) {
+    unwritten = "the textures of the runtime were not known for this frame";
+  } else if (copy_hook_) {
+    const std::chrono::steady_clock::time_point copy_start = std::chrono::steady_clock::now();
+    // The copy of a worker sender reads nothing back from the textures of the runtime.
+    const bool copied = copy_hook_->copy_frame_into_quiet(frame, cycle.gl);
+    note_gl_step("copy-into-qar", copy_start);
+    if (!copied) {
+      unwritten = "the frame could not be copied into the textures of the runtime";
+    }
+    // The copy must be COMPLETE before QAR consumes these textures from its own context:
+    // shared-object writes become visible to another context only after the writing context
+    // flushes (GL spec, Appendix D). The worker shows the frame only after this. A sender whose
+    // worker bound a context ends the copy with a fence and a flush, and the worker waits for
+    // the fence; any other sender waits for the GPU here.
+    if (copied && c.fence_state.load() == 1) {
+      const std::chrono::steady_clock::time_point fence_start = std::chrono::steady_clock::now();
+      fence_sync = c.fence.ops.insert();
+      note_gl_step("fence", fence_start);
+    }
+#ifdef _WIN32
+    if (copied && fence_sync == nullptr) { gl_finish_timed(); }
+#endif
+  } else if (!warned_no_copy_hook_) {
+    warned_no_copy_hook_ = true;
+    std::fprintf(stderr,
+      "[qar-adapter] render-into WITHOUT a copy hook: QAR's textures are never "
+      "written, so the consumer will show a BLACK scene. Wire make_gl_copy_image_hook().\n");
+    std::fflush(stderr);
+  }
+
+  // With a fence the worker reads the colour back after a stall, from our own texture, on its
+  // context; it needs the frame description.
+  const bool read_back_on_worker = fence_sync != nullptr && cycle.stalled && unwritten == nullptr;
+  {
+    std::lock_guard<std::mutex> lock(c.m);
+    c.cycle.fence_sync = fence_sync;
+    if (read_back_on_worker) {
+      c.stall_frame = frame;
+      c.stall_frame_valid = true;
+    }
+    c.slot = RenderFrameCore::Slot::kShowing;
+  }
+  worker_->hand_over();
+  if (unwritten != nullptr) {
+    last_skip_detail_ = std::string(unwritten) + "; the frame was shown as they are";
+    return false;
+  }
+
+  // The first frame after a stall: its colour is read back from our own texture, which this
+  // thread can reach; the frame is on its way already, so the read-back cannot delay it. (With a
+  // fence the worker does this.)
+  if (cycle.stalled && !read_back_on_worker) {
+    float rgb[3] = {0.0f, 0.0f, 0.0f};
+    const std::chrono::steady_clock::time_point probe_start = std::chrono::steady_clock::now();
+    const bool have_colour = copy_hook_ && copy_hook_->mean_left_colour(frame, rgb);
+    note_gl_step("readback-probe", probe_start);
+    std::fprintf(
+      stderr, "[qar-adapter] %s %s\n", wall_clock_hms_ms().c_str(),
+      format_stall_line(cycle.stall, have_colour, rgb).c_str());
+    std::fflush(stderr);
+  }
+  return true;
+}
+
 // ===========================================================================
 //  QarCApiRenderSenderAdapter
 // ===========================================================================
@@ -738,10 +1683,16 @@ QarCApiRenderSenderAdapter::QarCApiRenderSenderAdapter(
   QarRenderSender * stream, const QarNearFar & near_far,
   GlSubmitMode submit_mode, std::shared_ptr<IQarGlTextureCopyHook> copy_hook,
   float depth_scale, std::shared_ptr<qar_ar_core::PointingRaySlot> pointing_ray_slot,
-  QarPeerId peer_id, std::string log_folder_path)
+  QarPeerId peer_id, std::string log_folder_path, std::shared_ptr<IReleaseLane> release_lane,
+  std::shared_ptr<std::atomic<bool>> context_released, bool frame_calls_on_worker,
+  const FrameWorkerTimings & worker_timings, const FrameFenceSetup & fence,
+  const RenderRecycleTimings & recycle, std::shared_ptr<RenderRecycleCount> recycle_count)
 : stream_(stream), near_far_(near_far), depth_scale_(depth_scale),
   submit_mode_(submit_mode), copy_hook_(std::move(copy_hook)),
+  recycle_timings_(recycle), recycle_count_(std::move(recycle_count)),
   pointing_ray_slot_(std::move(pointing_ray_slot)),
+  release_lane_(std::move(release_lane)),
+  context_released_(std::move(context_released)),
   // QAR_ADAPTER_PRIME sets the INITIAL value only; the manager overwrites this via
   // set_prime_enabled() right after construction (see OgreQarStreamingManager::
   // create_stream), and the panel checkbox changes it live from there. Read here too
@@ -749,7 +1700,12 @@ QarCApiRenderSenderAdapter::QarCApiRenderSenderAdapter(
   // the env var on its own.
   prime_enabled_(prime_enabled_from_environment())
 {
+  recycle_watch_ = RenderRecycleWatch(
+    recycle_timings_, recycle_count_, std::chrono::steady_clock::now());
   peer_label_ = qar_ogre_streaming::peer_id_to_hex(peer_id).substr(0, 8);
+  // The runtime names the textures of this sender, and GL may reuse the name of a texture of an
+  // earlier sender that was of another kind.
+  if (copy_hook_) { copy_hook_->forget_texture_targets(); }
   {
     // Per-stream stage timing (QAR_VIDEO_TIMING_DIR). The first stream is render3d.csv, a
     // second (another peer, or a rebuilt stream) render3d_2.csv, and so on.
@@ -770,52 +1726,354 @@ QarCApiRenderSenderAdapter::QarCApiRenderSenderAdapter(
       frame_trace_->path().empty() ? "failed to open trace file" : frame_trace_->path().c_str());
     std::fflush(stderr);
   }
+  breaker_ = std::make_shared<FrameBreaker>(peer_label_);
+  // The frame calls run on a worker thread of their own when the sender can release its stream on
+  // the lane and renders into the runtime's textures (the supply-own mode needs the frame to know
+  // the textures, so it keeps the frame calls on the render thread). A lane that refuses the
+  // worker leaves them there too.
+  if (frame_calls_on_worker && release_lane_ != nullptr && stream_ != nullptr &&
+    submit_mode_ == GlSubmitMode::kRenderIntoQarTextures)
+  {
+    auto core = std::make_shared<RenderFrameCore>();
+    core->peer_label = peer_label_;
+    core->near_far = near_far_;
+    core->depth_scale = depth_scale_;
+    core->ray_slot = pointing_ray_slot_;
+    core->lane = release_lane_;
+    core->context_released = context_released_;
+    core->breaker = breaker_;
+    core->stream = stream_;
+    core->copy_hook = copy_hook_;
+    core->recycle_watch = recycle_watch_;
+    // Only a sender that has a copy to wait for uses the fence.
+    if (fence.usable() && copy_hook_ != nullptr) { core->fence = fence; }
+    core->prime.store(prime_enabled_);
+    core->tick_ms.store(tick_ms_);
+    core->trace_path = frame_trace_ ? frame_trace_->path() : std::string();
+    core->trace = std::move(frame_trace_);
+    core->timing = std::move(timing_);
+    FrameWorker::Jobs jobs;
+    jobs.poll = [core] { worker_poll(*core, /*from_prime=*/false); };
+    jobs.show = [core] { worker_show(*core); };
+    jobs.leave = [core] { worker_leave(*core); };
+    worker_ = FrameWorker::start("peer " + peer_label_, release_lane_, jobs, worker_timings);
+    if (worker_ != nullptr) {
+      core_ = core;
+      stream_ = nullptr;  // the worker owns the handle from here on
+    } else {
+      frame_trace_ = std::move(core->trace);
+      timing_ = std::move(core->timing);
+      std::fprintf(
+        stderr, "[qar-adapter] %s peer %s frame calls run on the GUI thread "
+        "(no frame worker could start)\n", wall_clock_hms_ms().c_str(), peer_label_.c_str());
+      std::fflush(stderr);
+    }
+  }
 }
 
 QarCApiRenderSenderAdapter::~QarCApiRenderSenderAdapter()
 {
-  // Release a primed-but-unconsumed frame BEFORE the stream that owns it.
-  if (primed_info_ != nullptr) {
-    QAR_CALL(qar_render_frame_info_handle_destroy, primed_info_);
-    primed_info_ = nullptr;
+  if (worker_ != nullptr) {
+    // The worker posts the release of the stream when its current call returns; this thread
+    // neither waits for it nor joins it.
+    core_->leaving.store(true);
+    worker_->stop();
   }
-  // Same ordering concern for a trace-only kept-alive handle (the pre-show pose re-read):
-  // a frame caught mid-flight (between consume and show) when the stream is torn
-  // down must not leak or be destroyed twice. frame_trace_'s own destructor (flush +
-  // close the CSV) runs later, after stream_ below, which is fine — by then it holds
-  // no QAR handle of any kind.
-  if (frame_trace_) {
-    frame_trace_->abandon_row();
+  release_handles();
+}
+
+bool QarCApiRenderSenderAdapter::is_closed() const
+{
+  return closed_.load() || (core_ != nullptr && core_->closed.load());
+}
+
+bool QarCApiRenderSenderAdapter::recycled() const
+{
+  return recycled_.load() || (core_ != nullptr && core_->recycled.load());
+}
+
+bool QarCApiRenderSenderAdapter::frame_calls_stopped() const
+{
+  return breaker_->tripped() || (worker_ != nullptr && worker_->waiting()) ||
+         (core_ != nullptr && core_->gpu_waiting.load());
+}
+
+bool QarCApiRenderSenderAdapter::frame_fence_active() const
+{
+  return core_ != nullptr && core_->fence_state.load() == 1;
+}
+
+void QarCApiRenderSenderAdapter::set_prime_enabled(bool enabled)
+{
+  prime_enabled_ = enabled;
+  if (core_ != nullptr) { core_->prime.store(enabled); }
+}
+
+void QarCApiRenderSenderAdapter::set_tick_ms(double tick_ms)
+{
+  tick_ms_ = tick_ms;
+  if (core_ != nullptr) { core_->tick_ms.store(tick_ms); }
+}
+
+void QarCApiRenderSenderAdapter::release_handles()
+{
+  if (copy_hook_) { copy_hook_->forget_texture_targets(); }
+  // A primed-but-unconsumed frame is released BEFORE the stream that owns it. Same ordering
+  // concern for a trace-only kept-alive handle (the pre-show pose re-read): a frame caught
+  // mid-flight (between consume and show) when the stream is torn down must not leak or be
+  // destroyed twice. frame_trace_'s own destructor (flush + close the CSV) runs later, which is
+  // fine: by then it holds no QAR handle of any kind.
+  QarRenderFrameInfo * const primed = primed_info_;
+  QarRenderFrameInfo * const traced = frame_trace_ ? frame_trace_->take_row_handle() : nullptr;
+  QarRenderSender * const stream = stream_;
+  primed_info_ = nullptr;
+  stream_ = nullptr;
+  if (primed == nullptr && traced == nullptr && stream == nullptr) {
+    return;
   }
-  if (stream_ != nullptr) {
-    QAR_CALL(qar_render_stream_handle_destroy, stream_);
-    stream_ = nullptr;
+  const std::shared_ptr<std::atomic<bool>> released = context_released_;
+  const std::string label = peer_label_;
+  const auto destroy = [primed, traced, stream, released, label] {
+      if (primed != nullptr) { QAR_CALL(qar_render_frame_info_handle_destroy, primed); }
+      if (traced != nullptr) { QAR_CALL(qar_render_frame_info_handle_destroy, traced); }
+      if (stream != nullptr) {
+        // How long the destroy takes is logged: with the Hub gone it may wait.
+        const auto started = std::chrono::steady_clock::now();
+        QAR_CALL(qar_render_stream_handle_destroy, stream);
+        const auto took = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - started).count();
+        std::fprintf(
+          stderr, "[qar-adapter] %s peer %s 3D stream released (qar_render_stream_handle_destroy "
+          "took %lld ms)\n", wall_clock_hms_ms().c_str(), label.c_str(),
+          static_cast<long long>(took));
+        std::fflush(stderr);
+      }
+      // The stream that used the GL context of this sender is gone.
+      if (released != nullptr) { released->store(true); }
+    };
+  if (release_lane_ == nullptr) {
+    destroy();
+    return;
   }
+  // The destroy waits for the Hub when the Hub does not answer; it runs on the thread that owns
+  // the session, so this thread only posts. A lane that refuses has no thread left to run it:
+  // the handles stay as they are and no call is made on them.
+  if (!release_lane_->post_release("render-stream-release", destroy)) {
+    std::fprintf(
+      stderr, "[qar-adapter] %s peer %s stream handle left unreleased (the owner thread is gone)\n",
+      wall_clock_hms_ms().c_str(), peer_label_.c_str());
+    std::fflush(stderr);
+  }
+}
+
+RenderRecycleTimings default_render_recycle_timings()
+{
+  static const RenderRecycleTimings timings = [] {
+      RenderRecycleTimings t;
+      const std::string value = read_environment("QAR_RENDER_RECYCLE_S");
+      if (environment_is_set("QAR_RENDER_RECYCLE_S")) {
+        const double seconds = parse_render_recycle_seconds(
+          value.c_str(), static_cast<double>(t.after.count()) / 1000.0);
+        t.after = std::chrono::milliseconds(static_cast<long long>(seconds * 1000.0));
+      }
+      return t;
+    }();
+  return timings;
+}
+
+RenderRecycleWatch::RenderRecycleWatch(
+  const RenderRecycleTimings & timings, std::shared_ptr<RenderRecycleCount> count,
+  std::chrono::steady_clock::time_point created)
+: timings_(timings), count_(std::move(count)), began_at_(created)
+{
+}
+
+std::chrono::steady_clock::time_point RenderRecycleWatch::clock_start() const
+{
+  return have_reconnected_ && last_reconnecting_at_ > began_at_
+    ? last_reconnecting_at_ : began_at_;
+}
+
+std::chrono::milliseconds RenderRecycleWatch::limit() const
+{
+  std::chrono::milliseconds limit = timings_.after;
+  const std::chrono::milliseconds cap =
+    timings_.cap > timings_.after ? timings_.cap : timings_.after;
+  const unsigned recycles = count_ ? count_->load() : 0u;
+  for (unsigned i = 0; i < recycles && limit < cap; ++i) { limit *= 2; }
+  return limit < cap ? limit : cap;
+}
+
+long long RenderRecycleWatch::seconds_without_frame(
+  std::chrono::steady_clock::time_point now) const
+{
+  return static_cast<long long>(
+    std::chrono::duration_cast<std::chrono::seconds>(now - clock_start()).count());
+}
+
+bool RenderRecycleWatch::note(
+  Answer answer, int code, std::chrono::steady_clock::time_point now)
+{
+  if (timings_.after.count() <= 0 || recycled_) { return false; }
+  // A run of "reconnecting" answers goes on through "not ready" and "not yet" answers and ends
+  // with a frame, with another error, or when the runtime has not said so for error_window.
+  if (reconnecting_ && now - last_reconnecting_at_ > timings_.error_window) {
+    reconnecting_ = false;
+  }
+  switch (answer) {
+    case Answer::kBegan:
+      began_at_ = now;
+      have_error_ = false;
+      reconnecting_ = false;
+      have_reconnected_ = false;
+      if (count_) { count_->store(0); }
+      return false;
+    case Answer::kReconnecting:
+      if (!reconnecting_) {
+        reconnecting_ = true;
+        reconnecting_since_ = now;
+      }
+      last_reconnecting_at_ = now;
+      have_reconnected_ = true;
+      last_code_ = code;
+      have_error_ = false;
+      break;
+    case Answer::kError:
+      reconnecting_ = false;
+      // The errors last while no gap between two of them is longer than error_window.
+      if (!have_error_ || now - last_error_at_ > timings_.error_window) {
+        have_error_ = true;
+        error_since_ = now;
+      }
+      last_error_at_ = now;
+      last_code_ = code;
+      break;
+    case Answer::kNotYet:
+    case Answer::kNotReady:
+      break;
+  }
+  const bool reconnecting_too_long =
+    reconnecting_ && now - reconnecting_since_ > timings_.reconnecting_limit;
+  const bool no_request = have_error_ && now - last_error_at_ <= timings_.error_window &&
+    now - error_since_ >= timings_.error_persist && now - clock_start() >= limit();
+  if (!reconnecting_too_long && !no_request) { return false; }
+  // The runtime answers "reconnecting" in a run that is too long; its code names the cause.
+  if (reconnecting_too_long) {
+    last_code_ = static_cast<int>(QAR_STATUS_MEDIA_STREAMING_STREAM_IS_RECONNECTING);
+  }
+  recycled_ = true;
+  if (count_) { count_->fetch_add(1); }
+  return true;
+}
+
+bool FrameBreaker::blocked()
+{
+  if (!tripped_.load() || probing_) {
+    return false;
+  }
+  if (std::chrono::steady_clock::now() < resume_at_) {
+    return true;
+  }
+  // The pause is over: the next frame call is the probe, note() judges it.
+  probing_ = true;
+  return false;
+}
+
+void FrameBreaker::note(const char * call, std::chrono::steady_clock::time_point started)
+{
+  const std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+  const auto as_ms = [](std::chrono::steady_clock::duration d) {
+      return std::chrono::duration_cast<std::chrono::milliseconds>(d);
+    };
+  const std::chrono::milliseconds took = as_ms(now - started);
+  const bool slow = took >= timings_.slow_call;
+  if (probing_) {
+    probing_ = false;
+    if (slow) {
+      // The Hub still stalls the frame calls: pause longer.
+      last_slow_call_ = now;
+      pause_ = std::min(pause_ * 2, timings_.pause_cap);
+      resume_at_ = now + pause_;
+      return;
+    }
+    tripped_.store(false);
+    // The slow calls before the pause still count: a slow call soon after the resume pauses the
+    // frame calls again.
+    std::fprintf(
+      stderr, "[qar-adapter] %s peer %s frame calls resumed after %.1f s\n",
+      wall_clock_hms_ms().c_str(), peer_label_.c_str(),
+      std::chrono::duration<double>(now - first_trip_at_).count());
+    std::fflush(stderr);
+    return;
+  }
+  if (tripped_.load()) {
+    return;
+  }
+  if (pause_ != timings_.pause_first && now - last_slow_call_ >= timings_.calm_reset) {
+    pause_ = timings_.pause_first;
+  }
+  if (!slow) {
+    return;
+  }
+  const bool second = have_slow_call_ && as_ms(now - last_slow_call_) <= timings_.window;
+  last_slow_call_ = now;
+  have_slow_call_ = true;
+  if (!second) {
+    return;
+  }
+  first_trip_at_ = now;
+  resume_at_ = now + pause_;
+  tripped_.store(true);
+  std::fprintf(
+    stderr, "[qar-adapter] %s peer %s frame calls stopped: %s took %lld ms twice\n",
+    wall_clock_hms_ms().c_str(), peer_label_.c_str(), call, static_cast<long long>(took.count()));
+  std::fflush(stderr);
+}
+
+bool QarCApiRenderSenderAdapter::frame_calls_blocked()
+{
+  return breaker_->blocked();
+}
+
+void QarCApiRenderSenderAdapter::note_frame_call(
+  const char * call, std::chrono::steady_clock::time_point started)
+{
+  breaker_->note(call, started);
 }
 
 std::string QarCApiRenderSenderAdapter::frame_trace_path() const
 {
+  if (core_ != nullptr) { return core_->trace_path; }
   return frame_trace_ ? frame_trace_->path() : std::string();
 }
 
 std::uint64_t QarCApiRenderSenderAdapter::frame_trace_rows() const
 {
+  if (core_ != nullptr) { return core_->trace_rows.load(); }
   return frame_trace_ ? frame_trace_->rows_written() : 0;
 }
 
 std::uint64_t QarCApiRenderSenderAdapter::frame_trace_changed_rows() const
 {
+  if (core_ != nullptr) { return core_->trace_changed_rows.load(); }
   return frame_trace_ ? frame_trace_->changed_rows() : 0;
 }
 
 bool QarCApiRenderSenderAdapter::begin_frame(qar_ogre_streaming::QarFrameInfo & out_info)
 {
+  if (core_ != nullptr) {
+    return begin_frame_on_worker(out_info);
+  }
   out_info = qar_ogre_streaming::QarFrameInfo{};
   out_info.should_render = false;
   last_skip_detail_.clear();
   if (stream_ == nullptr) {
     last_skip_detail_ = "no QAR render-stream handle";
     return false;
+  }
+  if (frame_calls_blocked()) {
+    last_skip_detail_ = "frame calls stopped: a frame call blocked";
+    return true;
   }
 
   QarRenderFrameInfo * info = nullptr;
@@ -841,10 +2099,32 @@ bool QarCApiRenderSenderAdapter::begin_frame(qar_ogre_streaming::QarFrameInfo & 
     if (tbf_trace) { trace_msg("begin_frame: -> try_begin_frame"); }
     if (frame_trace_) { frame_trace_->note_try_begin_frame_call(/*from_prime=*/false); }
     const std::int64_t poll_start_us = timing_ ? qar_ar_core::timing_epoch_us() : 0;
+    const std::chrono::steady_clock::time_point call_start = std::chrono::steady_clock::now();
     const QarResult r = QAR_CALL(qar_render_sender_try_begin_frame, stream_, &info, &ready);
+    note_frame_call("try_begin_frame", call_start);
     if (timing_) { timing_->note_poll_call(poll_start_us); }
+    if (breaker_->tripped()) {
+      // This call paused the frame calls (again): the rest of the frame waits for the next probe.
+      if (info != nullptr) { QAR_CALL(qar_render_frame_info_handle_destroy, info); }
+      last_skip_detail_ = "frame calls stopped: a frame call blocked";
+      return true;
+    }
     if (tbf_trace) { trace_msg(ready ? "begin_frame: <- try_begin_frame (ready)"
                                       : "begin_frame: <- try_begin_frame (pending)"); }
+    {
+      const std::chrono::steady_clock::time_point answered = std::chrono::steady_clock::now();
+      const RenderRecycleWatch::Answer answer = qar_result_is_error(r)
+        ? recycle_answer_of(r)
+        : (ready && info != nullptr ? RenderRecycleWatch::Answer::kBegan
+                                    : RenderRecycleWatch::Answer::kNotReady);
+      if (!closed_.load() &&
+        recycle_watch_.note(answer, static_cast<int>(r.code), answered))
+      {
+        print_recycle_line(peer_label_, recycle_watch_, answered);
+        recycled_.store(true);
+        closed_.store(true);
+      }
+    }
     if (qar_result_is_error(r)) {
       if (info != nullptr) { QAR_CALL(qar_render_frame_info_handle_destroy, info); }
       // Two answers mean "not yet", not a failure of the sender: the app volume is not resolved
@@ -957,66 +2237,12 @@ bool QarCApiRenderSenderAdapter::begin_frame(qar_ogre_streaming::QarFrameInfo & 
 
 void QarCApiRenderSenderAdapter::publish_pointing_ray(const QarPose & eye_pose)
 {
-  if (!pointing_ray_slot_ || stream_ == nullptr) {
+  if (!pointing_ray_slot_ || stream_ == nullptr || frame_calls_blocked()) {
     return;
   }
-  // Drain the device's hand stream. Documented as "returns the last sample, or
-  // both hands untracked when nothing arrived since the previous call" -- so a
-  // failure and an empty drain are the same thing to us, an invalid ray, and
-  // publishing that invalid ray is how "the hands went away" reaches the
-  // picker instead of a stale aim.
-  QarDeviceHandsWithJoints hands = qar_device_hand_with_joints_default();
-  const QarResult hands_result = QAR_CALL(qar_render_sender_last_hands, stream_, &hands);
-
-  qar_ar_core::PointingRayInputs inputs;
-  if (!qar_result_is_error(hands_result)) {
-    inputs = qar_ar_core::pointing_ray_inputs_from_hands(
-      hands, QAR_HANDEDNESS_RIGHT, qar_ar_core::HandRayJoint::IndexTip);
-  }
-  inputs.has_eye = true;
-  inputs.eye_position = eye_pose.position;
-  inputs.timestamp_s = static_cast<double>(hands.device_timestamp.unix_ns) * 1e-9;
-
-  // The hand itself, published WITH the ray it produced. The ray says where the
-  // operator is aiming; the probe says where their hand is, and only the second
-  // one can test the vendor's claim that a gesture's action_point is a scene
-  // intersection rather than the hand. Same poll, same frame, one publish -- a
-  // consumer must never pair this frame's ray with another frame's hand.
-  qar_ar_core::HandJointsProbe probe;
-  if (!qar_result_is_error(hands_result)) {
-    probe = qar_ar_core::hand_joints_probe_from(hands);
-  }
-  probe.has_eye = true;
-  probe.eye_position = eye_pose.position;
-  probe.timestamp_s = inputs.timestamp_s;
-
-  const qar_ar_core::PointingRay ray = qar_ar_core::pointing_ray_from(inputs);
-  pointing_ray_slot_->publish(ray, probe);
-
-  // One line each way, ever. The question the log has to answer is simply
-  // "does this device send hands?", and that is a one-shot fact.
-  if (ray.valid && !logged_hands_tracked_) {
-    logged_hands_tracked_ = true;
-    std::fprintf(
-      stderr,
-      "[qar-adapter] hands: the device IS sending hand joints - AR pointing ray is live "
-      "(%s, %s of the %s hand). origin=(%.3f, %.3f, %.3f) dir=(%.3f, %.3f, %.3f) room\n",
-      qar_ar_core::to_string(ray.kind), qar_ar_core::to_string(ray.joint),
-      ray.hand == QAR_HANDEDNESS_LEFT ? "left" : "right",
-      static_cast<double>(ray.origin.x), static_cast<double>(ray.origin.y),
-      static_cast<double>(ray.origin.z), static_cast<double>(ray.direction.x),
-      static_cast<double>(ray.direction.y), static_cast<double>(ray.direction.z));
-    std::fflush(stderr);
-  } else if (!ray.valid && !logged_hands_missing_) {
-    logged_hands_missing_ = true;
-    std::fprintf(
-      stderr,
-      "[qar-adapter] hands: no AR pointing ray yet - %s (qar_render_sender_last_hands "
-      "code=%d). Plane pick targets fall back to projecting the reported action "
-      "point onto the plane.\n",
-      ray.error.c_str(), static_cast<int>(hands_result.code));
-    std::fflush(stderr);
-  }
+  publish_ray(
+    *pointing_ray_slot_, stream_, eye_pose, *breaker_, logged_hands_tracked_,
+    logged_hands_missing_);
 }
 
 void QarCApiRenderSenderAdapter::fill_frame_layout(
@@ -1073,7 +2299,10 @@ void QarCApiRenderSenderAdapter::fill_frame_layout(
 bool QarCApiRenderSenderAdapter::submit_opengl_stereo_frame(
   const qar_ogre_streaming::QarOpenGlStereoFrame & frame)
 {
-  if (stream_ == nullptr) { return false; }
+  if (core_ != nullptr) {
+    return submit_on_worker(frame);
+  }
+  if (stream_ == nullptr || frame_calls_blocked()) { return false; }
 
   static unsigned long submit_n = 0;
   const unsigned long n = ++submit_n;
@@ -1096,14 +2325,20 @@ bool QarCApiRenderSenderAdapter::submit_opengl_stereo_frame(
 #ifdef _WIN32
     // Our Ogre rendering must be COMPLETE before QAR samples these ids from its own
     // context — otherwise it reads textures we have not finished writing.
-    gl_finish_current_thread();
+    gl_finish_timed();
 #endif
     trace_submit(n, "-> frame_opengl (supply-own)");
+    const std::chrono::steady_clock::time_point frame_start = std::chrono::steady_clock::now();
     const QarResult fr = QAR_CALL(qar_render_sender_frame_opengl, stream_, &gl);
+    note_frame_call("frame_opengl", frame_start);
     trace_submit(n, "<- frame_opengl (supply-own)");
     if (qar_result_is_error(fr)) {
       // Abandoned before show_frame: release the trace's kept-alive handle (if any)
       // without writing a row for it — see FrameTraceState::abandon_row().
+      if (frame_trace_) { frame_trace_->abandon_row(); }
+      return false;
+    }
+    if (breaker_->tripped()) {
       if (frame_trace_) { frame_trace_->abandon_row(); }
       return false;
     }
@@ -1113,9 +2348,11 @@ bool QarCApiRenderSenderAdapter::submit_opengl_stereo_frame(
     // color/depth INTO those ids before show_frame (see GlSubmitMode).
     fill_frame_layout(gl, frame, /*supply_ids=*/false);
     trace_submit(n, "-> frame_opengl (render-into)");
+    const std::chrono::steady_clock::time_point frame_start = std::chrono::steady_clock::now();
     const QarResult fr = QAR_CALL(qar_render_sender_frame_opengl, stream_, &gl);
+    note_frame_call("frame_opengl", frame_start);
     trace_submit(n, "<- frame_opengl (render-into)");
-    if (qar_result_is_error(fr)) {
+    if (qar_result_is_error(fr) || breaker_->tripped()) {
       if (frame_trace_) { frame_trace_->abandon_row(); }
       return false;
     }
@@ -1123,7 +2360,10 @@ bool QarCApiRenderSenderAdapter::submit_opengl_stereo_frame(
     // Ogre color/depth into them. WITHOUT this the frames are delivered perfectly
     // but arrive black — QAR's textures were simply never written.
     if (copy_hook_) {
-      if (!copy_hook_->copy_frame_into(frame, gl)) {
+      const std::chrono::steady_clock::time_point copy_start = std::chrono::steady_clock::now();
+      const bool copied = copy_hook_->copy_frame_into(frame, gl);
+      note_gl_step("copy-into-qar", copy_start);
+      if (!copied) {
         if (frame_trace_) { frame_trace_->abandon_row(); }
         return false;
       }
@@ -1131,7 +2371,7 @@ bool QarCApiRenderSenderAdapter::submit_opengl_stereo_frame(
       // The copy must be COMPLETE before QAR consumes these textures from its own
       // context: shared-object writes become visible to another context only after
       // the writing context flushes (GL spec, Appendix D).
-      gl_finish_current_thread();
+      gl_finish_timed();
 #endif
     } else if (!warned_no_copy_hook_) {
       warned_no_copy_hook_ = true;
@@ -1152,7 +2392,9 @@ bool QarCApiRenderSenderAdapter::submit_opengl_stereo_frame(
   if (frame_trace_) { frame_trace_->note_pre_show(); }
 
   trace_submit(n, "-> show_frame");
+  const std::chrono::steady_clock::time_point show_start = std::chrono::steady_clock::now();
   const QarResult sr = QAR_CALL(qar_render_sender_show_frame, stream_, &show);
+  note_frame_call("show_frame", show_start);
   trace_submit(n, "<- show_frame");
   const bool show_ok = qar_result_is_success(sr);
   submit_timing.show_returned(show_ok);
@@ -1183,22 +2425,7 @@ bool QarCApiRenderSenderAdapter::submit_opengl_stereo_frame(
 
 void QarCApiRenderSenderAdapter::note_first_show(const QarVideoFrameOpenGl & gl)
 {
-  // The texture ids as the frame was shown with them: in render-into mode the runtime's own
-  // destination textures, which is what the receiving side reads.
-  SenderTextureIds ids;
-  const std::size_t count = gl.textures_count;
-  ids.colour[0] = count > 0 ? gl.textures[0].texture : 0u;
-  ids.colour[1] = count > 1 ? gl.textures[1].texture : 0u;
-  ids.depth[0] = count > 2 ? gl.textures[2].texture : 0u;
-  ids.depth[1] = count > 3 ? gl.textures[3].texture : 0u;
-  if (count > 0) {
-    ids.width = gl.textures[0].size.width;
-    ids.height = gl.textures[0].size.height;
-  }
-  std::fprintf(
-    stderr, "[qar-adapter] %s %s\n", wall_clock_hms_ms().c_str(),
-    format_first_show_line(peer_label_, thread_number(), ids).c_str());
-  std::fflush(stderr);
+  print_first_show_line(peer_label_, gl);
 }
 
 void QarCApiRenderSenderAdapter::probe_after_stall(
@@ -1211,7 +2438,9 @@ void QarCApiRenderSenderAdapter::probe_after_stall(
   // The one read-back of the colour of the first frame after a stall; the hook owns the GL
   // calls. A stream without a hook (or one that cannot read textures back) says so in the line.
   float rgb[3] = {0.0f, 0.0f, 0.0f};
+  const std::chrono::steady_clock::time_point probe_start = std::chrono::steady_clock::now();
   const bool have_colour = copy_hook_ && copy_hook_->mean_left_colour(frame, rgb);
+  note_gl_step("readback-probe", probe_start);
   std::fprintf(
     stderr, "[qar-adapter] %s %s\n", wall_clock_hms_ms().c_str(),
     format_stall_line(report, have_colour, rgb).c_str());
@@ -1220,7 +2449,7 @@ void QarCApiRenderSenderAdapter::probe_after_stall(
 
 void QarCApiRenderSenderAdapter::prime_next_frame()
 {
-  if (stream_ == nullptr || primed_info_ != nullptr) {
+  if (stream_ == nullptr || primed_info_ != nullptr || frame_calls_blocked()) {
     return;
   }
   QarRenderFrameInfo * info = nullptr;
@@ -1229,8 +2458,14 @@ void QarCApiRenderSenderAdapter::prime_next_frame()
   // immediately is a bonus. Non-blocking either way, so it is safe on this thread.
   if (frame_trace_) { frame_trace_->note_try_begin_frame_call(/*from_prime=*/true); }
   const std::int64_t poll_start_us = timing_ ? qar_ar_core::timing_epoch_us() : 0;
+  const std::chrono::steady_clock::time_point call_start = std::chrono::steady_clock::now();
   const QarResult r = QAR_CALL(qar_render_sender_try_begin_frame, stream_, &info, &ready);
+  note_frame_call("try_begin_frame", call_start);
   if (timing_) { timing_->note_poll_call(poll_start_us); }
+  if (breaker_->tripped()) {
+    if (info != nullptr) { QAR_CALL(qar_render_frame_info_handle_destroy, info); }
+    return;
+  }
   if (qar_result_is_error(r)) {
     if (qar_result_has_code(r, QAR_STATUS_RENDERING_PRODUCER_STREAM_IS_CLOSED)) {
       closed_.store(true);
@@ -1247,6 +2482,11 @@ void QarCApiRenderSenderAdapter::prime_next_frame()
     // primed fast path in begin_frame()) is a later, separate call.
     if (frame_trace_) { frame_trace_->note_ready(/*is_prime_call=*/true, info); }
     primed_info_ = info;
+    // A frame that begins here is a frame the runtime asked for, as one that begin_frame() polls.
+    if (!closed_.load()) {
+      recycle_watch_.note(
+        RenderRecycleWatch::Answer::kBegan, 0, std::chrono::steady_clock::now());
+    }
   } else if (info != nullptr) {
     QAR_CALL(qar_render_frame_info_handle_destroy, info);
   }
@@ -1274,9 +2514,28 @@ namespace
 class GlBlitCopyHook : public IQarGlTextureCopyHook
 {
 public:
+  GlBlitCopyHook() = default;
+
+  /// A hook on the GL entry points of @p api instead of those of the process.
+  explicit GlBlitCopyHook(const GlBlitApi & api) : injected_(api), has_injected_(true) {}
+
   bool copy_frame_into(
     const qar_ogre_streaming::QarOpenGlStereoFrame & src,
     const QarVideoFrameOpenGl & dst) override
+  {
+    return copy(src, dst, /*worker_path=*/false);
+  }
+
+  bool copy_frame_into_quiet(
+    const qar_ogre_streaming::QarOpenGlStereoFrame & src,
+    const QarVideoFrameOpenGl & dst) override
+  {
+    return copy(src, dst, /*worker_path=*/true);
+  }
+
+  bool copy(
+    const qar_ogre_streaming::QarOpenGlStereoFrame & src,
+    const QarVideoFrameOpenGl & dst, bool worker_path)
   {
     if (!resolve()) { return false; }
 
@@ -1310,8 +2569,7 @@ public:
       const unsigned int sw = s->size.width, sh = s->size.height;
       const unsigned int dw = dst.textures[i].size.width, dh = dst.textures[i].size.height;
       if (sw == 0u || sh == 0u || dw == 0u || dh == 0u) { continue; }
-      if ((sw != dw || sh != dh) && !warned_size_) {
-        warned_size_ = true;
+      if ((sw != dw || sh != dh) && !warned_size_.exchange(true)) {
         std::fprintf(stderr,
           "[qar-adapter] size differs view=%zu ours=%ux%u QAR=%ux%u — blit rescales.\n",
           i, sw, sh, dw, dh);
@@ -1332,8 +2590,7 @@ public:
 
       if (rs != kFramebufferComplete || ds != kFramebufferComplete) {
         all_ok = false;
-        if (!reported_[i]) {
-          reported_[i] = true;  // per-view: a depth-only failure must not be masked
+        if (!reported_[i].exchange(true)) {  // per-view: a depth-only failure must not be masked
           std::fprintf(stderr,
             "[qar-adapter] FBO incomplete view=%zu read=0x%04X draw=0x%04X "
             "src=%u(%ux%u layers=%u) dst=%u(%ux%u layers=%u layer=%u fmt=%d)\n",
@@ -1353,6 +2610,8 @@ public:
       // set QAR_ADAPTER_FLIP_Y=1 to flip during the blit (no rebuild needed).
       const int dy0 = flip_y_ ? static_cast<int>(dh) : 0;
       const int dy1 = flip_y_ ? 0 : static_cast<int>(dh);
+      // What the attach left in the error queue must not read as a failure of the blit.
+      drain_errors();
       blit_framebuffer_(
         0, 0, static_cast<int>(sw), static_cast<int>(sh),
         0, dy0, static_cast<int>(dw), dy1,
@@ -1361,8 +2620,7 @@ public:
       const unsigned int err = (get_error_ != nullptr) ? get_error_() : 0u;
       if (err != 0u) {
         all_ok = false;
-        if (!reported_[i]) {
-          reported_[i] = true;  // per-view, once: colour must not mask depth
+        if (!reported_[i].exchange(true)) {  // per-view, once: colour must not mask depth
           std::fprintf(stderr,
             "[qar-adapter] glBlitFramebuffer FAILED err=0x%04X view=%zu "
             "src=%u tgt=0x%04X (%ux%u) dst=%u tgt=0x%04X (%ux%u)\n",
@@ -1383,8 +2641,8 @@ public:
     // pose (origin, grid edge-on, markers out of shot) — useless for judging depth.
     // Later samples land after the operator has navigated to the view they are judging.
     ++probe_frames_;
-    const bool probe_now = (probe_frames_ == 1) ||
-      (probe_every_ > 0 && probes_done_ < kMaxProbes && (probe_frames_ % probe_every_) == 0);
+    const bool probe_now = copy_probe_due(
+      worker_path, probe_frames_, probe_every_, probe_every_set_, probes_done_, kMaxProbes);
     if (probe_now) {
       ++probes_done_;
       std::fprintf(stderr, "[qar-adapter] ---- probe #%u at frame %lu ----\n",
@@ -1481,6 +2739,18 @@ public:
     return mean_rgba8(pixels.data(), w, h, kColourReadStep, rgb);
   }
 
+  /// The textures of a new sender get names that GL may have given to textures of another kind
+  /// before: the cache of the kinds is dropped, and the one-shot lines are due again.
+  void forget_texture_targets() override
+  {
+    {
+      std::lock_guard<std::mutex> lock(target_mutex_);
+      target_cache_count_ = 0;
+    }
+    for (std::atomic<bool> & reported : reported_) { reported.store(false); }
+    warned_size_.store(false);
+  }
+
 private:
   // GL enums, spelled out so this file needs no GL headers.
   static constexpr unsigned int kTexture2D = 0x0DE1;
@@ -1490,6 +2760,7 @@ private:
   static constexpr unsigned int kDrawFramebufferBinding = 0x8CA6;
   static constexpr unsigned int kColorAttachment0 = 0x8CE0;
   static constexpr unsigned int kFramebufferComplete = 0x8CD5;
+  static constexpr unsigned int kFramebufferMissingAttachment = 0x8CD7;
   static constexpr unsigned int kColorBufferBit = 0x00004000;
   static constexpr unsigned int kNearest = 0x2600;
   static constexpr unsigned int kLinear = 0x2601;
@@ -1660,8 +2931,12 @@ private:
   /// with GL_INVALID_OPERATION — so we ask GL what the object really is instead.
   unsigned int detect_target(unsigned int id)
   {
-    for (const auto & e : target_cache_) {
-      if (e.id == id) { return e.target; }
+    {
+      // The render thread copies and, after a stall, a frame worker reads a colour back.
+      std::lock_guard<std::mutex> lock(target_mutex_);
+      for (std::size_t i = 0; i < target_cache_count_; ++i) {
+        if (target_cache_[i].id == id) { return target_cache_[i].target; }
+      }
     }
     unsigned int found = kTexture2D;
     if (bind_texture_ != nullptr && get_error_ != nullptr) {
@@ -1676,42 +2951,102 @@ private:
         if (ok) { found = t; break; }
       }
     }
+    std::lock_guard<std::mutex> lock(target_mutex_);
     if (target_cache_count_ < kTargetCacheMax) {
       target_cache_[target_cache_count_++] = {id, found};
     }
     return found;
   }
 
+  /// Empties the error queue of GL, so that what is read afterwards is the error of the next call.
+  void drain_errors()
+  {
+    if (get_error_ == nullptr) { return; }
+    for (int guard = 0; guard < 32 && get_error_() != 0u; ++guard) {}
+  }
+
+  /// Stores @p target as the kind of the texture @p id, replacing what the cache held.
+  void remember_target(unsigned int id, unsigned int target)
+  {
+    std::lock_guard<std::mutex> lock(target_mutex_);
+    for (std::size_t i = 0; i < target_cache_count_; ++i) {
+      if (target_cache_[i].id == id) {
+        target_cache_[i].target = target;
+        return;
+      }
+    }
+    if (target_cache_count_ < kTargetCacheMax) {
+      target_cache_[target_cache_count_++] = {id, target};
+    }
+  }
+
   /// Attach @p tex to @p fb_target's colour attachment using the form its REAL target
   /// requires, and return the resulting framebuffer status. Array textures must be
   /// attached one layer at a time (non-layered) for glBlitFramebuffer to accept them.
+  ///
+  /// The kind of a texture is cached per name, and GL reuses the names of destroyed textures, so
+  /// the cached kind may be wrong. A form that does not fit raises GL_INVALID_OPERATION and leaves
+  /// the attachment as it was, so the attachment is cleared first: a rejected form must leave the
+  /// framebuffer incomplete and never the texture of the view before. The error is read after every
+  /// attempt and drained (it would otherwise be read as the error of the blit); a rejected form
+  /// does not count as attached, and the form that completes the framebuffer replaces the cached
+  /// kind.
   unsigned int attach(unsigned int fb_target, unsigned int tex, unsigned int layer_index)
   {
     const unsigned int target = detect_target(tex);
-    if (target == kTexture2DArray && framebuffer_texture_layer_ != nullptr) {
+    const bool layered_first = target == kTexture2DArray && framebuffer_texture_layer_ != nullptr;
+    framebuffer_texture_2d_(fb_target, kColorAttachment0, kTexture2D, 0u, 0);
+    drain_errors();
+    // The status of the framebuffer after one attempt; a rejected form is reported as incomplete.
+    const auto attempted = [&]() {
+        const bool rejected = get_error_ != nullptr && get_error_() != 0u;
+        drain_errors();
+        const unsigned int st = check_framebuffer_status_(fb_target);
+        return (rejected && st == kFramebufferComplete) ? kFramebufferMissingAttachment : st;
+      };
+    if (layered_first) {
       framebuffer_texture_layer_(fb_target, kColorAttachment0, tex, 0,
         static_cast<int>(layer_index));
     } else {
       framebuffer_texture_2d_(fb_target, kColorAttachment0, target, tex, 0);
     }
-    unsigned int st = check_framebuffer_status_(fb_target);
+    unsigned int st = attempted();
     if (st == kFramebufferComplete) { return st; }
 
-    // Fallbacks, in case the target probe was fooled.
-    if (framebuffer_texture_layer_ != nullptr) {
+    // Fallbacks, in case the cached kind is not the real one.
+    if (!layered_first && framebuffer_texture_layer_ != nullptr) {
       framebuffer_texture_layer_(fb_target, kColorAttachment0, tex, 0,
         static_cast<int>(layer_index));
-      st = check_framebuffer_status_(fb_target);
-      if (st == kFramebufferComplete) { return st; }
+      st = attempted();
+      if (st == kFramebufferComplete) {
+        remember_target(tex, kTexture2DArray);
+        return st;
+      }
     }
-    framebuffer_texture_2d_(fb_target, kColorAttachment0, kTexture2D, tex, 0);
-    return check_framebuffer_status_(fb_target);
+    if (target != kTexture2D) {
+      framebuffer_texture_2d_(fb_target, kColorAttachment0, kTexture2D, tex, 0);
+      st = attempted();
+      if (st == kFramebufferComplete) { remember_target(tex, kTexture2D); }
+    }
+    return st;
   }
 
   bool resolve()
   {
     if (resolved_) { return ready_; }
     resolved_ = true;
+    if (has_injected_) {
+      gen_framebuffers_ = injected_.gen_framebuffers;
+      bind_framebuffer_ = injected_.bind_framebuffer;
+      framebuffer_texture_2d_ = injected_.framebuffer_texture_2d;
+      framebuffer_texture_layer_ = injected_.framebuffer_texture_layer;
+      blit_framebuffer_ = injected_.blit_framebuffer;
+      check_framebuffer_status_ = injected_.check_framebuffer_status;
+      get_error_ = injected_.get_error;
+      get_integerv_ = injected_.get_integerv;
+      bind_texture_ = injected_.bind_texture;
+      return finish_resolve();
+    }
     const WglApi & w = wgl();
 
     // The framebuffer-object entry points are GL 3.0+, so they come from
@@ -1748,7 +3083,12 @@ private:
       get_tex_image_ = reinterpret_cast<PfnGetTexImage>(
         reinterpret_cast<void *>(::GetProcAddress(w.module, "glGetTexImage")));
     }
+    return finish_resolve();
+  }
 
+  /// The last step of resolve(): checks the entry points and makes the two framebuffers.
+  bool finish_resolve()
+  {
     ready_ = gen_framebuffers_ != nullptr && bind_framebuffer_ != nullptr &&
       framebuffer_texture_2d_ != nullptr && blit_framebuffer_ != nullptr &&
       check_framebuffer_status_ != nullptr;
@@ -1769,6 +3109,7 @@ private:
     if (environment_is_set("QAR_ADAPTER_PROBE_EVERY")) {
       const long v = std::strtol(probe_every.c_str(), nullptr, 10);
       probe_every_ = (v > 0) ? static_cast<unsigned int>(v) : 0u;
+      probe_every_set_ = true;
     }
     ready_ = src_fbo_ != 0u && dst_fbo_ != 0u;
     return ready_;
@@ -1813,14 +3154,19 @@ private:
   struct TargetEntry { unsigned int id; unsigned int target; };
   TargetEntry target_cache_[kTargetCacheMax]{};
   std::size_t target_cache_count_ = 0;
+  std::mutex target_mutex_;
 
   unsigned int src_fbo_ = 0u;
   unsigned int dst_fbo_ = 0u;
   bool flip_y_ = false;
   bool ready_ = false;
   bool resolved_ = false;
-  bool reported_[4]{};  ///< per-view one-shot error guard (colour must not mask depth)
-  bool warned_size_ = false;
+  /// Per-view one-shot error guard (colour must not mask depth). forget_texture_targets() clears
+  /// it from any thread.
+  std::atomic<bool> reported_[4]{};
+  std::atomic<bool> warned_size_{false};
+  GlBlitApi injected_;
+  bool has_injected_ = false;
 
   // Periodic probing. Frame 1 is always sampled; after that every probe_every_ frames
   // (QAR_ADAPTER_PROBE_EVERY, default 600 ~= 10 s at 60 fps), up to kMaxProbes.
@@ -1828,6 +3174,8 @@ private:
   unsigned long probe_frames_ = 0;
   unsigned int probes_done_ = 0;
   unsigned int probe_every_ = 600;
+  /// QAR_ADAPTER_PROBE_EVERY was set: the copy of a worker sender probes too.
+  bool probe_every_set_ = false;
 };
 #endif  // _WIN32
 }  // namespace
@@ -1841,13 +3189,234 @@ std::shared_ptr<IQarGlTextureCopyHook> make_gl_copy_image_hook()
 #endif
 }
 
+std::shared_ptr<IQarGlTextureCopyHook> make_gl_copy_image_hook_with_api(const GlBlitApi & api)
+{
+#ifdef _WIN32
+  return std::make_shared<GlBlitCopyHook>(api);
+#else
+  (void)api;
+  return nullptr;
+#endif
+}
+
 // ===========================================================================
 //  QarCApiSenderFactory
 // ===========================================================================
+bool default_stream_release_on_owner()
+{
+  static const bool on_owner = [] {
+      std::string value = read_environment("QAR_ADAPTER_STREAM_RELEASE");
+      std::transform(value.begin(), value.end(), value.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+      return value != "gui";
+    }();
+  return on_owner;
+}
+
+bool default_frame_calls_on_worker()
+{
+  static const bool on_worker = [] {
+      std::string value = read_environment("QAR_FRAME_CALLS");
+      std::transform(value.begin(), value.end(), value.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+      if (value.empty() || value == "worker") {
+        return true;
+      }
+      if (value != "gui") {
+        std::fprintf(
+          stderr, "[qar-adapter] QAR_FRAME_CALLS='%s' is neither worker nor gui; the frame calls "
+          "run on one worker thread per sender\n", value.c_str());
+        std::fflush(stderr);
+        return true;
+      }
+      return false;
+    }();
+  return on_worker;
+}
+
+bool default_frame_fence_on_worker()
+{
+  static const bool on_worker = [] {
+      std::string value = read_environment("QAR_FRAME_FENCE");
+      std::transform(value.begin(), value.end(), value.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+      if (value.empty() || value == "worker") {
+        return true;
+      }
+      if (value != "gui") {
+        std::fprintf(
+          stderr, "[qar-adapter] QAR_FRAME_FENCE='%s' is neither worker nor gui; the GL fence "
+          "waits run on the frame worker of each sender\n", value.c_str());
+        std::fflush(stderr);
+        return true;
+      }
+      return false;
+    }();
+  return on_worker;
+}
+
+bool copy_probe_due(
+  bool worker_path, unsigned long frame, unsigned int every, bool every_was_set,
+  unsigned int probes_done, unsigned int max_probes)
+{
+  if (worker_path && !every_was_set) {
+    return false;
+  }
+  return frame == 1 || (every > 0 && probes_done < max_probes && (frame % every) == 0);
+}
+
+namespace
+{
+
+using GlContextList = std::vector<std::unique_ptr<QarCApiSenderFactory::GlSenderContext>>;
+
+// The WGL contexts of a factory that ended. The senders of the factory use them until the thread
+// that owns the QarOS session has destroyed their streams, so they are kept here with a flag and
+// are deleted by delete_released_gl_contexts() once it is set. A context with a stream of its own
+// has its own flag, which the release of that stream sets; the others (no stream was made for
+// them) share one flag that a lane item sets behind everything the lane was given. An entry whose
+// flag is never set (the lane refused, or a frame worker never returned) is never deleted.
+struct GlGraveyardEntry
+{
+  std::shared_ptr<std::atomic<bool>> released;
+  GlContextList contexts;
+};
+
+std::mutex & graveyard_mutex()
+{
+  static std::mutex mutex;
+  return mutex;
+}
+
+std::vector<GlGraveyardEntry> & graveyard()
+{
+  static std::vector<GlGraveyardEntry> entries;
+  return entries;
+}
+
+void (*& gl_context_deleter())(void *)
+{
+  static void (* deleter)(void *) = nullptr;
+  return deleter;
+}
+
+void delete_gl_context(void * context)
+{
+#ifdef _WIN32
+  const WglApi & w = wgl();
+  if (context != nullptr && w.DeleteContext != nullptr) {
+    w.DeleteContext(static_cast<HGLRC>(context));
+  }
+#else
+  (void)context;
+#endif
+}
+
+}  // namespace
+
 QarCApiSenderFactory::QarCApiSenderFactory(
   std::shared_ptr<QarSessionOwner> owner, const Config & config)
 : config_(config), owner_(owner), shared_(std::make_shared<CrossThread>())
 {
+  std::fprintf(
+    stderr, config_.frame_calls_on_worker ?
+    "[qar-adapter] frame calls run on one worker thread per sender (QAR_FRAME_CALLS=worker)\n" :
+    "[qar-adapter] frame calls run on the GUI thread (QAR_FRAME_CALLS=gui)\n");
+  std::fprintf(
+    stderr, config_.frame_fence_on_worker ?
+    "[qar-adapter] GL fence waits run on the frame worker of each sender "
+    "(QAR_FRAME_FENCE=worker)\n" :
+    "[qar-adapter] GL fence waits run on the GUI thread (QAR_FRAME_FENCE=gui)\n");
+  std::fprintf(stderr, "%s\n", gpu_gate_banner(config_.gpu_gate, config_.gpu_gate_timings).c_str());
+  std::fflush(stderr);
+  gpu_watch_ = std::make_shared<GpuProgressWatch>(
+    config_.gl_fence_ops, config_.gpu_gate, config_.gpu_gate_timings,
+    config_.gpu_gate_test_seconds);
+}
+
+std::shared_ptr<IReleaseLane> QarCApiSenderFactory::release_lane() const
+{
+  const std::shared_ptr<QarSessionOwner> owner = owner_.lock();
+  return owner != nullptr ? owner->release_lane() : nullptr;
+}
+
+std::shared_ptr<IReleaseLane> QarCApiSenderFactory::stream_lane()
+{
+  if (!config_.stream_release_on_owner) {
+    return nullptr;
+  }
+  if (!lane_fetched_) {
+    lane_ = release_lane();
+    lane_fetched_ = true;
+  }
+  return lane_;
+}
+
+int QarCApiSenderFactory::create_attempt(const QarPeerId & peer_id) const
+{
+  std::lock_guard<std::mutex> lk(mutex_);
+  for (const CreateRetry & retry : retries_) {
+    if (peer_eq(retry.peer_id, peer_id)) {
+      return retry.started;
+    }
+  }
+  return 0;
+}
+
+bool QarCApiSenderFactory::create_given_up(const QarPeerId & peer_id) const
+{
+  std::lock_guard<std::mutex> lk(mutex_);
+  for (const CreateRetry & retry : retries_) {
+    if (peer_eq(retry.peer_id, peer_id)) {
+      return retry.given_up;
+    }
+  }
+  return false;
+}
+
+bool QarCApiSenderFactory::frame_calls_stopped(const QarPeerId & peer_id) const
+{
+  std::lock_guard<std::mutex> lk(mutex_);
+  for (const PeerAdapter & entry : adapters_) {
+    if (peer_eq(entry.peer_id, peer_id)) {
+      const std::shared_ptr<QarCApiRenderSenderAdapter> adapter = entry.adapter.lock();
+      return adapter != nullptr && adapter->frame_calls_stopped();
+    }
+  }
+  return false;
+}
+
+void QarCApiSenderFactory::set_gl_context_deleter(void (* deleter)(void * context))
+{
+  std::lock_guard<std::mutex> lk(graveyard_mutex());
+  gl_context_deleter() = deleter;
+}
+
+void QarCApiSenderFactory::delete_released_gl_contexts()
+{
+  std::vector<GlContextList> ready;
+  void (* deleter)(void *) = nullptr;
+  {
+    std::lock_guard<std::mutex> lk(graveyard_mutex());
+    std::vector<GlGraveyardEntry> & entries = graveyard();
+    for (auto it = entries.begin(); it != entries.end();) {
+      if (it->released->load()) {
+        ready.push_back(std::move(it->contexts));
+        it = entries.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    deleter = gl_context_deleter() != nullptr ? gl_context_deleter() : &delete_gl_context;
+  }
+  for (GlContextList & contexts : ready) {
+    for (auto & ctx : contexts) {
+      if (ctx != nullptr && ctx->context != nullptr) {
+        deleter(ctx->context);
+        ctx->context = nullptr;
+      }
+    }
+  }
 }
 
 // What the thread that owns the session and the consumer thread share. The consumer thread reads
@@ -1895,7 +3464,38 @@ struct QarCApiSenderFactory::CrossThread
   // The update subscription. Owner thread only.
   QarCancelToken * token = nullptr;
   PlacementSubscription * subscription = nullptr;
+
+  // The render request subscription (diagnostics). Token and subscription: owner thread only.
+  QarCancelToken * request_token = nullptr;
+  RequestSubscription * request_subscription = nullptr;
+  /// What the callback saw and what our own senders are; guarded by request_mutex, which no
+  /// QarOS call and no I/O is made under.
+  struct SeenRequest
+  {
+    std::string peer8;
+    std::string stream8;
+    Clock::time_point seen_at{};
+  };
+  std::mutex request_mutex;
+  std::vector<SeenRequest> requests_unlogged;
+  std::vector<std::string> requests_logged;  ///< "<peer8>/<stream8>" of each line printed.
+  /// The pairs printed as "unknown" (our own id was not read yet): printed again with the verdict
+  /// once it is.
+  std::vector<std::string> requests_unknown;
+  std::map<std::string, std::string> our_streams;  ///< peer8 -> stream8 of our sender.
 };
+
+/// The first eight hex digits of an id: the start of the UUID text that the runtime logs.
+static std::string id_first8(const std::uint8_t (& data)[QAR_MAX_ID_LENGTH])
+{
+  static const char kHex[] = "0123456789abcdef";
+  std::string out;
+  for (std::size_t i = 0; i < 4; ++i) {
+    out.push_back(kHex[(data[i] >> 4) & 0x0F]);
+    out.push_back(kHex[data[i] & 0x0F]);
+  }
+  return out;
+}
 
 /// What the runtime's update callback needs. Heap-allocated for the life of the subscription: the
 /// runtime may call back until the token is cancelled.
@@ -1903,6 +3503,12 @@ struct QarCApiSenderFactory::PlacementSubscription
 {
   std::shared_ptr<CrossThread> shared;
   QarAppVolumeId volume{};
+};
+
+/// What the render request callback needs; lives until the token is cancelled.
+struct QarCApiSenderFactory::RequestSubscription
+{
+  std::shared_ptr<CrossThread> shared;
 };
 
 struct QarCApiSenderFactory::AttachJob
@@ -2108,6 +3714,107 @@ void QarCApiSenderFactory::placement_update_trampoline(QarAppVolume * handle, vo
   ++state.updates_seen;
 }
 
+void QarCApiSenderFactory::render_request_trampoline(
+  QarRenderStreamRequest * request, void * user_state)
+{
+  // A library thread: it records and returns, no I/O. The request handle is released here.
+  const auto * subscription = static_cast<const RequestSubscription *>(user_state);
+  if (request == nullptr) {
+    return;
+  }
+  QarPeerId peer{};
+  QarStreamId stream{};
+  const bool read =
+    !qar_result_is_error(QAR_CALL(qar_render_request_get_target_peer_id, request, &peer)) &&
+    !qar_result_is_error(QAR_CALL(qar_render_request_get_stream_id, request, &stream));
+  QAR_CALL(qar_render_request_handle_destroy, request);
+  if (!read || subscription == nullptr || subscription->shared == nullptr) {
+    return;
+  }
+  CrossThread & state = *subscription->shared;
+  const std::string peer8 = id_first8(peer.data);
+  const std::string stream8 = id_first8(stream.data);
+  std::lock_guard<std::mutex> lk(state.request_mutex);
+  constexpr std::size_t kMostPairs = 64;
+  const std::string pair = peer8 + "/" + stream8;
+  if (state.requests_logged.size() + state.requests_unknown.size() +
+    state.requests_unlogged.size() >= kMostPairs ||
+    std::find(state.requests_logged.begin(), state.requests_logged.end(), pair) !=
+    state.requests_logged.end() ||
+    std::find(state.requests_unknown.begin(), state.requests_unknown.end(), pair) !=
+    state.requests_unknown.end())
+  {
+    return;
+  }
+  for (const CrossThread::SeenRequest & seen : state.requests_unlogged) {
+    if (seen.peer8 == peer8 && seen.stream8 == stream8) {
+      return;
+    }
+  }
+  state.requests_unlogged.push_back(
+    CrossThread::SeenRequest{peer8, stream8, CrossThread::Clock::now()});
+}
+
+int QarCApiSenderFactory::log_render_requests()
+{
+  const std::shared_ptr<CrossThread> shared = shared_;
+  std::vector<std::string> lines;
+  {
+    std::lock_guard<std::mutex> lk(shared->request_mutex);
+    const auto now = CrossThread::Clock::now();
+    // A pair that was printed as "unknown" is printed again once our own id is read.
+    for (auto it = shared->requests_unknown.begin(); it != shared->requests_unknown.end();) {
+      const std::size_t slash = it->find('/');
+      const std::string peer8 = it->substr(0, slash);
+      if (shared->our_streams.find(peer8) == shared->our_streams.end()) {
+        ++it;
+        continue;
+      }
+      shared->requests_unlogged.push_back(
+        CrossThread::SeenRequest{peer8, it->substr(slash + 1), now});
+      it = shared->requests_unknown.erase(it);
+    }
+    for (auto it = shared->requests_unlogged.begin(); it != shared->requests_unlogged.end();) {
+      const auto ours = shared->our_streams.find(it->peer8);
+      const bool known = ours != shared->our_streams.end();
+      if (!known && now - it->seen_at < std::chrono::seconds(3)) {
+        ++it;
+        continue;
+      }
+      const char * verdict =
+        !known ? "unknown" : (ours->second == it->stream8 ? "match" : "MISMATCH");
+      lines.push_back(
+        "render request for peer " + it->peer8 + " on stream " + it->stream8 + " (ours " +
+        (known ? ours->second : std::string("unknown")) + ": " + verdict + ")");
+      (known ? shared->requests_logged : shared->requests_unknown)
+        .push_back(it->peer8 + "/" + it->stream8);
+      it = shared->requests_unlogged.erase(it);
+    }
+  }
+  for (const std::string & line : lines) {
+    std::fprintf(stderr, "[qar-adapter] %s %s\n", wall_clock_hms_ms().c_str(), line.c_str());
+  }
+  if (!lines.empty()) {
+    std::fflush(stderr);
+  }
+  return static_cast<int>(lines.size());
+}
+
+void QarCApiSenderFactory::run_request_unsubscribe(const std::shared_ptr<CrossThread> & shared)
+{
+  CrossThread & state = *shared;
+  QarCancelToken * const token = state.request_token;
+  RequestSubscription * const subscription = state.request_subscription;
+  state.request_token = nullptr;
+  state.request_subscription = nullptr;
+  if (token != nullptr) {
+    // Returns after a callback that is running has ended, so the context can go right after.
+    QAR_CALL(qar_cancel_token_cancel, token);
+    QAR_CALL(qar_cancel_token_handle_destroy, token);
+  }
+  delete subscription;
+}
+
 void QarCApiSenderFactory::run_attach(QarSession * session, const AttachJob & job)
 {
   CrossThread & state = *job.shared;
@@ -2260,6 +3967,28 @@ void QarCApiSenderFactory::run_attach(QarSession * session, const AttachJob & jo
     }
   }
 
+  // The requests that receivers make, for the log only: nothing is created from them.
+  {
+    QarCancelToken * token = nullptr;
+    if (!qar_result_is_error(QAR_CALL(qar_cancel_token_create, &token)) && token != nullptr) {
+      auto * subscription = new RequestSubscription();
+      subscription->shared = job.shared;
+      const QarResult subscribed = QAR_CALL(
+          qar_render_sender_subscribe_requests, session,
+          &QarCApiSenderFactory::render_request_trampoline, subscription, token);
+      if (qar_result_is_error(subscribed)) {
+        QAR_CALL(qar_cancel_token_handle_destroy, token);
+        delete subscription;
+        std::fprintf(stderr, "[qar-adapter] %s; the render requests are not logged\n",
+          result_text("qar_render_sender_subscribe_requests", subscribed).c_str());
+        std::fflush(stderr);
+      } else {
+        state.request_token = token;
+        state.request_subscription = subscription;
+      }
+    }
+  }
+
   {
     // Held with detach(): either the listener is registered before detach() retires this state
     // and removes it, or it is not registered.
@@ -2297,6 +4026,7 @@ void QarCApiSenderFactory::run_placement_unsubscribe(const std::shared_ptr<Cross
     QAR_CALL(qar_cancel_token_handle_destroy, token);
   }
   delete subscription;
+  run_request_unsubscribe(shared);
 }
 
 // True when the two placements differ by more than a millimetre or a thousandth of a scale (an
@@ -2482,26 +4212,45 @@ void QarCApiSenderFactory::detach()
   served_peers_.clear();
   closed_peers_.clear();
   adapters_.clear();
+  retries_.clear();
 }
 
 QarCApiSenderFactory::~QarCApiSenderFactory()
 {
+  // The gate opens for good; the watch thread ends by itself and is joined by a later reap().
+  gpu_watch_->stop();
   detach();
-#ifdef _WIN32
-  // Destroy the per-sender contexts last: every sender of this factory is gone by now (the
-  // producer destroys its manager before it releases the factory), so no QAR graphics thread
-  // binds one of them.
-  {
-    const WglApi & w = wgl();
-    for (auto & ctx : gl_sender_contexts_) {
-      if (ctx != nullptr && ctx->context != nullptr && w.DeleteContext != nullptr) {
-        w.DeleteContext(static_cast<HGLRC>(ctx->context));
-        ctx->context = nullptr;
-      }
+  // The per-sender contexts go last: every sender of this factory is gone by now (the producer
+  // destroys its manager before it releases the factory), but the streams of those senders are
+  // destroyed by the thread that owns the session, behind the lane item posted here, and a QAR
+  // graphics thread may bind a context until then. The contexts wait in the graveyard for that
+  // item. Without a lane every stream was destroyed already, so they are deleted at once.
+  GlContextList without_stream;
+  for (auto & ctx : gl_sender_contexts_) {
+    if (ctx == nullptr) {
+      continue;
+    }
+    if (ctx->stream_released != nullptr) {
+      // The release of its own stream sets the flag, whenever the frame worker posts it.
+      std::lock_guard<std::mutex> lk(graveyard_mutex());
+      GlContextList one;
+      const std::shared_ptr<std::atomic<bool>> flag = ctx->stream_released;
+      one.push_back(std::move(ctx));
+      graveyard().push_back(GlGraveyardEntry{flag, std::move(one)});
+    } else {
+      without_stream.push_back(std::move(ctx));
     }
   }
-#endif
   gl_sender_contexts_.clear();
+  if (!without_stream.empty()) {
+    const auto released = std::make_shared<std::atomic<bool>>(false);
+    {
+      std::lock_guard<std::mutex> lk(graveyard_mutex());
+      graveyard().push_back(GlGraveyardEntry{released, std::move(without_stream)});
+    }
+    mark_context_released(stream_lane(), released);
+  }
+  delete_released_gl_contexts();
 }
 
 bool QarCApiSenderFactory::scene_placement(qar_ar_core::ScenePlacement & out) const
@@ -2539,8 +4288,36 @@ bool QarCApiSenderFactory::scene_placement(qar_ar_core::ScenePlacement & out) co
   return known;
 }
 
+void QarCApiSenderFactory::delete_contexts_of_released_streams()
+{
+  void (* deleter)(void *) = nullptr;
+  {
+    std::lock_guard<std::mutex> lk(graveyard_mutex());
+    deleter = gl_context_deleter() != nullptr ? gl_context_deleter() : &delete_gl_context;
+  }
+  for (auto & ctx : gl_sender_contexts_) {
+    if (ctx != nullptr && ctx->context != nullptr && ctx->stream_released != nullptr &&
+      ctx->stream_released->load())
+    {
+      // No stream uses the context any more: the lane destroyed it, and no graphics thread of
+      // the runtime binds the context after that.
+      deleter(ctx->context);
+      ctx->context = nullptr;
+    }
+  }
+}
+
 bool QarCApiSenderFactory::capture_gl_context()
 {
+  // On the render thread: the contexts of an earlier factory are deleted once their streams are,
+  // and the frame workers of released senders that have ended are joined. While the GPU progress
+  // gate is closed no context is deleted: a context that GPU work still refers to may make the
+  // delete wait, so it is left for the next tick that finds the gate open.
+  const bool gate_closed = gpu_watch_->any_gate_closed();
+  if (!gate_closed) { delete_released_gl_contexts(); }
+  FrameWorker::reap();
+  GpuProgressWatch::reap();
+  if (!gate_closed) { delete_contexts_of_released_streams(); }
 #ifdef _WIN32
   const WglApi & w = wgl();
   if (!w.ok()) { return false; }
@@ -2557,6 +4334,9 @@ bool QarCApiSenderFactory::capture_gl_context()
         gl_device_context_, gl_render_context_);
       std::fflush(stderr);
     }
+    // The progress watch follows the frames of this context from a thread of its own; it starts
+    // once, with the first context that is latched.
+    gpu_watch_->start(gl_device_context_, gl_render_context_);
   }
 
 #endif
@@ -2657,6 +4437,7 @@ bool QarCApiSenderFactory::gl_make_current_cb(void * user_state)
   void * ctx = nullptr;
   if (!state->own_handles(hdc, ctx)) { return false; }
   if (w.MakeCurrent(static_cast<HDC>(hdc), static_cast<HGLRC>(ctx)) != FALSE) {
+    state->bound_by.store(thread_number(), std::memory_order_relaxed);
     // Once per sender: which thread of the runtime binds which context. A short write on that
     // thread, the same as the failure line below.
     if (state->bound.first()) {
@@ -2670,10 +4451,12 @@ bool QarCApiSenderFactory::gl_make_current_cb(void * user_state)
   // Loud, because the multi-peer failure mode looks exactly like this: a context is
   // already current on another thread, so every later GL lookup returns null and the
   // runtime tears the stream down with an unrelated-sounding message.
+  const unsigned long error_code = GetLastError();
   std::fprintf(stderr,
-    "[qar-adapter] *** wglMakeCurrent FAILED (err=%lu) HDC=%p HGLRC=%p — is this "
-    "context current on another thread?\n",
-    static_cast<unsigned long>(GetLastError()), hdc, ctx);
+    "[qar-adapter] %s *** wglMakeCurrent FAILED (err=%lu) tid=%llu ctx held by tid=%llu "
+    "HDC=%p HGLRC=%p — is this context current on another thread?\n",
+    wall_clock_hms_ms().c_str(), error_code, thread_number(),
+    state->bound_by.load(std::memory_order_relaxed), hdc, ctx);
   std::fflush(stderr);
   return false;
 #else
@@ -2723,6 +4506,7 @@ QarCApiSenderFactory::create_sender(const QarPeerId & peer_id)
 {
   if (!ready() || !shared_->attached.load()) { return nullptr; }
   QarSession * const open_session = session();
+  const std::shared_ptr<IReleaseLane> lane = stream_lane();
 
   // ---------------------------------------------------------------------------
   // ASYNC creation. Creating a sender negotiates a transfer with the
@@ -2742,8 +4526,8 @@ QarCApiSenderFactory::create_sender(const QarPeerId & peer_id)
     if (!p->done.load(std::memory_order_acquire)) {
       // Still in flight. Say so once when it looks stuck, so the next occurrence of
       // the mixer bug is visible in the log instead of being an unexplained blank.
-      const double waited = std::chrono::duration<double>(
-        std::chrono::steady_clock::now() - p->started).count();
+      const std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+      const double waited = std::chrono::duration<double>(now - p->started).count();
       if (!p->warned && waited > kPendingSenderWarnSeconds) {
         p->warned = true;
         std::fprintf(stderr,
@@ -2752,13 +4536,22 @@ QarCApiSenderFactory::create_sender(const QarPeerId & peer_id)
           qar_ogre_streaming::peer_id_to_hex(peer_id).c_str(), waited);
         std::fflush(stderr);
       }
+      if (p->deadline != std::chrono::steady_clock::time_point{} && now >= p->deadline) {
+        give_up_waiting(it, waited);
+      }
       return nullptr;
     }
 
     QarRenderSender * const stream = p->stream.exchange(nullptr);
     const bool failed = p->failed.load(std::memory_order_acquire);
     pending_senders_.erase(it);
+    release_token(*p, /*cancel=*/false);
     if (failed || stream == nullptr) {
+      // No stream will use the context of this creation.
+      if (stream == nullptr) {
+        mark_context_released(lane, p->context_released);
+      }
+      forget_retry(peer_id);
       std::fprintf(stderr, "[qar-adapter] create_sender: async creation FAILED for peer %s\n",
         qar_ogre_streaming::peer_id_to_hex(peer_id).c_str());
       std::fflush(stderr);
@@ -2775,14 +4568,59 @@ QarCApiSenderFactory::create_sender(const QarPeerId & peer_id)
         std::chrono::duration<double>(std::chrono::steady_clock::now() - p->started).count())
       .c_str());
     std::fflush(stderr);
+    if (lane != nullptr) {
+      // The id of this sender is read on the owner's thread. The release of the stream is posted
+      // later and runs behind this task, so the stream is alive when it runs.
+      const std::shared_ptr<CrossThread> shared = shared_;
+      const std::string peer8 = qar_ogre_streaming::peer_id_to_hex(peer_id).substr(0, 8);
+      lane->post_release("render-stream-id", [shared, stream, peer8] {
+          QarStreamId id{};
+          if (qar_result_is_error(QAR_CALL(qar_render_sender_stream_id, stream, &id))) {
+            return;
+          }
+          std::lock_guard<std::mutex> lk(shared->request_mutex);
+          shared->our_streams[peer8] = id_first8(id.data);
+        });
+    }
     auto adapter = std::make_shared<QarCApiRenderSenderAdapter>(
       stream, config_.near_far, config_.submit_mode, config_.copy_hook, config_.depth_scale,
-      pointing_ray_slot_, peer_id, config_.log_folder_path);
+      pointing_ray_slot_, peer_id, config_.log_folder_path, lane, p->context_released,
+      config_.frame_calls_on_worker, config_.frame_worker_timings,
+      FrameFenceSetup{config_.gl_fence_ops, p->fence_context, config_.frame_fence_timings},
+      config_.render_recycle, recycle_count_of(peer_id));
     {
       std::lock_guard<std::mutex> lk(mutex_);
       adapters_.push_back(PeerAdapter{peer_id, adapter});
     }
+    forget_retry(peer_id);
     return adapter;
+  }
+
+  // A creation that was cancelled for want of an answer is tried again after a back-off, and not
+  // at all once it was cancelled too often, until the target goes down and up again.
+  {
+    std::lock_guard<std::mutex> lk(mutex_);
+    for (const CreateRetry & retry : retries_) {
+      if (peer_eq(retry.peer_id, peer_id) &&
+        (retry.given_up || std::chrono::steady_clock::now() < retry.retry_at))
+      {
+        return nullptr;
+      }
+    }
+  }
+
+  // No GL context is made while the GPU progress gate is closed (wglCreateContext and
+  // wglShareLists may wait for a stalled GPU): the creation is tried again on a later tick.
+  if (gpu_watch_->any_gate_closed()) {
+    const unsigned n = ++gate_waits_;
+    if (n <= 5 || (n % 100) == 0) {
+      std::fprintf(
+        stderr,
+        "[qar-adapter] create_sender: the GPU progress gate is closed; the stream of this peer "
+        "is created when it opens\n");
+      std::fflush(stderr);
+    }
+    return nullptr;
   }
 
   trace_peer_id("create_sender", peer_id);
@@ -2808,8 +4646,11 @@ QarCApiSenderFactory::create_sender(const QarPeerId & peer_id)
   // QarStreamParamsOpenGl, with no context-type discriminator. We own a WGL context,
   // so this is the Wgl one and the context type is the struct's identity.
   QarStreamParamsOpenGlWgl gl_params = qar_stream_params_opengl_wgl_default();
+  GlSenderContext * created_context = nullptr;
 #ifdef _WIN32
-  if (capture_gl_context()) {
+  if (!chain_gl_context_) {
+    // Nothing is chained: the creation goes to the runtime as it is.
+  } else if (capture_gl_context()) {
     // Mint a context for THIS sender. Never Ogre's live one (it is permanently current
     // on the render thread) and never one already handed to another sender: QAR binds
     // it on that sender's own graphics thread, and a WGL context cannot be current on
@@ -2830,6 +4671,7 @@ QarCApiSenderFactory::create_sender(const QarPeerId & peer_id)
       return nullptr;
     }
     GlSenderContext * ctx = sender_ctx.get();
+    created_context = ctx;
     gl_sender_contexts_.push_back(std::move(sender_ctx));
 
     // The WGL struct names its fields for WGL: device_context is the HDC, and the
@@ -2870,6 +4712,28 @@ QarCApiSenderFactory::create_sender(const QarPeerId & peer_id)
     return nullptr;
   }
 #endif
+
+  // The context that the frame worker of this sender binds for the fences of its copies. It is
+  // made here, on the render thread, from the latched context like the one of the runtime; the
+  // worker binds it once and deletes it when it leaves. Without it the sender waits for the GPU
+  // on the render thread.
+  std::shared_ptr<FenceContext> fence_context;
+  if (config_.frame_fence_on_worker && config_.frame_calls_on_worker && lane != nullptr &&
+    config_.gl_fence_ops.complete())
+  {
+    void * const made = config_.gl_fence_ops.create_context(
+      gl_device_context_, gl_render_context_);
+    if (made != nullptr) {
+      fence_context = std::make_shared<FenceContext>(
+        config_.gl_fence_ops, gl_device_context_, made);
+    } else if (gl_device_context_ != nullptr) {
+      std::fprintf(
+        stderr, "[qar-adapter] create_sender: could not create a GL context for the fence waits "
+        "of this peer (err=%d); the sender waits for the GPU on the GUI thread\n",
+        config_.gl_fence_ops.last_error());
+      std::fflush(stderr);
+    }
+  }
 
   init.enable_auto_reconnects = true;
   // Key this stream to our app volume. REQUIRED by the installed runtime: the
@@ -2921,6 +4785,21 @@ QarCApiSenderFactory::create_sender(const QarPeerId & peer_id)
   auto pending = std::make_shared<PendingSender>();
   pending->peer_id = peer_id;
   pending->started = std::chrono::steady_clock::now();
+  pending->deadline = pending->started + config_.create_timeout;
+  pending->lane = lane;
+  pending->fence_context = fence_context;
+  if (created_context != nullptr) {
+    // The release of the stream of this creation, whoever ends up holding it, frees the context.
+    created_context->stream_released = std::make_shared<std::atomic<bool>>(false);
+    pending->context_released = created_context->stream_released;
+  }
+  if (lane != nullptr) {
+    // The token lets a creation that never answers be cancelled. Making one is a call on an
+    // object of this process; the cancel and the destroy go to the lane.
+    QarCancelToken * token = nullptr;
+    const QarResult made = QAR_CALL(qar_cancel_token_create, &token);
+    pending->token.store(qar_result_is_error(made) ? nullptr : token);
+  }
   pending->init = init;
   pending->gl_params = gl_params;
   // Re-chain onto the HEAP copy — `init.header.next` still points at the stack
@@ -2933,13 +4812,31 @@ QarCApiSenderFactory::create_sender(const QarPeerId & peer_id)
   const QarResult r = QAR_CALL(
       qar_render_sender_create_async, open_session, &pending->init,
       &QarCApiSenderFactory::sender_created_trampoline, new std::shared_ptr<PendingSender>(pending),
-      nullptr);
+      pending->token.load());
   trace_msg("create_sender: <- qar_render_sender_create_async (kicked off)");
   if (qar_result_is_error(r)) {
     std::fprintf(stderr, "[qar-adapter] %s\n",
       report_result("qar_render_sender_create_async", r).c_str());
     std::fflush(stderr);
+    release_token(*pending, /*cancel=*/false);
+    mark_context_released(lane, pending->context_released);
     return nullptr;
+  }
+  {
+    std::lock_guard<std::mutex> lk(mutex_);
+    CreateRetry * entry = nullptr;
+    for (CreateRetry & retry : retries_) {
+      if (peer_eq(retry.peer_id, peer_id)) {
+        entry = &retry;
+        break;
+      }
+    }
+    if (entry == nullptr) {
+      retries_.push_back(CreateRetry{});
+      entry = &retries_.back();
+      entry->peer_id = peer_id;
+    }
+    ++entry->started;
   }
   // The request is in: say which thread made it. The runtime answers on a thread of its own, and
   // the line printed when it does names that one (see the poll above).
@@ -2970,23 +4867,146 @@ void QarCApiSenderFactory::sender_created_trampoline(
   // Only the number is kept: the render tick prints it, a callback of the runtime does no I/O.
   p.callback_thread.store(thread_number(), std::memory_order_relaxed);
   p.done.store(true);
-  // A creation that detach() gave up has no reader: the stream is destroyed here. Both sides
-  // set their flag first and look at the other's second, and whoever takes the stream owns it.
+  // A creation that was given up has no reader: the stream is handed to the release lane (or
+  // destroyed here when the creation has none). Both sides set their flag first and look at the
+  // other's second, and whoever takes the stream owns it.
   if (p.abandoned.load()) {
     if (QarRenderSender * const late = p.stream.exchange(nullptr)) {
-      QAR_CALL(qar_render_stream_handle_destroy, late);
+      release_stream(p, late);
+    } else if (stream == nullptr) {
+      mark_context_released(p.lane, p.context_released);
     }
   }
 }
 
-void QarCApiSenderFactory::abandon_pending(PendingSender & pending)
+void QarCApiSenderFactory::abandon_pending(PendingSender & pending, bool cancel)
 {
   pending.abandoned.store(true);
-  if (pending.done.load()) {
+  const bool answered = pending.done.load();
+  if (answered) {
     if (QarRenderSender * const stream = pending.stream.exchange(nullptr)) {
-      QAR_CALL(qar_render_stream_handle_destroy, stream);
+      release_stream(pending, stream);
+    } else {
+      mark_context_released(pending.lane, pending.context_released);
     }
   }
+  release_token(pending, cancel && !answered);
+}
+
+void QarCApiSenderFactory::release_stream(PendingSender & pending, QarRenderSender * stream)
+{
+  if (pending.lane == nullptr) {
+    QAR_CALL(qar_render_stream_handle_destroy, stream);
+    if (pending.context_released != nullptr) { pending.context_released->store(true); }
+    return;
+  }
+  const std::shared_ptr<std::atomic<bool>> released = pending.context_released;
+  if (!pending.lane->post_release("render-stream-late", [stream, released] {
+        QAR_CALL(qar_render_stream_handle_destroy, stream);
+        if (released != nullptr) { released->store(true); }
+      }))
+  {
+    std::fprintf(
+      stderr, "[qar-adapter] %s peer %s stream handle left unreleased (the owner thread is gone)\n",
+      wall_clock_hms_ms().c_str(),
+      qar_ogre_streaming::peer_id_to_hex(pending.peer_id).substr(0, 8).c_str());
+    std::fflush(stderr);
+  }
+}
+
+void QarCApiSenderFactory::mark_context_released(
+  const std::shared_ptr<IReleaseLane> & lane, const std::shared_ptr<std::atomic<bool>> & flag)
+{
+  if (flag == nullptr) {
+    return;
+  }
+  if (lane == nullptr) {
+    flag->store(true);
+    return;
+  }
+  // A refused post leaves the flag unset: nothing is known about the streams, so the context is
+  // never deleted.
+  lane->post_release("gl-context-released", [flag] { flag->store(true); });
+}
+
+void QarCApiSenderFactory::release_token(PendingSender & pending, bool cancel)
+{
+  QarCancelToken * const token = pending.token.exchange(nullptr);
+  if (token == nullptr) {
+    return;
+  }
+  const auto release = [token, cancel] {
+      if (cancel) { QAR_CALL(qar_cancel_token_cancel, token); }
+      QAR_CALL(qar_cancel_token_handle_destroy, token);
+    };
+  if (pending.lane == nullptr) {
+    release();
+    return;
+  }
+  // A refused post leaves the token as it is: no thread is left to cancel it.
+  pending.lane->post_release("render-create-token", release);
+}
+
+void QarCApiSenderFactory::give_up_waiting(
+  std::vector<std::shared_ptr<PendingSender>>::iterator it, double waited_s)
+{
+  const std::shared_ptr<PendingSender> pending = *it;
+  const QarPeerId peer_id = pending->peer_id;
+  pending_senders_.erase(it);
+  abandon_pending(*pending, /*cancel=*/true);
+
+  int attempt = 0;
+  bool giving_up = false;
+  long long next_ms = 0;
+  {
+    std::lock_guard<std::mutex> lk(mutex_);
+    CreateRetry * entry = nullptr;
+    for (CreateRetry & retry : retries_) {
+      if (peer_eq(retry.peer_id, peer_id)) {
+        entry = &retry;
+        break;
+      }
+    }
+    if (entry == nullptr) {
+      retries_.push_back(CreateRetry{});
+      entry = &retries_.back();
+      entry->peer_id = peer_id;
+      entry->started = 1;
+    }
+    ++entry->cancelled;
+    attempt = entry->started;
+    if (entry->cancelled > config_.create_give_up_after) {
+      entry->given_up = true;
+      giving_up = true;
+    } else {
+      std::chrono::milliseconds wait = config_.create_backoff_first;
+      for (int i = 1; i < entry->cancelled && wait < config_.create_backoff_cap; ++i) {
+        wait *= 2;
+      }
+      wait = std::min(wait, config_.create_backoff_cap);
+      next_ms = wait.count();
+      entry->retry_at = std::chrono::steady_clock::now() + wait;
+    }
+  }
+  std::string line = "[qar-adapter] " + wall_clock_hms_ms() + " peer " +
+    qar_ogre_streaming::peer_id_to_hex(peer_id).substr(0, 8) + " create_async gave no answer in ";
+  char number[32];
+  std::snprintf(number, sizeof(number), "%.1f", waited_s);
+  line += number;
+  line += " s; abandoned (attempt " + std::to_string(attempt) + "), ";
+  line += giving_up ? std::string("giving up until the target returns")
+    : "next try in " + std::to_string(next_ms) + " ms";
+  std::fprintf(stderr, "%s\n", line.c_str());
+  std::fflush(stderr);
+}
+
+void QarCApiSenderFactory::forget_retry(const QarPeerId & peer_id)
+{
+  std::lock_guard<std::mutex> lk(mutex_);
+  retries_.erase(
+    std::remove_if(retries_.begin(), retries_.end(),
+      [&peer_id](const CreateRetry & r) { return peer_eq(r.peer_id, peer_id); }),
+    retries_.end());
 }
 
 // ===========================================================================
@@ -3167,10 +5187,31 @@ void QarCApiSenderFactory::on_target_up(const TargetInfo & target)
   pending_requests_.push_back(target.id);
 }
 
+std::shared_ptr<RenderRecycleCount> QarCApiSenderFactory::recycle_count_of(
+  const QarPeerId & peer_id)
+{
+  std::lock_guard<std::mutex> lk(mutex_);
+  for (const RecycleEntry & entry : recycle_counts_) {
+    if (peer_eq(entry.peer_id, peer_id)) { return entry.count; }
+  }
+  recycle_counts_.push_back(RecycleEntry{peer_id, std::make_shared<RenderRecycleCount>(0u)});
+  return recycle_counts_.back().count;
+}
+
 void QarCApiSenderFactory::on_target_down(const QarPeerId & id, QarPeerPresence presence)
 {
   (void)presence;
   std::lock_guard<std::mutex> lk(mutex_);
+  // A target that comes back starts with the first limit again.
+  recycle_counts_.erase(
+    std::remove_if(recycle_counts_.begin(), recycle_counts_.end(),
+      [&id](const RecycleEntry & e) { return peer_eq(e.peer_id, id); }),
+    recycle_counts_.end());
+  // The tries for a target that goes down start afresh when it comes up.
+  retries_.erase(
+    std::remove_if(retries_.begin(), retries_.end(),
+      [&id](const CreateRetry & r) { return peer_eq(r.peer_id, id); }),
+    retries_.end());
   pending_requests_.erase(
     std::remove_if(pending_requests_.begin(), pending_requests_.end(),
       [&id](const QarPeerId & p) { return peer_eq(p, id); }),
@@ -3194,9 +5235,74 @@ std::size_t QarCApiSenderFactory::served_peer_count() const
   return served_peers_.size();
 }
 
+std::vector<std::string> QarCApiSenderFactory::note_hub_process(const HubProcessInfo & info)
+{
+  std::vector<std::string> lines;
+  const std::shared_ptr<QarSessionOwner> owner = owner_.lock();
+  const bool running = owner != nullptr && owner->state() == SessionState::kRunning;
+  std::lock_guard<std::mutex> lk(mutex_);
+  if (!hub_seeded_) {
+    hub_seeded_ = true;
+    hub_gone_seen_ = info.gone_count;
+    return lines;
+  }
+  if (info.gone_count < hub_gone_seen_) {
+    // The owner made a fresh implementation: its counter starts at zero again, and nothing ended.
+    hub_gone_seen_ = info.gone_count;
+  }
+  if (info.gone_count != hub_gone_seen_) {
+    hub_gone_seen_ = info.gone_count;
+    std::string creating;
+    for (const std::shared_ptr<PendingSender> & pending : pending_senders_) {
+      creating += (creating.empty() ? "" : ", ") +
+        qar_ogre_streaming::peer_id_to_hex(pending->peer_id).substr(0, 8);
+    }
+    if (!creating.empty()) {
+      lines.push_back(
+        "the QAROS Hub process ended (pid " + std::to_string(info.last_gone_pid) +
+        ") while the 3D sender of " + creating + " was being created: that creation is not "
+        "held");
+    }
+    if (!adapters_.empty()) {
+      hub_hold_ = true;
+      hub_old_pid_ = info.last_gone_pid;
+      std::string peers;
+      for (const PeerAdapter & pa : adapters_) {
+        const bool listed = std::any_of(closed_peers_.begin(), closed_peers_.end(),
+            [&pa](const QarPeerId & p) { return peer_eq(p, pa.peer_id); });
+        if (!listed) {
+          closed_peers_.push_back(pa.peer_id);
+        }
+        peers += (peers.empty() ? "" : ", ") +
+          qar_ogre_streaming::peer_id_to_hex(pa.peer_id).substr(0, 8);
+      }
+      lines.push_back(
+        "the QAROS Hub process ended (pid " + std::to_string(info.last_gone_pid) +
+        "): the 3D sender of " + peers + " is released now and made again when the target is "
+        "online");
+    }
+  }
+  if (hub_hold_ && info.pid != 0 && info.pid != hub_old_pid_ && running) {
+    hub_hold_ = false;
+    lines.push_back(
+      "the QAROS Hub restarted (pid " + std::to_string(hub_old_pid_) + " -> " +
+      std::to_string(info.pid) + "): the 3D sender is made again when the target is online");
+  }
+  return lines;
+}
+
+bool QarCApiSenderFactory::senders_held_for_hub() const
+{
+  std::lock_guard<std::mutex> lk(mutex_);
+  return hub_hold_;
+}
+
 void QarCApiSenderFactory::poll_new_peer_requests(std::vector<QarPeerId> & out)
 {
   std::lock_guard<std::mutex> lk(mutex_);
+  if (hub_hold_) {
+    return;  // the requests wait for the new Hub process
+  }
   out.insert(out.end(), pending_requests_.begin(), pending_requests_.end());
   pending_requests_.clear();
 }
@@ -3221,6 +5327,12 @@ void QarCApiSenderFactory::poll_closed_peers(std::vector<QarPeerId> & out)
 
 void QarCApiSenderFactory::forget(const QarPeerId & peer_id)
 {
+  {
+    // The sender of the peer is gone: its stream id is not "ours" any more, so a request for the
+    // old id before the next sender exists is not printed as a match.
+    std::lock_guard<std::mutex> request_lock(shared_->request_mutex);
+    shared_->our_streams.erase(qar_ogre_streaming::peer_id_to_hex(peer_id).substr(0, 8));
+  }
   {
     std::lock_guard<std::mutex> lk(mutex_);
     for (auto it = adapters_.begin(); it != adapters_.end(); ++it) {

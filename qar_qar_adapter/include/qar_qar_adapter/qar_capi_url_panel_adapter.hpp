@@ -93,7 +93,9 @@ public:
   /// contradicts the state it set is still contested. The steady clock is the default. For tests.
   void set_state_guard_clock(PanelStateKeeper::ClockFn now);
 
-  /// @brief Queues the close of the QarOS panel. Idempotent.
+  /// @brief Queues the close of the QarOS panel. Idempotent. When the session refuses tasks (it
+  /// was lost), nothing is asked of the Hub: the panel stays in the session and is found again by
+  /// its name, and the watch of its state is ended on the release lane of the owner.
   void close() override;
 
   /// @brief Lets go of the adapter and leaves the QarOS panel as it is, so the next session
@@ -103,6 +105,18 @@ public:
   bool supports_detach() const override { return true; }
 
   const std::string & last_error() const override { return last_error_; }
+
+  /// @brief Queues one task that reads the record of the panel in the runtime and writes the line
+  /// `[qar-url-panel-adapter] <t> panel '<title>' runtime record: <record>` (never the URL: it
+  /// carries a secret). Nothing is changed in the runtime. False when the panel is not live or the
+  /// session takes no tasks.
+  bool log_runtime_record() override;
+  std::string runtime_record() const override;
+
+  /// @brief True while the runtime's last report of the panel's state is CLOSED (the operator
+  /// closed it in AR). Cleared by a later report of another state, and by close() and detach().
+  /// Reads one atomic; no QarOS call.
+  bool closed_in_ar() const override;
 
   /// @brief Moves the outcomes of the create, navigate, placement and state tasks since the last
   /// call into @p out. The consumer calls it on every tick; it also lets the state guard ask again
@@ -121,12 +135,19 @@ private:
   static void run_state(
     QarSession * session, const std::shared_ptr<Core> & core, QarGuiPanelState state);
   static void run_close(QarSession * session, const std::shared_ptr<Core> & core);
+  static void run_record(QarSession * session, const std::shared_ptr<Core> & core);
 
   /// True while the panel can take a call; else records @p what as the last error.
   bool live(const char * what);
   void refuse(const std::string & reason);
 
+  /// Ends the watch of the panel's state for a task that the session refused: on the release
+  /// lane when the owner has one, else the callback is only disowned (no QarOS call).
+  void release_watch();
+
   IQarSessionOwner * owner_ = nullptr;
+  /// The lane of the owner at the time of construction; null when it has none.
+  std::shared_ptr<IReleaseLane> release_lane_;
   /// The title of the panel, for the names of the tasks and the log lines.
   std::string title_;
   std::shared_ptr<Core> core_;

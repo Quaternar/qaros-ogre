@@ -58,8 +58,8 @@ TEST(GuiCallGuard, WarnsAboveTheLimitOnTheGuiThreadOnly)
       qar_qar_adapter::mark_gui_thread();
       EXPECT_TRUE(qar_qar_adapter::on_gui_thread());
       {
+        // An empty scope: a sleep, even a short one, can last past the limit on a loaded machine.
         QAR_GUI_TIMED("qar_fast_call");
-        std::this_thread::sleep_for(1ms);
       }
       {
         QAR_GUI_TIMED("qar_slow_call");

@@ -73,7 +73,8 @@ POLICY = {
     'qar_ogre_streaming': dict(project={'qar_ogre_streaming', 'qar_ar_core'}, prod={'STD', 'OGRE', 'PLATFORM'},
                                test={'GTEST'}, platform={'windows.h'}),
     'qar_qar_adapter': dict(project={'qar_qar_adapter', 'qar_ar_core', 'qar_ogre_streaming'},
-                            prod={'STD', 'PLATFORM'}, test={'GTEST'}, platform={'windows.h'}),
+                            prod={'STD', 'PLATFORM'}, test={'GTEST'},
+                            platform={'windows.h', 'tlhelp32.h'}),
     'examples': dict(project={'qar_ogre_streaming', 'qar_ar_core'}, prod={'STD', 'OGRE', 'STB'}, test=set(),
                      platform=set()),
     'qar_qt_streaming': dict(project={'qar_qt_streaming'}, prod={'STD', 'QT'}, test={'GTEST'},
@@ -127,7 +128,8 @@ EDGE_ONLY = {
     ('qar_ogre_streaming', 'qar_ar_core'): {'qar_ar_core/qar_streaming_c.hpp'},
     ('qar_web_panels', 'qar_ar_core'): {'qar_ar_core/qar_streaming_c.hpp'},
     ('qar_qar_adapter', 'qar_ogre_streaming'): {'qar_ogre_streaming/qar_render_sender_adapter.hpp',
-                                                'qar_ogre_streaming/types.hpp'},
+                                                'qar_ogre_streaming/types.hpp',
+                                                'qar_ogre_streaming/gpu_progress_gate.hpp'},
 }
 
 # (module, target project module) -> the only folder of the target that edge may use.
@@ -149,15 +151,16 @@ ADAPTER_COMPONENT = {
     'qar_capi_session_owner.hpp': 'capi',
     'log_time.hpp': 'capi', 'panel_state_log.hpp': 'capi', 'frame_stall_probe.hpp': 'capi',
     'gui_call_guard.hpp': 'capi', 'gui_call_guard.cpp': 'capi', 'panel_state_guard.hpp': 'capi',
+    'frame_worker.hpp': 'capi', 'frame_worker.cpp': 'capi', 'module_pin.hpp': 'capi',
     'qar_capi_render_sender_adapter.hpp': 'render', 'qar_capi_render_sender_adapter.cpp': 'render',
-    'render_timing.hpp': 'render',
+    'render_timing.hpp': 'render', 'gpu_progress_watch.hpp': 'render', 'gpu_progress_watch.cpp': 'render',
     'geo_anchor.hpp': 'render', 'geo_anchor.cpp': 'render',
     'qar_session_owner.hpp': 'session', 'qar_session_owner.cpp': 'session',
-    'identity_store.hpp': 'session', 'identity_store.cpp': 'session',
     'onboarding_status.hpp': 'session', 'onboarding_status.cpp': 'session',
     'target_rule.hpp': 'session', 'env_config.hpp': 'session', 'env_config.cpp': 'session',
+    'owner_watch.hpp': 'session', 'owner_watch.cpp': 'session',
     'fake_qar_api.hpp': 'test', 'session_owner_harness.hpp': 'test',
-    'panel_test_kit.hpp': 'test',
+    'panel_test_kit.hpp': 'test', 'outage_test_kit.hpp': 'test', 'fake_gl_fence.hpp': 'test',
     'qar_capi_url_panel_adapter.hpp': 'url', 'qar_capi_url_panel_adapter.cpp': 'url',
     'qar_capi_spatial_gesture_source.hpp': 'gestures', 'qar_capi_spatial_gesture_source.cpp': 'gestures',
     'qar_capi_input_internal.hpp': 'input_private',
@@ -169,14 +172,15 @@ COMPONENT_MAY_INCLUDE = {
     'url': {'capi', 'url'},
     'gestures': {'capi', 'gestures', 'input_private'},
     'input_private': {'capi'},
-    'test': {'capi', 'session', 'render', 'url', 'test'},
+    'test': {'capi', 'session', 'render', 'url', 'gestures', 'test'},
 }
 # Only these components may use the Ogre library's seam headers (EDGE_ONLY above).
 OGRE_SEAM_COMPONENTS = {'render'}
 
 C_HEADERS = {'assert.h', 'ctype.h', 'errno.h', 'float.h', 'limits.h', 'math.h', 'signal.h', 'stdarg.h',
              'stdbool.h', 'stddef.h', 'stdint.h', 'stdio.h', 'stdlib.h', 'string.h', 'time.h', 'wchar.h'}
-PLATFORM_HEADERS = {'windows.h', 'mmsystem.h', 'process.h', 'unistd.h', 'share.h', 'dlfcn.h', 'io.h'}
+PLATFORM_HEADERS = {'windows.h', 'tlhelp32.h', 'mmsystem.h', 'process.h', 'unistd.h', 'share.h',
+                    'dlfcn.h', 'io.h'}
 ROS_RX = re.compile(r'^(rcl\w*|rcutils|rcpputils|rmw\w*|rosidl\w*|ament\w*|pluginlib|class_loader|tf2\w*|'
                     r'message_filters|image_transport|\w+_msgs|\w+_srvs|\w+_interfaces)/')
 INCLUDE_RX = re.compile(r'^[ \t]*#[ \t]*include[ \t]*([<"])([^">]+)[">]', re.M)

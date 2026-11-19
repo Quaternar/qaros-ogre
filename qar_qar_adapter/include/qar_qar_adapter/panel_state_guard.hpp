@@ -17,6 +17,7 @@
 /// without a clock of its own; PanelStateKeeper owns one panel's watch (the panel-update
 /// subscription of the runtime) and carries the decision out. Both panel adapters use the keeper.
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -96,12 +97,19 @@ public:
     guard_.request_dropped();
   }
 
-  /// @brief The adapter is closed or detached: no record asks for anything from here on.
+  /// @brief The adapter is closed or detached: no record asks for anything from here on, and a
+  /// close seen before is forgotten (a close the adapter makes itself is not the operator's).
   void retire()
   {
     const std::lock_guard<std::mutex> lock(mutex_);
     retired_ = true;
+    closed_seen_.store(false, std::memory_order_release);
   }
+
+  /// @brief True while the last state the runtime reported for the panel is CLOSED, that is, the
+  /// operator closed it in AR. A later VISIBLE, HIDDEN or MINIMIZED report clears it. Reads one
+  /// atomic: no lock, no QarOS call; any thread. The keeper only reports; it never acts on it.
+  bool closed_in_ar() const { return closed_seen_.load(std::memory_order_acquire); }
 
   /// @brief For the consumer's thread, on every tick: asks again when the hold of an ask has ended
   /// and the last report since then still contradicts the wanted state. Makes no QarOS call and
@@ -188,6 +196,27 @@ public:
     slot_ = nullptr;
   }
 
+  // --- any thread -----------------------------------------------------------------------------
+
+  /// @brief Ends the watch from a thread that does not own the session (the GUI thread, once the
+  /// session is lost): no record asks for anything from here on, and the cancel and the destroy
+  /// of the token, which wait for the Hub, run on the thread that owns the session through
+  /// @p lane. Without a lane, or when the lane refuses, the token is left alone and only the
+  /// callback slot is disowned; no QarOS call is made on the caller's thread. The keeper must be
+  /// held by a shared_ptr.
+  void release_on(const std::shared_ptr<IReleaseLane> & lane)
+  {
+    retire();
+    if (lane == nullptr) {
+      abandon();
+      return;
+    }
+    const std::shared_ptr<PanelStateKeeper> self = shared_from_this();
+    if (!lane->post_release(("panel-watch-release:" + key_).c_str(), [self] { self->stop(); })) {
+      abandon();
+    }
+  }
+
 private:
   /// The runtime's callback: one panel was republished.
   static void on_update(QarGuiPanel * handle, void * user_state)
@@ -216,6 +245,7 @@ private:
       if (retired_) {
         return;
       }
+      closed_seen_.store(seen == QAR_GUI_PANEL_STATE_CLOSED, std::memory_order_release);
       decision = guard_.on_record(seen, now_locked());
     }
     carry_out(decision);
@@ -322,6 +352,8 @@ private:
   PanelStateGuard guard_;
   QarGuiPanelId panel_id_{};
   bool retired_ = false;
+  /// Written under mutex_ by the runtime's thread and by retire(); read by closed_in_ar().
+  std::atomic<bool> closed_seen_{false};
   ClockFn clock_;
 
   // The members below belong to the thread that owns the session.

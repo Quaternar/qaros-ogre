@@ -103,16 +103,47 @@ query_panel_list(QarSession * session, std::vector<QarGuiPanel *> & out)
   }
 }
 
+/// Reads the visible-to list of the listed panel @p handle. False when it cannot be read.
+bool
+read_visible_to_of(QarGuiPanel * handle, std::vector<QarPeerId> & out)
+{
+  size_t peers = 0;
+  if (qar_result_is_error(QAR_CALL(qar_gui_panel_get_visible_to_peers_count, handle, &peers))) {
+    return false;
+  }
+  std::vector<QarPeerId> list(peers);
+  size_t listed_count = 0;
+  if (peers != 0 &&
+    qar_result_is_error(
+      QAR_CALL(
+        qar_gui_panel_get_visible_to_peers, handle, list.data(), list.size(), &listed_count)))
+  {
+    return false;
+  }
+  list.resize(std::min(listed_count, list.size()));
+  out = std::move(list);
+  return true;
+}
+
+/// The visible-to list of the panel as the probe read it from the same panel list.
+struct ProbedVisibleTo
+{
+  bool read = false;
+  std::vector<QarPeerId> peers;
+};
+
 /// Reads the panel @p id out of the session's panel list: its state, its content type, its URL
 /// and its size. The handles of the list are owned here and destroyed. A value the runtime does
 /// not answer takes the safe default: HIDDEN (the panel is shown), a URL that differs (the
-/// panel navigates) and a size that differs (it is set).
+/// panel navigates) and a size that differs (it is set). The visible-to list of the panel is read
+/// from the same list into @p visible_to, so that no second query is needed for it.
 qar_ar_core::PanelProbe
 probe_url_panel(
   QarSession * session, const QarGuiPanelId & id, const std::string & url,
-  const QarGuiPanelSize & wanted)
+  const QarGuiPanelSize & wanted, ProbedVisibleTo & visible_to)
 {
   qar_ar_core::PanelProbe probe;
+  visible_to = ProbedVisibleTo();
   std::vector<QarGuiPanel *> handles;
   if (!query_panel_list(session, handles)) {
     return probe;
@@ -149,6 +180,7 @@ probe_url_panel(
       probe.size_differs =
         qar_result_is_error(QAR_CALL(qar_gui_panel_get_size, handle, &size)) ||
         !same_panel_size(size, wanted);
+      visible_to.read = read_visible_to_of(handle, visible_to.peers);
     }
     QAR_CALL(qar_gui_panel_handle_destroy, handle);
   }
@@ -174,38 +206,64 @@ read_visible_to(QarSession * session, const QarGuiPanelId & id, std::vector<QarP
     if (!ok && !qar_result_is_error(QAR_CALL(qar_gui_panel_get_id, handle, &listed)) &&
       std::memcmp(listed.data, id.data, sizeof(id.data)) == 0)
     {
-      size_t peers = 0;
-      if (!qar_result_is_error(
-          QAR_CALL(qar_gui_panel_get_visible_to_peers_count, handle, &peers)))
-      {
-        std::vector<QarPeerId> list(peers);
-        size_t listed_count = 0;
-        if (peers == 0 ||
-          !qar_result_is_error(
-            QAR_CALL(
-              qar_gui_panel_get_visible_to_peers, handle, list.data(), list.size(),
-              &listed_count)))
-        {
-          list.resize(std::min(listed_count, list.size()));
-          out = std::move(list);
-          ok = true;
-        }
-      }
+      ok = read_visible_to_of(handle, out);
     }
     QAR_CALL(qar_gui_panel_handle_destroy, handle);
   }
   return ok;
 }
 
+/// The record of the listed panel @p handle as the log prints it: `state=<S> pose=(x,y,z)
+/// size=WxH url_matches=<y|n>`. A value the runtime does not answer is `?`. The URL itself is
+/// never part of it.
+std::string
+url_panel_record_text(QarGuiPanel * handle, const std::string & url)
+{
+  char text[256];
+  std::string state = "?";
+  QarGuiPanelState panel_state = QAR_GUI_PANEL_STATE_HIDDEN;
+  if (!qar_result_is_error(QAR_CALL(qar_gui_panel_get_state, handle, &panel_state))) {
+    state = panel_state_name(panel_state);
+  }
+  std::string pose = "(?)";
+  QarPose panel_pose{};
+  if (!qar_result_is_error(QAR_CALL(qar_gui_panel_get_pose, handle, &panel_pose))) {
+    std::snprintf(
+      text, sizeof(text), "(%.2f,%.2f,%.2f)", static_cast<double>(panel_pose.position.x),
+      static_cast<double>(panel_pose.position.y), static_cast<double>(panel_pose.position.z));
+    pose = text;
+  }
+  std::string size = "?";
+  QarGuiPanelSize panel_size{};
+  if (!qar_result_is_error(QAR_CALL(qar_gui_panel_get_size, handle, &panel_size))) {
+    std::snprintf(
+      text, sizeof(text), "%.2fx%.2f", static_cast<double>(panel_size.width_meters),
+      static_cast<double>(panel_size.height_meters));
+    size = text;
+  }
+  bool matches = false;
+  std::vector<char> uri(url.size() + 64, '\0');
+  if (!qar_result_is_error(
+      QAR_CALL(qar_gui_panel_get_content_uri, handle, uri.data(), uri.size())))
+  {
+    matches = url == uri.data();
+  }
+  return "state=" + state + " pose=" + pose + " size=" + size + " url_matches=" +
+         (matches ? "y" : "n");
+}
+
 /// Brings the visible-to list of the panel @p id to @p wanted (empty: every peer sees it).
+/// @p probed is the list the probe read; when it did not, the list is queried here.
 /// @return false, with @p error set, when the list cannot be read or changed.
 bool
 apply_visible_to(
   QarSession * session, const QarGuiPanelId & id, const std::vector<QarPeerId> & wanted,
-  std::string & error)
+  const ProbedVisibleTo & probed, std::string & error)
 {
   std::vector<QarPeerId> current;
-  if (!read_visible_to(session, id, current)) {
+  if (probed.read) {
+    current = probed.peers;
+  } else if (!read_visible_to(session, id, current)) {
     error = "the visible-to list of the panel cannot be read";
     std::fprintf(stderr, "[qar-url-panel-adapter] *** %s\n", error.c_str());
     std::fflush(stderr);
@@ -261,6 +319,8 @@ struct QarCApiUrlPanelAdapter::Core
   bool has_wanted = false;
   qar_ar_core::UrlPanelPlacement wanted;
   std::vector<qar_ar_core::PanelOpResult> results;
+  /// The text of the last record read by run_record.
+  std::string record;
   /// Keeps the panel in the state the adapter asked for; see panel_state_guard.hpp. Never null.
   std::shared_ptr<PanelStateKeeper> keeper;
 };
@@ -268,6 +328,7 @@ struct QarCApiUrlPanelAdapter::Core
 QarCApiUrlPanelAdapter::QarCApiUrlPanelAdapter(
   IQarSessionOwner * owner, const qar_ar_core::UrlPanelDesc & desc)
 : owner_(owner),
+  release_lane_(owner != nullptr ? owner->release_lane() : nullptr),
   title_(desc.display_name),
   core_(std::make_shared<Core>())
 {
@@ -428,6 +489,7 @@ QarCApiUrlPanelAdapter::run_create(QarSession * session, const std::shared_ptr<C
   QarGuiPanelId panel_id{};
   qar_ar_core::PanelAttachDecision decision;
   qar_ar_core::PanelProbe probe;
+  ProbedVisibleTo probed_visible_to;
   for (unsigned retries = 0;; ++retries) {
     QarGuiPanelInit panel_init = qar_gui_panel_init_default();
     panel_init.header.next = &url_ext;
@@ -448,7 +510,8 @@ QarCApiUrlPanelAdapter::run_create(QarSession * session, const std::shared_ptr<C
       return;
     }
 
-    probe = probe_url_panel(session, panel_id, desc.url, desc.placement.size);
+    probe = probe_url_panel(
+      session, panel_id, desc.url, desc.placement.size, probed_visible_to);
     decision = qar_ar_core::decide_panel_attach(probe, retries);
     if (decision.kind != qar_ar_core::PanelAttachKind::RetryWithSuffix) {
       break;
@@ -478,6 +541,23 @@ QarCApiUrlPanelAdapter::run_create(QarSession * session, const std::shared_ptr<C
   const bool reattached = decision.kind == qar_ar_core::PanelAttachKind::Reattached;
   if (reattached) {
     // The panel of an earlier session: its page, size and pose are set again and it is shown.
+    // A panel that is on show is hidden before its page changes, so that the page switch happens
+    // on a web view that is not drawn; it is shown again below.
+    if (decision.hide_before_swap) {
+      const QarResult hidden =
+        QAR_CALL(qar_gui_panels_set_state, session, &panel_id, QAR_GUI_PANEL_STATE_HIDDEN);
+      if (qar_result_is_error(hidden)) {
+        fail(url_panel_result_error("qar_gui_panels_set_state", hidden));
+        return;
+      }
+      std::fprintf(
+        stderr,
+        "[qar-url-panel-adapter] %s panel '%s' hidden before its page is changed (it was VISIBLE)"
+        "\n",
+        wall_clock_hms_ms().c_str(),
+        desc.display_name.empty() ? "untitled" : desc.display_name.c_str());
+      std::fflush(stderr);
+    }
     if (decision.swap_content) {
       const QarResult r = QAR_CALL(
           qar_gui_panels_navigate_to_uri, session, &panel_id, desc.url.c_str());
@@ -503,11 +583,13 @@ QarCApiUrlPanelAdapter::run_create(QarSession * session, const std::shared_ptr<C
     // get_or_create applies the visible-to list of its init to a new panel only; the list of a
     // panel that was there is brought to the wanted one.
     std::string visible_error;
-    if (!apply_visible_to(session, panel_id, desc.visible_to_peers, visible_error)) {
+    if (!apply_visible_to(
+        session, panel_id, desc.visible_to_peers, probed_visible_to, visible_error))
+    {
       fail(visible_error);
       return;
     }
-    if (decision.show) {
+    if (decision.show || decision.hide_before_swap) {
       const QarResult shown =
         QAR_CALL(qar_gui_panels_set_state, session, &panel_id, QAR_GUI_PANEL_STATE_VISIBLE);
       if (qar_result_is_error(shown)) {
@@ -776,10 +858,81 @@ QarCApiUrlPanelAdapter::set_state(QarGuiPanelState state)
   return true;
 }
 
+bool
+QarCApiUrlPanelAdapter::log_runtime_record()
+{
+  if (!live("no live panel to read")) {
+    return false;
+  }
+  const std::shared_ptr<Core> core = core_;
+  return owner_->post_session_task(
+    ("url-record:" + title_).c_str(),
+    [core](QarSession * session) { run_record(session, core); });
+}
+
+std::string
+QarCApiUrlPanelAdapter::runtime_record() const
+{
+  std::lock_guard<std::mutex> lock(core_->mutex);
+  return core_->record;
+}
+
+// One read of the panel's record: the panel list is queried once, the panel found by its id and
+// its state, pose, size and page read. Nothing is written to the runtime.
+void
+QarCApiUrlPanelAdapter::run_record(QarSession * session, const std::shared_ptr<Core> & core)
+{
+  QarGuiPanelId panel_id{};
+  std::string title;
+  std::string url;
+  {
+    std::lock_guard<std::mutex> lock(core->mutex);
+    title = core->desc.display_name.empty() ? std::string("untitled") : core->desc.display_name;
+    url = core->desc.url;
+    if (!core->has_panel || core->phase.load() == Core::Phase::kFailed) {
+      return;
+    }
+    panel_id = core->panel_id;
+  }
+  std::string record = "unreadable";
+  std::vector<QarGuiPanel *> handles;
+  if (query_panel_list(session, handles)) {
+    record = "not listed";
+    bool found = false;
+    for (QarGuiPanel * handle : handles) {
+      if (handle == nullptr) {
+        continue;
+      }
+      QarGuiPanelId listed{};
+      if (!found && !qar_result_is_error(QAR_CALL(qar_gui_panel_get_id, handle, &listed)) &&
+        std::memcmp(listed.data, panel_id.data, sizeof(panel_id.data)) == 0)
+      {
+        found = true;
+        record = url_panel_record_text(handle, url);
+      }
+      QAR_CALL(qar_gui_panel_handle_destroy, handle);
+    }
+  }
+  {
+    std::lock_guard<std::mutex> lock(core->mutex);
+    core->record = record;
+  }
+  std::fprintf(
+    stderr, "[qar-url-panel-adapter] %s panel '%s' runtime record: %s\n",
+    wall_clock_hms_ms().c_str(), title.c_str(), record.c_str());
+  std::fflush(stderr);
+}
+
 void
 QarCApiUrlPanelAdapter::set_state_guard_clock(PanelStateKeeper::ClockFn now)
 {
   core_->keeper->set_clock(std::move(now));
+}
+
+bool
+QarCApiUrlPanelAdapter::closed_in_ar() const
+{
+  return core_->keeper->closed_in_ar();
 }
 
 void
@@ -798,10 +951,13 @@ QarCApiUrlPanelAdapter::detach()
     return;
   }
   const std::shared_ptr<Core> core = core_;
-  owner_->post_session_task(
+  const bool posted = owner_->post_session_task(
     ("url-detach:" + title_).c_str(),
     [core](QarSession *) { core->keeper->stop(); },
     [core] { core->keeper->abandon(); });
+  if (!posted) {
+    release_watch();
+  }
 }
 
 void
@@ -817,10 +973,28 @@ QarCApiUrlPanelAdapter::close()
     return;
   }
   const std::shared_ptr<Core> core = core_;
-  owner_->post_session_task(
+  const bool posted = owner_->post_session_task(
     ("url-close:" + title_).c_str(),
     [core](QarSession * session) { run_close(session, core); },
     [core] { core->keeper->abandon(); });
+  if (!posted) {
+    release_watch();
+  }
+}
+
+void
+QarCApiUrlPanelAdapter::release_watch()
+{
+  if (release_lane_ == nullptr) {
+    return;
+  }
+  // The watch of the panel's state holds a token of the session. Its cancel waits for the Hub, so
+  // it runs on the thread that owns the session; a lane that refuses has no such thread, and the
+  // callback is only disowned.
+  const std::shared_ptr<Core> core = core_;
+  if (!release_lane_->post_release("url-watch-release", [core] { core->keeper->stop(); })) {
+    core->keeper->abandon();
+  }
 }
 
 QarCApiUrlPanelFactory::QarCApiUrlPanelFactory(IQarSessionOwner * session_owner)

@@ -101,6 +101,23 @@ public:
   /// @brief True while the panel is still being made. The default is false (made at once).
   virtual bool pending() const { return false; }
 
+  /// @brief True while the operator has closed the panel in AR: the runtime's last report of its
+  /// state is CLOSED. A later report of another state clears it; a close this adapter made itself
+  /// never sets it. Reading it makes no QarOS call. The caller only shows it; it neither closes
+  /// nor makes the panel again. The default is false.
+  virtual bool closed_in_ar() const { return false; }
+
+  /// @brief Queues ONE read of the panel's record in the runtime (its state, pose, size and whether
+  /// its page is the URL it was given) and writes it to the log. The read runs on the thread that
+  /// owns the QarOS session; this call only queues it and never waits. @return true when the read
+  /// was queued. The default queues nothing and returns false.
+  virtual bool log_runtime_record() { return false; }
+
+  /// @brief The text of the record the last read found: `state=<S> pose=(x,y,z) size=WxH
+  /// url_matches=<y|n>`, `not listed` or `unreadable`; empty before the first read. Reads no QarOS
+  /// state. The default is empty.
+  virtual std::string runtime_record() const { return std::string(); }
+
   /// @brief Moves the outcomes of queued calls since the last call into @p out (appends).
   /// The default has none: an implementation that calls QarOS synchronously reports through what
   /// its calls give back. Call it on every tick.

@@ -26,6 +26,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 // Warning-suppressed include of the QarOS C header, which defines the
@@ -39,6 +40,8 @@
 #include "qar_ogre_streaming/qar_render_sender_adapter.hpp"
 #include "qar_ogre_streaming/types.hpp"
 #include "qar_qar_adapter/frame_stall_probe.hpp"
+#include "qar_qar_adapter/frame_worker.hpp"
+#include "qar_qar_adapter/gpu_progress_watch.hpp"
 #include "qar_qar_adapter/log_time.hpp"
 #include "qar_qar_adapter/qar_capi_session_owner.hpp"
 #include "qar_qar_adapter/qar_session_owner.hpp"
@@ -101,6 +104,17 @@ public:
     const qar_ogre_streaming::QarOpenGlStereoFrame & ogre_src,
     const QarVideoFrameOpenGl & qar_dst) = 0;
 
+  /// @brief The copy of a sender whose frame calls run on a worker thread: the same as
+  /// @ref copy_frame_into, but without the read-backs of the runtime's textures that the periodic
+  /// probes make (see copy_probe_due()), because such a read-back waits for the GPU. The default
+  /// forwards to @ref copy_frame_into.
+  virtual bool copy_frame_into_quiet(
+    const qar_ogre_streaming::QarOpenGlStereoFrame & ogre_src,
+    const QarVideoFrameOpenGl & qar_dst)
+  {
+    return copy_frame_into(ogre_src, qar_dst);
+  }
+
   /// @brief The mean colour of the left colour texture of @p ogre_src, each channel 0 to 255,
   /// read back from the GPU. It reads the whole texture, so it is for a diagnostic line about a
   /// single frame and never for every frame. Same thread and GL context as @ref copy_frame_into.
@@ -113,6 +127,12 @@ public:
     rgb[0] = rgb[1] = rgb[2] = 0.0f;
     return false;
   }
+
+  /// @brief Forgets what the hook learned about the GL objects of the senders: the runtime names
+  /// the textures it hands out, and GL reuses the names of destroyed textures, so the kind of a
+  /// texture (2D or array) known from an earlier sender may be wrong for a later one. Called when a
+  /// sender starts and when one is released, from any thread. The default does nothing.
+  virtual void forget_texture_targets() {}
 };
 
 /// @brief The default render-into copy hook: an FBO blit (glBlitFramebuffer) from
@@ -127,6 +147,73 @@ public:
 /// @return null on platforms without WGL (the adapter then skips the copy).
 std::shared_ptr<IQarGlTextureCopyHook> make_gl_copy_image_hook();
 
+#ifdef _WIN32
+#define QAR_GL_BLIT_CALL __stdcall
+#else
+#define QAR_GL_BLIT_CALL
+#endif
+
+/// @brief The GL entry points of the copy hook, for a hook that does not look them up in the
+/// process. A test supplies a fake GL; a null entry that the copy needs makes the hook refuse.
+struct GlBlitApi
+{
+  void (QAR_GL_BLIT_CALL * gen_framebuffers)(int, unsigned int *) = nullptr;
+  void (QAR_GL_BLIT_CALL * bind_framebuffer)(unsigned int, unsigned int) = nullptr;
+  void (QAR_GL_BLIT_CALL * framebuffer_texture_2d)(
+    unsigned int, unsigned int, unsigned int, unsigned int, int) = nullptr;
+  void (QAR_GL_BLIT_CALL * framebuffer_texture_layer)(
+    unsigned int, unsigned int, unsigned int, int, int) = nullptr;
+  void (QAR_GL_BLIT_CALL * blit_framebuffer)(
+    int, int, int, int, int, int, int, int, unsigned int, unsigned int) = nullptr;
+  unsigned int (QAR_GL_BLIT_CALL * check_framebuffer_status)(unsigned int) = nullptr;
+  unsigned int (QAR_GL_BLIT_CALL * get_error)(void) = nullptr;
+  void (QAR_GL_BLIT_CALL * get_integerv)(unsigned int, int *) = nullptr;
+  void (QAR_GL_BLIT_CALL * bind_texture)(unsigned int, unsigned int) = nullptr;
+};
+
+#undef QAR_GL_BLIT_CALL
+
+/// @brief The FBO blit copy hook of make_gl_copy_image_hook() on the GL entry points of @p api.
+/// @return null on platforms without WGL.
+std::shared_ptr<IQarGlTextureCopyHook> make_gl_copy_image_hook_with_api(const GlBlitApi & api);
+
+/// @brief Whether the copy of frame number @p frame (1 for the first) reads the textures back for
+/// the diagnostic probes: the first frame and every @p every th frame, up to @p max_probes. On the
+/// worker path nothing is probed unless @p every_was_set (QAR_ADAPTER_PROBE_EVERY is set), because
+/// a read-back of a texture of the runtime waits for the GPU.
+/// @param probes_done How many probes were made so far.
+bool copy_probe_due(
+  bool worker_path, unsigned long frame, unsigned int every, bool every_was_set,
+  unsigned int probes_done, unsigned int max_probes);
+
+/// @brief Where the GL fence waits of the render senders run: true (the default) on the frame
+/// worker of each sender, so that the render thread ends its copy with a fence and a flush and
+/// never calls glFinish; false when QAR_FRAME_FENCE is `gui`: then the render thread calls
+/// glFinish after the copy. Read once.
+bool default_frame_fence_on_worker();
+
+/// @brief The limits of the fence wait of a frame worker; a test shortens them.
+struct FrameFenceTimings
+{
+  /// The worker waits for the fence in slices of this length and looks at its stop flag between
+  /// them.
+  std::chrono::milliseconds slice{50};
+  /// A wait that has lasted this long is reported once and shows in the sender's skip detail.
+  std::chrono::milliseconds notice{1000};
+};
+
+/// @brief What a render sender needs to end its copy with a fence that its frame worker waits for.
+/// A sender given no context (or an incomplete table) waits with glFinish on the render thread.
+struct FrameFenceSetup
+{
+  GlFenceOps ops;
+  /// The context the worker binds once; see FenceContext.
+  std::shared_ptr<FenceContext> context;
+  FrameFenceTimings timings;
+
+  bool usable() const { return context != nullptr && ops.complete(); }
+};
+
 /// @brief Opt-in per-frame CSV trace + pose re-read state (QAR_ADAPTER_FRAME_TRACE).
 /// Fully defined in the .cpp (Pimpl) so this header stays free of <cstdio> and CSV
 /// formatting details; only ever seen through a null-checked unique_ptr.
@@ -137,7 +224,176 @@ class FrameTraceState;
 /// Pimpl for the same reason as @ref FrameTraceState; null when timing is off.
 class RenderTimingState;
 
+/// @brief The times of the frame-call breaker; a test shortens them.
+struct FrameBreakerTimings
+{
+  /// A frame call at least this long counts as slow.
+  std::chrono::milliseconds slow_call{250};
+  /// Two slow frame calls within this time pause the frame calls.
+  std::chrono::milliseconds window{10000};
+  /// The first pause; every further slow probe doubles it.
+  std::chrono::milliseconds pause_first{5000};
+  std::chrono::milliseconds pause_cap{60000};
+  /// A time without a slow call after which the next pause is the first one again.
+  std::chrono::milliseconds calm_reset{60000};
+};
+
+/// @brief Pauses the frame calls of one stream when they stall.
+///
+/// Two slow calls of the frame path (begin-frame, frame, show-frame, hands) within a window pause
+/// the frame calls. No frame call is made during the pause; after it one probe frame is tried. A
+/// fast probe resumes the stream, a slow one doubles the pause, up to the cap of
+/// FrameBreakerTimings. The state belongs to the thread that makes the frame calls, and only
+/// tripped() may be read from another thread.
+class FrameBreaker
+{
+public:
+  /// @param peer_label The first eight hex digits of the peer id, as the log lines carry it.
+  explicit FrameBreaker(std::string peer_label = {}) : peer_label_(std::move(peer_label)) {}
+
+  /// Replaces the times; call it before the frame calls start.
+  void set_timings(const FrameBreakerTimings & timings)
+  {
+    timings_ = timings;
+    pause_ = timings.pause_first;
+  }
+
+  /// True while the frame calls are paused (from the trip until a fast probe). Any thread.
+  bool tripped() const { return tripped_.load(); }
+
+  /// True while the frame calls must not be made. When the pause is over it lets one probe frame
+  /// through (the next call decides, see note()).
+  bool blocked();
+
+  /// Notes how long the frame call @p call took: pauses the frame calls when a second slow one
+  /// follows within the window, and judges the probe frame that follows a pause.
+  void note(const char * call, std::chrono::steady_clock::time_point started);
+
+private:
+  std::string peer_label_;
+  FrameBreakerTimings timings_;
+  std::atomic<bool> tripped_{false};
+  /// When the last slow frame call ended.
+  std::chrono::steady_clock::time_point last_slow_call_{};
+  bool have_slow_call_ = false;
+  /// The pause after the next slow probe, and when the current pause ends.
+  std::chrono::milliseconds pause_{5000};
+  std::chrono::steady_clock::time_point resume_at_{};
+  /// A probe frame is let through and no call has judged it yet.
+  bool probing_ = false;
+  /// When the frame calls were paused first, for the line about the resume.
+  std::chrono::steady_clock::time_point first_trip_at_{};
+};
+
+/// @brief When a 3D sender that is asked for no frame is made again; a test shortens the times.
+///
+/// After the Hub restarts, the runtime may replace the transfer of a render stream and then never
+/// send a render request for it, so the sender answers every try-begin with an error and no frame
+/// goes out. Such a sender is closed, and the producer makes a new one.
+struct RenderRecycleTimings
+{
+  /// A sender that has begun no frame for this long while the runtime answers with errors that
+  /// are no plain "not yet" is made again. The time counts from the latest of the creation of the
+  /// sender, its last frame and the end of its last "reconnecting" run, so a stream that the
+  /// runtime has only just taken up again gets the whole time to be asked. 0 switches the rule off
+  /// (QAR_RENDER_RECYCLE_S).
+  std::chrono::milliseconds after{45000};
+  /// The time doubles for every further time the sender of one peer is made again without a frame
+  /// in between, up to this.
+  std::chrono::milliseconds cap{240000};
+  /// A sender that is told "reconnecting" for longer than this is made again.
+  std::chrono::milliseconds reconnecting_limit{90000};
+  /// An error counts as current while it is not older than this.
+  std::chrono::milliseconds error_window{2000};
+  /// The errors must have lasted this long, without a gap longer than error_window, before the
+  /// sender is made again: one stray error never closes a stream that is about to recover.
+  std::chrono::milliseconds error_persist{3000};
+};
+
+/// @brief The times of QAR_RENDER_RECYCLE_S (seconds, default 45; 0 is off). Read once.
+RenderRecycleTimings default_render_recycle_timings();
+
+/// @brief How many times in a row the sender of one peer was made again; a frame that begins
+/// resets it to 0. Shared by the factory and the senders it makes.
+using RenderRecycleCount = std::atomic<unsigned>;
+
+/// @brief The judgement of one sender: does the runtime ask it for frames? One thread makes the
+/// frame calls and calls note(); nothing here is read from another thread.
+class RenderRecycleWatch
+{
+public:
+  /// What the runtime answered to a try-begin.
+  enum class Answer
+  {
+    kBegan,         ///< a frame is ready
+    kNotReady,      ///< no frame yet, no error
+    kReconnecting,  ///< the stream is reconnecting (status 603)
+    kNotYet,        ///< paused by the receiver or the app volume not resolved yet
+    kError          ///< any other error
+  };
+
+  RenderRecycleWatch() = default;
+  /// @param count The count of the peer, shared with the factory; may be null.
+  RenderRecycleWatch(
+    const RenderRecycleTimings & timings, std::shared_ptr<RenderRecycleCount> count,
+    std::chrono::steady_clock::time_point created);
+
+  /// Notes one answer; @p code is the status code of an error.
+  /// @return true, once, when the sender must be made again.
+  bool note(Answer answer, int code, std::chrono::steady_clock::time_point now);
+
+  /// Whole seconds since the clock of the rule started, as of @p now: the latest of the creation
+  /// of the sender, its last frame and the last "reconnecting" answer.
+  /// The same number is the N of the log line about a sender that is made again.
+  long long seconds_without_frame(std::chrono::steady_clock::time_point now) const;
+  /// The code of the last error that counted.
+  int last_code() const { return last_code_; }
+  /// True once note() has returned true.
+  bool recycled() const { return recycled_; }
+
+private:
+  /// The time without a frame after which the sender is made again, with the doubling.
+  std::chrono::milliseconds limit() const;
+  /// When the clock of the rule started.
+  std::chrono::steady_clock::time_point clock_start() const;
+
+  RenderRecycleTimings timings_;
+  std::shared_ptr<RenderRecycleCount> count_;
+  std::chrono::steady_clock::time_point began_at_{};
+  std::chrono::steady_clock::time_point error_since_{};
+  std::chrono::steady_clock::time_point last_error_at_{};
+  std::chrono::steady_clock::time_point reconnecting_since_{};
+  std::chrono::steady_clock::time_point last_reconnecting_at_{};
+  bool have_error_ = false;
+  bool reconnecting_ = false;
+  /// A "reconnecting" answer was seen since the last frame; last_reconnecting_at_ is then the end
+  /// of the last run.
+  bool have_reconnected_ = false;
+  bool recycled_ = false;
+  int last_code_ = 0;
+};
+
+/// The state that the render thread and the worker thread of one sender share, and what only the
+/// worker uses. Defined in the .cpp.
+struct RenderFrameCore;
+
+/// @brief Where the QarOS frame calls of the render senders run: true (the default) on one worker
+/// thread per sender, so that the render thread never waits for QarOS; false when QAR_FRAME_CALLS
+/// is `gui`: then on the render thread. Read once.
+bool default_frame_calls_on_worker();
+
 /// @brief One peer's render sender, implemented against the QAR C API.
+///
+/// Two ways to make the QarOS frame calls (see @ref default_frame_calls_on_worker). On the worker
+/// way a FrameWorker thread owns every call of the frame path: it reserves the next frame, reads
+/// the view poses, the fields of view and the hands, asks for the frame's textures and shows the
+/// frame. The render thread only takes a reserved frame (begin_frame), renders, copies into the
+/// textures the runtime handed out and ends the copy with a fence and a flush (submit_opengl_
+/// stereo_frame; `glFinish` only when QAR_FRAME_FENCE is `gui`), then hands the frame to the
+/// worker; it never waits for a QarOS call. A frame that is not taken or not
+/// submitted is dropped and the next one is reserved. The worker needs a release lane (it
+/// releases the stream through it) and the render-into mode; a sender without them makes its
+/// frame calls on the render thread.
 class QarCApiRenderSenderAdapter : public qar_ogre_streaming::IQarRenderSenderAdapter
 {
 public:
@@ -153,6 +409,18 @@ public:
   /// @param log_folder_path Preferred directory for the trace CSV
   ///                    (QarCApiSenderFactory::Config::log_folder_path); empty falls
   ///                    back to %TEMP%\quaternar, matching the SDK library log default.
+  /// @param release_lane Where the destructor hands the stream handle and the frame info it still
+  ///                    holds: the thread that owns the QarOS session destroys them, so the thread
+  ///                    that releases the adapter makes no QarOS call. Null: the destructor
+  ///                    destroys them itself. A lane that refuses leaves them unreleased.
+  /// @param context_released Set to true once the stream handle was destroyed: the GL context the
+  ///                    stream uses may be deleted from then on. May be null.
+  /// @param frame_calls_on_worker Whether the frame calls run on a worker thread; see the class
+  ///                    comment. Needs @p release_lane.
+  /// @param worker_timings The limits of the worker.
+  /// @param fence See @ref FrameFenceSetup. Used only when the frame calls run on the worker.
+  /// @param recycle When the sender closes itself because the runtime asks it for no frames.
+  /// @param recycle_count The count of the peer, shared with the factory; may be null.
   QarCApiRenderSenderAdapter(
     QarRenderSender * stream, const QarNearFar & near_far,
     GlSubmitMode submit_mode = kDefaultGlSubmitMode,
@@ -160,7 +428,14 @@ public:
     float depth_scale = 1.0f,
     std::shared_ptr<qar_ar_core::PointingRaySlot> pointing_ray_slot = nullptr,
     QarPeerId peer_id = {},
-    std::string log_folder_path = {});
+    std::string log_folder_path = {},
+    std::shared_ptr<IReleaseLane> release_lane = nullptr,
+    std::shared_ptr<std::atomic<bool>> context_released = nullptr,
+    bool frame_calls_on_worker = default_frame_calls_on_worker(),
+    const FrameWorkerTimings & worker_timings = FrameWorkerTimings(),
+    const FrameFenceSetup & fence = FrameFenceSetup(),
+    const RenderRecycleTimings & recycle = RenderRecycleTimings(),
+    std::shared_ptr<RenderRecycleCount> recycle_count = nullptr);
   ~QarCApiRenderSenderAdapter() override;
 
   QarCApiRenderSenderAdapter(const QarCApiRenderSenderAdapter &) = delete;
@@ -172,13 +447,41 @@ public:
 
   /// @brief True once QAR reported the stream closed (peer left / removed). The
   /// producer destroys the corresponding stream when this flips true.
-  bool is_closed() const { return closed_.load(); }
+  bool is_closed() const;
+
+  /// @brief True when the sender closed itself because the runtime asked it for no frames (see
+  /// RenderRecycleTimings); is_closed() is true as well.
+  bool recycled() const;
+
+  /// @brief True while the frame calls of this stream are paused: two calls of the frame path
+  /// (begin-frame, frame, show-frame, hands) each took @ref FrameBreakerTimings::slow_call or
+  /// longer within @ref FrameBreakerTimings::window. No frame call is made during the pause; after
+  /// it one probe frame is tried. A fast probe resumes the stream, a slow one doubles the pause
+  /// (up to @ref FrameBreakerTimings::pause_cap). Also true while the worker thread has been
+  /// inside one QarOS call for FrameWorkerTimings::wait_notice or longer. Any thread.
+  bool frame_calls_stopped() const;
+
+  /// Whether the frame calls run on a worker thread of their own.
+  bool frame_calls_on_worker() const { return core_ != nullptr; }
+
+  /// Whether the render thread ends its copy with a fence that the worker waits for (the worker
+  /// bound its context). False before the worker's first poll, without a fence setup, and for a
+  /// sender whose worker could not bind its context: such a sender calls glFinish itself.
+  bool frame_fence_active() const;
+
+  using FrameBreakerTimings = qar_qar_adapter::FrameBreakerTimings;
+
+  /// Replaces the times of the breaker. Before the frame calls start.
+  void set_frame_breaker_timings(const FrameBreakerTimings & timings)
+  {
+    breaker_->set_timings(timings);
+  }
 
   const char * last_skip_detail() const override { return last_skip_detail_.c_str(); }
 
   // --- Diagnostics live switches (see qar_render_sender_adapter.hpp) ---------
-  void set_prime_enabled(bool enabled) override { prime_enabled_ = enabled; }
-  void set_tick_ms(double tick_ms) override { tick_ms_ = tick_ms; }
+  void set_prime_enabled(bool enabled) override;
+  void set_tick_ms(double tick_ms) override;
   std::string frame_trace_path() const override;
   std::uint64_t frame_trace_rows() const override;
   std::uint64_t frame_trace_changed_rows() const override;
@@ -224,12 +527,34 @@ private:
   /// the runtime filled it (its ids are the runtime's in render-into mode).
   void note_first_show(const QarVideoFrameOpenGl & gl);
 
+  /// @brief Notes how long a frame call took; see FrameBreaker::note(). Render thread.
+  void note_frame_call(const char * call, std::chrono::steady_clock::time_point started);
+
+  /// @brief True while the frame calls must not be made; see FrameBreaker::blocked(). Render
+  /// thread.
+  bool frame_calls_blocked();
+
+  /// @brief Hands the handles of the stream to @ref release_lane_ (or destroys them here when
+  /// there is none). Called by the destructor.
+  void release_handles();
+
+  /// The two halves of the frame path when the frame calls run on the worker thread.
+  bool begin_frame_on_worker(qar_ogre_streaming::QarFrameInfo & out_info);
+  bool submit_on_worker(const qar_ogre_streaming::QarOpenGlStereoFrame & frame);
+
   QarRenderSender * stream_ = nullptr;
   QarNearFar near_far_{};
   float depth_scale_ = 1.0f;  ///< reported per show_frame; see Config::depth_scale
   GlSubmitMode submit_mode_ = kDefaultGlSubmitMode;
   std::shared_ptr<IQarGlTextureCopyHook> copy_hook_;
   std::atomic<bool> closed_{false};
+  /// Set when the judgement below closed the sender; the render thread writes, tests read.
+  std::atomic<bool> recycled_{false};
+  /// The judgement of "the runtime asks for no frames" when the frame calls run on the render
+  /// thread; the worker keeps its own in the shared state.
+  RenderRecycleWatch recycle_watch_;
+  RenderRecycleTimings recycle_timings_;
+  std::shared_ptr<RenderRecycleCount> recycle_count_;
   std::uint64_t frame_index_ = 0;
   /// One-shot guard for the "render-into without a copy hook" warning.
   bool warned_no_copy_hook_ = false;
@@ -257,18 +582,35 @@ private:
   std::string peer_label_;
   /// Lets the first frame shown print the line with its thread and texture ids, once.
   LogOnce first_show_noted_;
+  /// The lane the handles are released on; null: this thread releases them.
+  std::shared_ptr<IReleaseLane> release_lane_;
+  /// Set once the stream handle was destroyed (see the constructor); may be null.
+  std::shared_ptr<std::atomic<bool>> context_released_;
+  /// The breaker of the frame calls of this stream: the render thread's, or the worker's when the
+  /// frame calls run on the worker (the same object, shared with the worker's state).
+  std::shared_ptr<FrameBreaker> breaker_;
+  /// The state shared with the worker thread, and the worker; both null when the frame calls run
+  /// on the render thread.
+  std::shared_ptr<RenderFrameCore> core_;
+  std::shared_ptr<FrameWorker> worker_;
 
   // --- Diagnostics live switches + per-frame trace (QAR_ADAPTER_*) -----------
   bool prime_enabled_ = true;   ///< QAR_ADAPTER_PRIME; guards the prime_next_frame() call.
   double tick_ms_ = 0.1;        ///< QAR_PANEL_TICK_MS; informational, CSV column only.
   /// Null when tracing is off (the default), which keeps the per-frame cost on the
   /// default path to a single null check. See the free-standing FrameTraceState
-  /// class above.
+  /// class above. With the frame calls on the worker the worker owns it.
   std::unique_ptr<FrameTraceState> frame_trace_;
   /// Null unless QAR_VIDEO_TIMING_DIR is set; then every try_begin_frame result and every
-  /// submit is queued (never written) for render3d*.csv. See RenderTimingState.
+  /// submit is queued (never written) for render3d*.csv. See RenderTimingState. With the frame
+  /// calls on the worker the worker owns it.
   std::unique_ptr<RenderTimingState> timing_;
 };
+
+/// @brief Where the stream handles of the render senders are destroyed: true (the default) on the
+/// thread that owns the QarOS session, through its release lane; false when
+/// QAR_ADAPTER_STREAM_RELEASE is `gui`: then on the thread that releases the sender. Read once.
+bool default_stream_release_on_owner();
 
 /// @brief Factory that mints one QarCApiRenderSenderAdapter per render target via
 /// qar_render_sender_create_async.
@@ -293,6 +635,13 @@ private:
 /// placement, the placement subscription and the world anchor are QarOS calls that run on the
 /// thread that owns the session (QarSessionOwner::post_session_task); the factory keeps what they
 /// found in a state of its own that both threads read.
+///
+/// The handles that are destroyed when a sender ends (the stream, a frame info, the token of a
+/// creation, a stream that arrived late) are handed to the release lane of the owner and destroyed
+/// on its thread; the WGL contexts of the senders are deleted only after the lane has destroyed
+/// the stream that uses each of them (delete_released_gl_contexts()). A creation that does not
+/// answer in time is cancelled and tried again after a back-off, and given up after a few such
+/// tries until the target comes back.
 class QarCApiSenderFactory : public qar_ogre_streaming::IQarRenderSenderFactory,
   public IQarSessionOwner,
   public ITargetListener,
@@ -394,6 +743,49 @@ public:
     /// Empty => `%TEMP%/quaternar`. The library's own log folder is
     /// SessionOwnerConfig::log_folder_path.
     std::string log_folder_path;
+
+    /// @brief Whether stream handles are destroyed on the thread that owns the session; see
+    /// default_stream_release_on_owner(). False: the old path, no lane is used.
+    bool stream_release_on_owner = default_stream_release_on_owner();
+
+    /// @brief Whether the frame calls of every sender run on a worker thread of its own; see
+    /// default_frame_calls_on_worker(). Needs the release lane (stream_release_on_owner).
+    bool frame_calls_on_worker = default_frame_calls_on_worker();
+    /// @brief The limits of those worker threads.
+    FrameWorkerTimings frame_worker_timings;
+
+    /// @brief Whether the render thread ends its copy with a fence and a flush and the frame worker
+    /// waits for the fence; see default_frame_fence_on_worker(). Needs the frame calls on the
+    /// worker.
+    bool frame_fence_on_worker = default_frame_fence_on_worker();
+    /// @brief The GL calls behind the fence waits and the progress watch; tests replace them.
+    GlFenceOps gl_fence_ops = default_gl_fence_ops();
+    /// @brief The limits of the fence wait of the frame workers.
+    FrameFenceTimings frame_fence_timings;
+
+    /// @brief When a sender that the runtime asks for no frames is made again; see
+    /// RenderRecycleTimings. QAR_RENDER_RECYCLE_S sets the default.
+    RenderRecycleTimings render_recycle = default_render_recycle_timings();
+
+    /// @brief Whether the GPU progress gate is on (QAR_GPU_GATE; default on): a watch thread
+    /// follows the frames the render thread issues, and gpu_watch() closes while the GPU does not
+    /// finish them.
+    bool gpu_gate = default_gpu_gate_enabled();
+    GpuGateTimings gpu_gate_timings;
+    /// @brief QAR_GPU_GATE_TEST in seconds; see default_gpu_gate_test_seconds().
+    double gpu_gate_test_seconds = default_gpu_gate_test_seconds();
+
+    /// @brief How long a creation may go unanswered before it is cancelled and tried again. A
+    /// creation on a healthy Hub can take more than 20 s (the Visualizer starts first), so the
+    /// limit is far above that.
+    std::chrono::milliseconds create_timeout{60000};
+    /// @brief The wait before the first new try; it doubles for each further one up to
+    /// @ref create_backoff_cap.
+    std::chrono::milliseconds create_backoff_first{1000};
+    std::chrono::milliseconds create_backoff_cap{8000};
+    /// @brief After this many cancelled creations in a row for one target the next one that is
+    /// cancelled ends the tries until the target goes offline and online again.
+    int create_give_up_after = 4;
   };
 
   /// @param owner The session owner whose session this factory borrows (not owned: see the class
@@ -457,6 +849,40 @@ public:
   /// @return false when the owner is gone or no session is running.
   bool post_session_task(
     const char * name, SessionTask task, std::function<void()> dropped = {}) override;
+
+  /// @brief The release lane of the owner (see IQarSessionOwner::release_lane); null when the
+  /// owner is gone. A lane belongs to one owner thread: fetch it again for a new session.
+  std::shared_ptr<IReleaseLane> release_lane() const override;
+
+  /// @brief How many creations of the render sender for @p peer_id were started since the target
+  /// last came online or its stream last arrived: 1 for the first, 2 for the one after a creation
+  /// that was cancelled. 0 when none is in flight, waiting to be tried again or given up.
+  /// Consumer thread.
+  int create_attempt(const QarPeerId & peer_id) const;
+
+  /// @brief True when the tries for @p peer_id were given up until the target goes down and up
+  /// again. Consumer thread.
+  bool create_given_up(const QarPeerId & peer_id) const;
+
+  /// @brief True when the frame calls of the stream for @p peer_id were stopped (see
+  /// QarCApiRenderSenderAdapter::frame_calls_stopped). False when the peer has no stream.
+  bool frame_calls_stopped(const QarPeerId & peer_id) const;
+
+  /// @brief The GPU progress watch of this factory; never null. The factory starts its thread in
+  /// capture_gl_context() once a GL context is latched, and stops it with the factory. The host
+  /// hands it to the render scheduler (OgreQarRenderScheduler::set_gpu_gate) and asks it from
+  /// RViz's frame listener: rviz_gate_closed() before a frame, note_frame_issued(kRvizFrame) after
+  /// it, note_frame_skipped() when it skipped one. While the gate is closed the factory also makes
+  /// no GL context and deletes none on the render thread (create_sender() waits, and
+  /// capture_gl_context() leaves the contexts of released streams for the next open tick). With
+  /// Config::gpu_gate off the gate is always open.
+  const std::shared_ptr<GpuProgressWatch> & gpu_watch() const { return gpu_watch_; }
+
+  /// @brief Deletes the WGL contexts of released factories whose streams were destroyed. Call it
+  /// on the render thread (the factory's own capture_gl_context() does, and the panel after it
+  /// dropped the session owner). A context whose stream was not destroyed (the lane refused, or
+  /// a frame worker never returned) is never deleted.
+  static void delete_released_gl_contexts();
 
   /// @brief The app volume this factory got at attach(), if it did.
   ///
@@ -532,6 +958,11 @@ public:
   /// @return true once a context is known (freshly captured or latched earlier).
   bool capture_gl_context();
 
+  /// @brief Deletes the WGL context of every sender of this factory whose stream the release lane
+  /// destroyed (the flag of its context is set), without waiting for the factory to end. Render
+  /// thread; capture_gl_context() calls it.
+  void delete_contexts_of_released_streams();
+
   /// @brief Drain peer ids the viewer requested a stream for (thread-safe).
   void poll_new_peer_requests(std::vector<QarPeerId> & out);
 
@@ -541,6 +972,27 @@ public:
   /// Not a drain: nothing is consumed, so every call lists the same peers again until
   /// @ref forget is called for each of them.
   void poll_closed_peers(std::vector<QarPeerId> & out);
+
+  /// @brief What the Hub process is doing, fed by the producer's tick from
+  /// QarSessionOwner::hub_process(). When a Hub process ended, the senders of every peer are listed
+  /// by @ref poll_closed_peers (the producer then destroys them and calls @ref forget) and no peer
+  /// is handed out by @ref poll_new_peer_requests until the new Hub process runs and the session
+  /// is running: a sender that was made for the old Hub would have the new Visualizer replay the
+  /// old stream id (the library's auto-reconnect), so none exists across the restart. A restart
+  /// of the Visualizer alone does not change the Hub process and touches nothing.
+  /// @return the log lines (without a prefix) for what this call did; empty when nothing.
+  std::vector<std::string> note_hub_process(const HubProcessInfo & info);
+
+  /// @brief True from the end of a Hub process until the new one runs.
+  bool senders_held_for_hub() const;
+
+  /// @brief Prints one line for each (target, stream id) pair that the render request
+  /// subscription saw since the last call: the stream the receiver asks for and the id of our own
+  /// sender of that target, so that a receiver that asks for an id that no sender of ours serves
+  /// is visible in our log. A pair whose own id is not known yet waits up to 3 s. The render
+  /// thread calls it every tick; it makes no QarOS call.
+  /// @return the number of lines printed.
+  int log_render_requests();
 
   /// @brief Forget a peer's bookkeeping once its stream is destroyed. The peer
   /// stops being listed by @ref poll_closed_peers, and its place under max_peers is free.
@@ -602,9 +1054,12 @@ public:
 
 private:
   friend struct QarCApiSenderFactoryTestAccess;
+  friend struct QarCApiSenderFactoryOutageAccess;
+  friend struct QarCApiSenderFactoryWorkerAccess;
 
   Config config_;
   std::weak_ptr<QarSessionOwner> owner_;
+  std::shared_ptr<GpuProgressWatch> gpu_watch_;
 
   /// What the thread that owns the session and the consumer thread share: the outcome of the
   /// attach, the volume, the placement cache and the anchor requests. Defined in the .cpp. The
@@ -613,6 +1068,7 @@ private:
   struct CrossThread;
   struct AttachJob;
   struct PlacementSubscription;
+  struct RequestSubscription;
   std::shared_ptr<CrossThread> shared_;
 
   // The tasks. Each runs on the thread that owns the session.
@@ -623,6 +1079,10 @@ private:
   static void run_geo_anchor(QarSession * session, const std::shared_ptr<CrossThread> & shared);
   /// The runtime calls this on a library thread when an app volume changed.
   static void placement_update_trampoline(QarAppVolume * handle, void * user_state);
+  /// The runtime calls this on a library thread for each render stream request.
+  static void render_request_trampoline(QarRenderStreamRequest * request, void * user_state);
+  /// Ends the render request subscription of @p shared; on the owner's thread.
+  static void run_request_unsubscribe(const std::shared_ptr<CrossThread> & shared);
   /// One query for the placement of @p volume. Blocks for as long as the Hub takes.
   static bool read_placement_by_query(
     QarSession * session, const QarAppVolumeId & volume, qar_ar_core::ScenePlacement & out);
@@ -645,6 +1105,13 @@ private:
   std::vector<QarPeerId> served_peers_;
   /// Peers that left the session while the producer may still hold a stream for them.
   std::vector<QarPeerId> closed_peers_;
+
+  /// note_hub_process(): the first call only records the count; later ones compare with it.
+  bool hub_seeded_ = false;
+  std::uint32_t hub_gone_seen_ = 0;
+  /// Set while the senders are held for a Hub restart, with the pid of the process that ended.
+  bool hub_hold_ = false;
+  std::uint32_t hub_old_pid_ = 0;
 
   /// The id of the app volume that streams are keyed to, as create_sender() copied it: the
   /// runtime reads QarRenderSenderInit::app_volume_id through a pointer, so the id has a place
@@ -687,6 +1154,13 @@ public:
     void * hdc = nullptr;      ///< HDC that context was created on.
     std::string peer;          ///< Short peer id, named by the line of the first bind.
     LogOnce bound;             ///< Lets the first successful bind print its line, once.
+    /// The number of the thread (thread_number()) that bound the context last; 0 before the
+    /// first bind. A failed bind names it, because the thread that holds the context is what
+    /// makes the next bind on another thread fail.
+    std::atomic<unsigned long long> bound_by{0};
+    /// Set to true once the stream that uses this context was destroyed (or never existed); null
+    /// while no stream is tied to it. Only then may the context be deleted.
+    std::shared_ptr<std::atomic<bool>> stream_released;
 
     /// The pair the runtime's thread makes current: this sender's own context and the device
     /// context it was created on. @return false, with whatever is set returned, when either
@@ -741,12 +1215,26 @@ private:
   struct PendingSender
   {
     QarPeerId peer_id{};
+    /// The lane the late stream and the token are released on; null: they are released where the
+    /// result arrives or the creation is given up.
+    std::shared_ptr<IReleaseLane> lane;
+    /// The flag of the GL context the stream will use (GlSenderContext::stream_released); null
+    /// without a context. Set once the stream was destroyed or turned out not to exist.
+    std::shared_ptr<std::atomic<bool>> context_released;
+    /// The token of the creation (null when there is no lane). Whoever takes it (exchange to
+    /// null) releases it.
+    std::atomic<QarCancelToken *> token{nullptr};
+    /// When the creation counts as unanswered.
+    std::chrono::steady_clock::time_point deadline{};
     /// Written by the QAR callback thread, read by the render tick — hence atomics.
     std::atomic<bool> done{false};
     std::atomic<bool> failed{false};
     /// Set by detach(): nobody polls this creation, so whoever finds the stream
     /// destroys it.
     std::atomic<bool> abandoned{false};
+    /// The context that the frame worker of the sender binds for its fences (null without a
+    /// fence setup). It lives as long as the creation and the sender.
+    std::shared_ptr<FenceContext> fence_context;
     /// The number of the thread that ran the callback (thread_number()), published before
     /// `done`; the render tick prints it, the callback itself prints nothing.
     std::atomic<unsigned long long> callback_thread{0};
@@ -769,8 +1257,68 @@ private:
     QarResult status, QarRenderSender * stream, void * user_state);
 
   /// Gives up a creation: a stream that arrived already is destroyed now, one that arrives later
-  /// is destroyed by the trampoline.
-  static void abandon_pending(PendingSender & pending);
+  /// is destroyed by the trampoline; the token is cancelled (when @p cancel) and destroyed. The
+  /// destroys go to the lane of the creation.
+  static void abandon_pending(PendingSender & pending, bool cancel = true);
+
+  /// Destroys @p stream on the lane of @p pending, or here when the creation has none. A refused
+  /// lane leaves it unreleased and says so.
+  static void release_stream(PendingSender & pending, QarRenderSender * stream);
+
+  /// Releases the token of @p pending once (after cancelling it when @p cancel).
+  static void release_token(PendingSender & pending, bool cancel);
+
+  /// Sets @p flag behind everything the lane has been given so far (at once without a lane). For a
+  /// context whose stream never existed.
+  static void mark_context_released(
+    const std::shared_ptr<IReleaseLane> & lane, const std::shared_ptr<std::atomic<bool>> & flag);
+
+  /// Per target: the cancelled creations in a row and when the next try may start. Guarded by
+  /// mutex_; a target that goes offline loses its entry.
+  struct CreateRetry
+  {
+    QarPeerId peer_id{};
+    int started = 0;         ///< Creations started since the entry was made.
+    int cancelled = 0;       ///< Of those, cancelled for want of an answer.
+    bool given_up = false;
+    std::chrono::steady_clock::time_point retry_at{};
+  };
+  std::vector<CreateRetry> retries_;
+
+  /// Per target: how often its 3D sender was made again in a row (see RenderRecycleTimings). The
+  /// senders of the peer share the count. Guarded by mutex_; a target that goes offline loses its
+  /// entry.
+  struct RecycleEntry
+  {
+    QarPeerId peer_id{};
+    std::shared_ptr<RenderRecycleCount> count;
+  };
+  std::vector<RecycleEntry> recycle_counts_;
+  /// The count of @p peer_id, made when there is none. Takes mutex_.
+  std::shared_ptr<RenderRecycleCount> recycle_count_of(const QarPeerId & peer_id);
+
+  /// Gives up the creation at @p it, which found no answer after @p waited_s seconds: cancels it,
+  /// plans the next try and says so. Consumer thread.
+  void give_up_waiting(std::vector<std::shared_ptr<PendingSender>>::iterator it, double waited_s);
+  /// Drops what is known about the failed tries for @p peer_id.
+  void forget_retry(const QarPeerId & peer_id);
+
+  /// The lane the release of stream handles uses: the owner's, once it was fetched; null when
+  /// Config::stream_release_on_owner is off or the owner has none.
+  std::shared_ptr<IReleaseLane> stream_lane();
+  std::shared_ptr<IReleaseLane> lane_;
+  bool lane_fetched_ = false;
+
+  /// How often create_sender() waited for an open GPU progress gate (the line about it is rate
+  /// limited). Consumer thread.
+  unsigned gate_waits_ = 0;
+
+  /// Whether create_sender() chains a WGL context into the creation, as the runtime requires of
+  /// an OpenGL stream. Off only in tests, which have no GL context.
+  bool chain_gl_context_ = true;
+
+  /// Replaces the function that deletes a WGL context. For tests; null restores the default.
+  static void set_gl_context_deleter(void (*deleter)(void * context));
 
   /// How long a pending creation may sit before we log it as stuck. Not a hard
   /// cancel — the SDK owns the wait — but it turns an invisible hang into a

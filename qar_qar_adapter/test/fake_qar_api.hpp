@@ -9,6 +9,12 @@
 // of their own (also on cancellation), cancelling or destroying a token waits for a running
 // callback of its subscription, and a peer spec handed to a callback is borrowed while one
 // returned by a query is owned. Outcomes are scripted by the test.
+//
+// Outages: set_hub_gone() makes every call into the session fail or wait, the frame calls of the
+// render sender and the video sender are slowed or blocked on their own (set_frame_delay_ms,
+// set_frame_block), a render sender creation can answer late or never, and a delivery to a
+// subscription can run on a thread the test does not wait for. Every blocking mode is released by
+// the test (release_pending, set_hub_gone(kNo), set_frame_block(false)) or by the fake's end.
 
 #ifndef QAR_QAR_ADAPTER__TEST__FAKE_QAR_API_HPP_
 #define QAR_QAR_ADAPTER__TEST__FAKE_QAR_API_HPP_
@@ -60,6 +66,38 @@ struct Outcome
   /// Nonzero: the call itself returns this error, yet the result callback still fires later with
   /// the outcome above (a library that reports the error and keeps the callback).
   int sync_error_code = 0;
+  /// Render sender creation only: whether cancelling the token makes the callback fire (with an
+  /// error and no sender). False: the creation goes on waiting for release_pending() or its delay,
+  /// and then answers as scripted, also when its token was cancelled meanwhile.
+  bool fire_on_cancel = true;
+};
+
+/// How the fake Hub answers session calls.
+enum class HubGone
+{
+  kNo,       ///< The Hub is there.
+  kFailAll,  ///< Every session call fails at once with the scripted code.
+  kBlockAll  ///< Every session call waits until released, then fails with the scripted code.
+};
+
+/// What the next qar_render_sender_try_begin_frame answers.
+struct RenderFrameScript
+{
+  bool ready = false;   ///< A frame is ready: the call hands out frame info.
+  int error_code = 0;   ///< Nonzero: the call fails with this status (803 wrapping 603 etc.).
+};
+
+/// A gesture event of an app volume, as the fake delivers it.
+struct FakeGesture
+{
+  QarGestureKind kind = QAR_GESTURE_CLICK;
+  QarGesturePhase phase = QAR_GESTURE_PHASE_INSTANT;
+  QarPeerId source{};
+  QarVector3 action_point{0.0f, 0.0f, 0.0f};
+  bool has_action_point = true;
+  QarVector3 start_point{0.0f, 0.0f, 0.0f};
+  bool has_start_point = true;
+  std::int64_t unix_ns = 1;
 };
 
 /// One call into the fake library.
@@ -135,11 +173,51 @@ public:
   /// Runs on the calling thread of an asynchronous call that returns a synchronous error but
   /// keeps its callback, with the callback's user-state pointer, before the call returns.
   void set_sync_failure_hook(std::function<void(const void *)> hook);
+  /// Outcomes of qar_render_sender_create_async calls, used in order; the default is a sender
+  /// that arrives at once. A nonzero code makes the callback fail; wait_for_release (also with a
+  /// token that is cancelled, see Outcome::fire_on_cancel) and delay_ms hold the answer back.
+  void script_render_create(const Outcome & outcome);
+  /// What qar_render_sender_try_begin_frame answers from now on (default: not ready, no error).
+  void set_render_frame(const RenderFrameScript & script);
+  /// Makes every session call fail with @p code (1802 by default) or wait until it is released
+  /// by release_pending() or set_hub_gone(HubGone::kNo). The session calls are the queries, the
+  /// GUI panels, the app volumes, the subscriptions, the video sender and render sender creation,
+  /// the peer queries and the destroy of a session, a video sender and a render sender (these wait
+  /// in kBlockAll and are never refused); onboarding and invite results answer @p code. Frame
+  /// calls, getters of handles in hand, cancel tokens and the runtime calls are not affected.
+  void set_hub_gone(HubGone mode, int code = 1802);
+  /// Blocks the frame calls (try_begin_frame, frame_cpu / frame_opengl, show_frame, last_hands of
+  /// the render sender and the video sender) until set_frame_block(false).
+  void set_frame_block(bool block);
+  /// Slows a frame call by @p ms. @p call_name is a name as calls() records it
+  /// ("render_sender_show_frame"); empty sets the delay of every frame call. A named delay wins.
+  void set_frame_delay_ms(int ms, const std::string & call_name = std::string());
 
   // --- while the owner runs ----------------------------------------------------------------
   /// Delivers @p peer to the peer subscription on a thread of the fake library, and returns when
   /// the callback returned. Does nothing when no subscription is active.
   void deliver_peer(const FakePeer & peer);
+  /// Like deliver_peer, but returns at once: the callbacks run on a thread of the fake library
+  /// that the test does not wait for, so a callback that never returns can be scripted. The
+  /// subscription counts as running from the moment this returns. Wait with
+  /// wait_detached_deliveries(); the fake's destructor joins the threads.
+  void deliver_peer_detached(const FakePeer & peer);
+  /// Delivers @p gesture to the gesture subscriptions of the app volume (all kinds, or the kind
+  /// they asked for) on a thread of the fake library, and returns when the callbacks returned.
+  void deliver_volume_gesture(const FakeGesture & gesture = FakeGesture());
+  /// The detached form of deliver_volume_gesture (see deliver_peer_detached).
+  void deliver_volume_gesture_detached(const FakeGesture & gesture = FakeGesture());
+  /// Delivers one render stream request (a target asks for @p stream) to the request subscriptions
+  /// on a thread of the fake library, and returns when the callbacks returned.
+  void deliver_render_request(const QarPeerId & peer, const QarStreamId & stream);
+  /// The stream id of the @p n-th render sender the fake created (n counts from 1): every byte is
+  /// render_stream_tag(n).
+  static QarStreamId render_stream_id(int n);
+  static unsigned char render_stream_tag(int n) { return static_cast<unsigned char>(0xD0 + n); }
+  /// Render requests the callbacks released with qar_render_request_handle_destroy.
+  int render_requests_released() const;
+  /// Waits until every detached delivery has returned; false after @p timeout_ms.
+  bool wait_detached_deliveries(int timeout_ms);
   /// Lets the calls that wait_for_release answer.
   void release_pending();
   /// Delivers the current state of the volume to the update subscriptions, on a thread of the
@@ -179,6 +257,31 @@ public:
   /// How often qar_render_stream_handle_destroy was called.
   int render_streams_destroyed() const;
   int live_tokens() const;
+  /// Render senders that were created and not destroyed.
+  int live_render_senders() const;
+  /// Calls of qar_render_sender_create_async that started a creation.
+  int render_creates() const;
+  /// Creations whose token was cancelled (or destroyed) before they answered.
+  int render_creates_cancelled() const;
+  /// Creations whose callback has not fired yet.
+  int render_creates_pending() const;
+  /// Frame infos handed out by qar_render_sender_try_begin_frame and not destroyed.
+  int live_render_frame_infos() const;
+  /// Frames shown by render senders.
+  int render_frames_shown() const;
+  /// Gesture subscriptions of app volumes that are active.
+  int gesture_subscriptions() const;
+  /// Gesture subscriptions of GUI panels that are active (the fake delivers none).
+  int panel_gesture_subscriptions() const;
+  /// Runtimes that were created and not destroyed, and how many creates succeeded.
+  int live_runtimes() const;
+  int runtime_creates() const;
+  /// Session calls that wait inside set_hub_gone(HubGone::kBlockAll) now.
+  int hub_blocked_calls() const;
+  /// Frame calls that wait inside set_frame_block(true) now.
+  int frame_calls_blocked() const;
+  /// The thread of the last call named @p name, or a default-constructed id when there was none.
+  std::thread::id thread_of_last(const std::string & name) const;
   bool library_loaded() const { return qar_is_library_loaded(); }
 
   /// The loader the owner is given. @p installed answers installed_bin_folder; @p load_ok

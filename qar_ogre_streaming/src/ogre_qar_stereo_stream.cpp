@@ -311,6 +311,18 @@ void OgreQarStereoStream::note_skip(SkipReason reason, const char * detail)
   }
 }
 
+uint64_t OgreQarStereoStream::take_left_out_report()
+{
+  const uint64_t total = left_target_ ? left_target_->screen_space_left_out() : 0u;
+  const uint64_t previous = left_out_seen_;
+  left_out_seen_ = total;
+  if (!should_report_left_out(previous, total, left_out_reported_)) {
+    return 0u;
+  }
+  left_out_reported_ = true;
+  return total - previous;
+}
+
 StreamDiagnostics OgreQarStereoStream::diagnostics() const
 {
   StreamDiagnostics d;

@@ -59,6 +59,7 @@ decide_panel_attach(const PanelProbe & probe, unsigned retries_done)
   decision.change_size = probe.size_differs;
   decision.show = probe.state == QAR_GUI_PANEL_STATE_HIDDEN ||
     probe.state == QAR_GUI_PANEL_STATE_MINIMIZED;
+  decision.hide_before_swap = decision.swap_content && probe.state == QAR_GUI_PANEL_STATE_VISIBLE;
   return decision;
 }
 

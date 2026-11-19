@@ -46,6 +46,13 @@ bool frame_trace_requested(const char * value);
 /// interval cannot represent sub-1ms periods).
 double parse_tick_ms_env(const char * value, double default_ms);
 
+/// @brief Parse QAR_RENDER_RECYCLE_S: how many seconds a 3D sender may go without a frame, while
+/// the runtime answers its frame calls with errors, before it is made again. Any finite
+/// non-negative value up to 3600 is honoured (fractions allowed; 0 switches the rule off); a null
+/// or empty value, a negative, non-finite or larger one, or text that does not start with a
+/// number falls back to @p default_s.
+double parse_render_recycle_seconds(const char * value, double default_s);
+
 // ---------------------------------------------------------------------------
 // QarOS library logging (QarLibraryInit) — how a severity/console request becomes
 // what the vendor library actually does.
