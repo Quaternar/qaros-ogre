@@ -571,10 +571,12 @@ include\qar_ar_core\qar_url_panel.hpp
 include\qar_ar_core\spatial_frames.hpp
 include\qar_ar_core\spatial_pick.hpp
 include\qar_ar_core\timing_log.hpp
+...
 include\qar_ogre_streaming\clock.hpp
 include\qar_ogre_streaming\diagnostics.hpp
 include\qar_ogre_streaming\gl_fence_hook.hpp
 include\qar_ogre_streaming\gl_interop.hpp
+...
 include\qar_ogre_streaming\mock_qar_frame_info_source.hpp
 include\qar_ogre_streaming\ogre_opengl_texture_bridge.hpp
 include\qar_ogre_streaming\ogre_qar_render_scheduler.hpp
@@ -591,11 +593,13 @@ include\qar_ogre_streaming\spatial_pick_visual.hpp
 include\qar_ogre_streaming\types.hpp
 include\qar_qar_adapter\env_config.hpp
 include\qar_qar_adapter\frame_stall_probe.hpp
+...
 include\qar_qar_adapter\geo_anchor.hpp
+...
 include\qar_qar_adapter\gui_call_guard.hpp
-include\qar_qar_adapter\identity_store.hpp
 include\qar_qar_adapter\log_time.hpp
 include\qar_qar_adapter\onboarding_status.hpp
+...
 include\qar_qar_adapter\panel_state_guard.hpp
 include\qar_qar_adapter\panel_state_log.hpp
 include\qar_qar_adapter\qar_capi_input_slots.hpp
@@ -606,6 +610,7 @@ include\qar_qar_adapter\qar_capi_url_panel_adapter.hpp
 include\qar_qar_adapter\qar_session_owner.hpp
 include\qar_qar_adapter\render_timing.hpp
 include\qar_qar_adapter\target_rule.hpp
+...
 lib\qar_ar_core.lib
 lib\qar_ogre_streaming.lib
 lib\qar_qar_adapter_capi.lib
@@ -614,7 +619,7 @@ lib\qar_qar_adapter_render.lib
 lib\qar_qar_adapter_session.lib
 lib\qar_qar_adapter_url.lib
 share\qar_ogre_adapter\LICENSE
-share\qar_ogre_adapter\LICENSE.qar_streaming_header
+...
 share\qar_ogre_adapter\cmake\qar_ogre_adapterConfig.cmake
 share\qar_ogre_adapter\cmake\qar_ogre_adapterConfigVersion.cmake
 share\qar_ogre_adapter\cmake\qar_ogre_adapterTargets-relwithdebinfo.cmake

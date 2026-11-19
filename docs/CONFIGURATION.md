@@ -244,21 +244,16 @@ $env:PATH = "$env:ROS2_INSTALL_ROOT\opt\rviz_ogre_vendor\bin;$env:PATH"
 & .\build\vs2019-x64\examples\qaros_live_stream\RelWithDebInfo\qar_ogre_live_stream_example.exe --help
 ```
 ```text
-Usage: qar_ogre_live_stream_example [--local | --hub HOST:PORT [--code CODE] | --forget]
-                                    [--connect-only] [--seconds N]
-  --local         join the QAROS Hub of this PC (the default). QAROS asks once to allow
-                  this program, and again after each rebuild of it: click Allow in the
-                  QAROS window
-  --hub H:P       join the Hub of another PC at host H and onboarding port P (the port is
-                  shown with the pairing code in the Visualizer of that PC)
-  --code CODE     the pairing code that the Hub of that PC shows for a new device
-                  (see the QAROS documentation); it works once. Only the first join
-                  needs it: the pairing is stored for the next start
-  --forget        erase the stored pairing with another PC's Hub and exit
+Usage: qar_ogre_live_stream_example [--local] [--connect-only] [--seconds N] | --version
+  --local        join the QAROS Hub of this PC (the only mode, accepted for older
+                  scripts). QAROS asks once to allow this program, and again after each
+                  rebuild of it: click Allow in the QAROS window. For a Hub on another PC,
+                  make the Hub of this PC a member of that Hub in QAROS
   --connect-only  join QAROS, print the runtime, the mode, this program's peer, the app
                   volume and the targets, and exit; no window, no stream
   --seconds N     otherwise: wait for a target (a headset or a Visualizer), stream the
                   scene to the first one that comes up, stop after N s (default 60)
+  --version       print the qar_ogre_adapter version and exit
 ```
 
 The example joins the Hub of this PC; `--local` is accepted and changes nothing. To work with the Hub of another PC, make the Hub of this PC a member of that Hub in QAROS; the program still joins the Hub of its own PC. `--connect-only` joins, prints what it found and exits, and the example streams for 60 seconds unless `--seconds` says otherwise.

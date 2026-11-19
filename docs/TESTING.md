@@ -22,16 +22,16 @@ ctest --preset vs2019-x64
 ```text
 Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
         Start   1: check_layering_qar_ar_core
-  1/576 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.13 sec
+  1/774 Test   #1: check_layering_qar_ar_core ..............................................................................   Passed    0.11 sec
         Start   2: check_layering_qar_ogre_streaming
-  2/576 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.13 sec
+  2/774 Test   #2: check_layering_qar_ogre_streaming .......................................................................   Passed    0.11 sec
         Start   3: check_layering_qar_qar_adapter
-  3/576 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.20 sec
+  3/774 Test   #3: check_layering_qar_qar_adapter ..........................................................................   Passed    0.27 sec
         Start   4: check_layering_examples
 ...
-100% tests passed, 0 tests failed out of 576
+100% tests passed, 0 tests failed out of 774
 
-Total Test time (real) =  94.95 sec
+Total Test time (real) = 177.00 sec
 ```
 
 The last lines are the summary: how many tests passed, and the names of those that failed. A test that is skipped is reported as skipped and does not count as a failure.
@@ -54,9 +54,9 @@ Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
   Test   #6: StereoStreamConfig.DefaultsAreValid
   Test   #7: StereoStreamConfig.RejectsZeroDimensions
 ...
-  Test #576: HubModeRule.AnExplicitRequestWinsAndAutoLooksAtThePairingAndTheInstall
+  Test #774: TargetRule.APresenceTheHeaderDoesNotNameReadsAsUnknown
 
-Total Tests: 576
+Total Tests: 774
 ```
 
 ```powershell
@@ -65,11 +65,11 @@ ctest --preset vs2019-x64 -R check_layering_selftest
 ```text
 Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
     Start 5: check_layering_selftest
-1/1 Test #5: check_layering_selftest ..........   Passed    0.11 sec
+1/1 Test #5: check_layering_selftest ..........   Passed    0.07 sec
 
 100% tests passed, 0 tests failed out of 1
 
-Total Test time (real) =   0.14 sec
+Total Test time (real) =   0.10 sec
 ```
 
 Use `-R` with a part of a suite name to run one suite, and add `-j` followed by a number to run tests in parallel. When a test fails, its output is printed by the preset; add the option `--rerun-failed` to the command to run only the tests that failed in the last run.
@@ -163,9 +163,9 @@ The commands call the interpreter of the virtual environment, which is optional 
 & "$env:QAR_VENV\Scripts\python.exe" scripts\check_layering.py --all
 ```
 ```text
-check_layering qar_ar_core: OK (26 files)
-check_layering qar_ogre_streaming: OK (54 files)
-check_layering qar_qar_adapter: OK (46 files)
+check_layering qar_ar_core: OK (27 files)
+check_layering qar_ogre_streaming: OK (55 files)
+check_layering qar_qar_adapter: OK (65 files)
 check_layering examples: OK (7 files)
 ```
 
