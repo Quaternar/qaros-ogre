@@ -4,7 +4,7 @@ qar_ogre_adapter 0.2.0 is the QarOS integration layer of a stack that streams Og
 
 ## TL;DR
 
-You need Windows 11, PowerShell 7, the toolchain, the ROS 2 distribution that provides Ogre (on Windows, the Humble binary distribution: [ROS 2 Humble for Windows](docs/INSTALL.md#ros-2-humble-for-windows)) and the layout variables of [Installation](docs/INSTALL.md); the last step also needs QAROS installed ([The QarOS SDK](docs/INSTALL.md#the-qaros-sdk)). Then clone, build, test, install and run:
+You need Windows 11, PowerShell 7, the toolchain, the ROS 2 distribution that provides Ogre (on Windows, the Humble binary distribution: [ROS 2 Humble for Windows](docs/INSTALL.md#ros-2-humble-for-windows)) and the layout variables of [Installation](docs/INSTALL.md); the last step also needs QAROS installed ([The QarOS SDK](docs/INSTALL.md#the-qaros-sdk)). The QarOS SDK headers come from the public QarOS repository, which is the git submodule `external/qaros`, so clone with `--recurse-submodules` (or run `git submodule update --init` in an existing clone). Then clone, build, test, install and run:
 
 ```powershell
 $env:GIT_LFS_SKIP_SMUDGE = 1
@@ -58,7 +58,7 @@ This repository is one of three that together stream an Ogre scene, Qt widgets, 
 | Repository | What it provides | Depends on | Also needs |
 |---|---|---|---|
 | **qar_ogre_adapter** (this repository) | The QarOS integration layer: renders an Ogre scene for each eye and streams it to QarOS; the adapter for the QarOS C API; the QarOS headers of the qaros submodule | none | The ROS 2 distribution, for Ogre only |
-| qar_qt_streaming | Qt widgets as QarOS AR GUI panels, as a Qt library that needs no ROS 2, no RViz and no Ogre | none | Qt 5.15.2 or Qt 6.5 and newer, the QarOS C++ SDK headers (a copy is carried) |
+| qar_qt_streaming | Qt widgets as QarOS AR GUI panels, as a Qt library that needs no ROS 2, no RViz and no Ogre | none | Qt 5.15.2 or Qt 6.5 and newer, the QarOS C++ SDK headers (the submodule `external/qaros`) |
 | qar_rviz_plugin | The RViz2 plugin that streams RViz into QarOS, and web AR panels from a UI model and from the ROS 2 graph | qar_ogre_adapter, qar_qt_streaming | The ROS 2 distribution with its repairs, Qt 5.15.2, colcon |
 
 The installation document of each repository installs the repositories it depends on, with the commands for each, so you can start from any of them.

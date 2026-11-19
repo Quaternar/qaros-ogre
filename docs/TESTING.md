@@ -22,14 +22,14 @@ ctest --preset vs2019-x64
 ```text
 Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
         Start   1: check_layering_qar_ar_core
-  1/546 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.13 sec
+  1/576 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.13 sec
         Start   2: check_layering_qar_ogre_streaming
-  2/546 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.13 sec
+  2/576 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.13 sec
         Start   3: check_layering_qar_qar_adapter
-  3/546 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.20 sec
+  3/576 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.20 sec
         Start   4: check_layering_examples
 ...
-100% tests passed, 0 tests failed out of 546
+100% tests passed, 0 tests failed out of 576
 
 Total Test time (real) =  94.95 sec
 ```
@@ -54,9 +54,9 @@ Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
   Test   #6: StereoStreamConfig.DefaultsAreValid
   Test   #7: StereoStreamConfig.RejectsZeroDimensions
 ...
-  Test #546: TargetRule.APresenceTheHeaderDoesNotNameReadsAsUnknown
+  Test #576: HubModeRule.AnExplicitRequestWinsAndAutoLooksAtThePairingAndTheInstall
 
-Total Tests: 546
+Total Tests: 576
 ```
 
 ```powershell
@@ -100,11 +100,22 @@ The unit tests are four GoogleTest executables, `qar_ar_core_tests`, `qar_ogre_s
 | `qar_qar_adapter_tests` | `FrameStall`, `SenderStartLines` | a gap of two seconds between two frames is a stall and is reported once, with the mean colour of the first frame after it, and the words of the lines that a sender prints when it starts |
 | `qar_qar_adapter_tests` | `PanelStateLog`, `RuntimeRecord`, `RuntimeRecordLog`, `PanelLines`, `LogTime`, `LogOnce`, `ThreadNumber` | the line of a change of the state of a panel, the record that the runtime keeps of a panel (a stream that is ours reads match and another one MISMATCH, a change of state, stream or size is a change and nothing else is, the numbering, and the bounded queue), the stamp of a line, and a guard that lets exactly one of many threads through |
 | `qar_qar_adapter_tests` | `RenderFactoryQueue`, `RenderFactoryAttach`, `RenderFactoryLifetime`, `RenderFactoryPending`, `RenderFactoryAsync` | the render sender factory on the session owner, which runs on the fake library: the queues of new and closed peers, the attach and its states, the weak reference to the owner, the pending creations and the asynchronous results |
-| `qar_qar_adapter_tests` | `UrlPanel`, `PanelStateGuard` | the URL panel adapter on the thread of the owner: the queued create, place, state and teardown tasks, the results that `drain_results` hands out, the reattach of a panel, and the keeper that asks a panel for its state again |
+| `qar_qar_adapter_tests` | `UrlPanel`, `UrlPanelClosedInAr`, `PanelStateGuard` | the URL panel adapter on the thread of the owner: the queued create, place, state and teardown tasks, the results that `drain_results` hands out, the reattach of a panel, whether the operator closed the panel in AR (the mark is set by a report of the closed state, cleared by a report of another one, and never set by a close or a hide of the adapter itself), and the keeper that asks a panel for its state again |
 | `qar_qar_adapter_session_tests` | `SessionOwnerLocal`, `SessionOwnerRefusedStart` | joining the Hub of this PC on the fake library: the approval, its denial and timeout, a busy Hub, a library that cannot be loaded or started, and an attempt that failed at once |
 | `qar_qar_adapter_session_tests` | `SessionOwnerTargets`, `SessionOwnerListener`, `SessionOwnerInvites`, `SessionOwnerTasks`, `SessionOwnerHandOver`, `SessionOwnerTeardown` | the table of targets and the cap of served targets, the listener, the invite of a device, the tasks of the owner thread with the drop rules, the hand-over of the session to the consumer and the bounded teardown |
 | `qar_qar_adapter_session_tests` | `GuiCallGuard`, `OnboardingStatus`, `TargetRule` | the timer of QarOS calls, the plain-words texts of the status codes, and the rule that selects the render targets |
 | `qar_qar_adapter_tests` | `RenderConfigDefaults`, `GlSenderContextHandles`, `CopyHookDefaults` | the default app volume is a cube of ten metres whose centre is one metre up; a sender binds its own context on the device context that it was created on and a missing handle binds nothing; a hook without read-back reports no colour |
+| `qar_qar_adapter_tests` | `HubRestart`, `RenderRequests` | the render sender factory when the Hub process ends: the 3D sender is released once and made again only when the new Hub runs, a restart of the Visualizer alone changes nothing, a creation in flight is said to be not held, and each pair of a target and a stream id is logged once with the id of our sender |
+| `qar_qar_adapter_tests` | `FakeQarLibrary` | the fake of the QarOS function tables, which every outage test relies on: scripted creations, frame calls that are delayed or blocked until a test releases them, a Hub that is gone, and gesture subscriptions |
+| `qar_qar_adapter_tests` | `RenderWorker`, `RenderFence`, `RenderCopyHook` | the render sender with its frame calls on a worker thread: no frame call on the caller's thread, the caller never waits for a call that blocks, the breaker that pauses the frame calls, the release of the stream and of its GL context on the worker, the fence wait on a fake of the GL calls, and the copy hook that forgets the textures it targeted |
+| `qar_qar_adapter_tests` | `RenderFactoryOutage`, `RecycleWatch`, `SpatialGestureOutage`, `UrlPanelOutage` | the render sender factory, the spatial gesture source and the URL panel adapter when the Hub stops answering: no call on the calling thread waits, handles are released on the thread of the owner, a creation that gets no answer is cancelled and tried again with a growing pause, and a sender that the runtime asks for no frames is made again only as a last resort |
+| `qar_qar_adapter_tests` | `GpuWatchTest` | the GPU progress watch and its gate on a fake of the GL fence calls, with no GL context: healthy rates never close a series, a stalled frame closes it, a probe reopens it, and the two series are independent |
+| `qar_qar_adapter_tests` | `RenderRecycleSeconds` | the parse rule of `QAR_RENDER_RECYCLE_S` |
+| `qar_qar_adapter_session_tests` | `SessionOwnerOutage`, `SessionOwnerRelease` | the owner when the Hub stops answering, with every limit scaled down: silence, `kLost`, the release lane, the hand-back of the consumer, and the automatic rejoin with its pauses |
+| `qar_qar_adapter_session_tests` | `SessionOwnerExit`, `SessionOwnerExitWatch`, `SessionOwnerAbandon`, `SessionOwnerReview` | the bounded exit, also when the supervisor thread does not return, the owner thread that is left behind and replaced by a fresh owner, and the rules that a thread left behind makes no further call and that a command of the person stands |
+| `qar_qar_adapter_session_tests` | `OutagePolicy`, `HubHints`, `OwnerCallClock` | the supervisor's verdicts as a pure function of what it saw, the reading of the endpoint file and of the processes of the Hub, and the clock that tells which QarOS call a thread is inside |
+| `qar_qar_adapter_session_tests` | `FrameWorker` | the frame worker thread of a sender: its calls run off the caller's thread, the caller never waits for a blocked call, a worker that never returns is left behind, and the owner waits for the workers before it ends the session |
+| `qar_ogre_streaming_tests` | `Scheduler` | also the gate: while the GPU gate is closed the scheduler skips the batch and the streams stay due |
 
 ## Test doubles
 
@@ -136,7 +147,7 @@ CTest registers one guard test per module that this repository holds, named `che
 |---|---|
 | L1, include classes | A module includes only the foreign header families listed for it: the standard library, Qt, Ogre, ROS 2, RViz, platform headers, GoogleTest, stb. |
 | L2, project edges | A module includes only the project modules listed for it, and some edges only through named headers: no upward and no sideways edge. Every example folder has its own entry. |
-| L3, QarOS C header | Only the wrapper header of the core includes the QarOS C header. |
+| L3, QarOS C header | Only the wrapper header of the core includes the QarOS C header (`qar_streaming.h` of the qaros submodule). |
 | L4, core calls no API | The core calls no QarOS C function; it uses the types of the C API only, so it never needs the SDK DLL. |
 | L5, adapter components | Every file of the adapter belongs to one component and includes only headers of its own component and of the components it may use. |
 | L6, loader | The dynamic-loading implementation macro of the C header appears exactly once, in the loader file of the adapter, and nothing defines the dynamic-loading switch except CMake. |

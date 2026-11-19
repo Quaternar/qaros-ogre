@@ -88,14 +88,14 @@ ctest --preset vs2019-x64
 ```text
 Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
         Start   1: check_layering_qar_ar_core
-  1/546 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.13 sec
+  1/576 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.13 sec
         Start   2: check_layering_qar_ogre_streaming
-  2/546 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.13 sec
+  2/576 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.13 sec
         Start   3: check_layering_qar_qar_adapter
-  3/546 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.20 sec
+  3/576 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.20 sec
         Start   4: check_layering_examples
 ...
-100% tests passed, 0 tests failed out of 546
+100% tests passed, 0 tests failed out of 576
 
 Total Test time (real) =  94.95 sec
 ```
@@ -137,7 +137,7 @@ cmake --install build\vs2019-x64 --config RelWithDebInfo --prefix $env:QAR_PREFI
 ...
 -- Installing: C:\qar\install/include/qar_qar_adapter/target_rule.hpp
 -- Installing: C:\qar\install/include/qar_streaming.h
--- Installing: C:\qar\install/share/qar_ogre_adapter/LICENSE.qaros
+-- Installing: C:\qar\install/share/qar_ogre_adapter/LICENSE.qar_streaming_header
 -- Installing: C:\qar\install/share/qar_ogre_adapter/LICENSE
 -- Installing: C:\qar\install/share/qar_ogre_adapter/cmake/qar_ogre_adapterTargets.cmake
 -- Installing: C:\qar\install/share/qar_ogre_adapter/cmake/qar_ogre_adapterTargets-relwithdebinfo.cmake
@@ -289,7 +289,7 @@ Two lines of the adapter look like errors and are expected. Neither is a failure
 When the streams close at the end of a run, the adapter can fail to make the OpenGL context of a sender current, and it writes a line that has this form:
 
 ```text
-[qar-adapter] *** wglMakeCurrent FAILED (err=%lu)
+[qar-adapter] %s *** wglMakeCurrent FAILED (err=%lu) tid=%llu ctx held by tid=%llu
 ```
 
 While a peer is still negotiating with QarOS, the adapter reports that the creation of its sender takes long, with a line that has this form:

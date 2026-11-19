@@ -21,11 +21,25 @@ written and how a version is released is in [AGENTS.md](AGENTS.md).
 ### Features
 
 - The version of a build comes from the file `VERSION`, the last release, and git tags (`X.Y.Z` on a release tag, the next patch `X.Y.(Z+1)-dev.N+<sha>` on any other commit); `qar_ar_core/version.hpp` reports it as `QAR_OGRE_ADAPTER_VERSION` and `qar_ar_core::kLibraryVersion`, and the live example prints it with `--version` ([#5](https://github.com/Quaternar/qaros-ogre/pull/5)).
+- A frame worker, a thread of its own for each sender, makes every QarOS call of the frame path, so that the thread of the host never waits for QarOS; the switch `QAR_FRAME_CALLS` selects `worker`, the default, or `gui`.
+- The copy into the textures of the runtime ends with a GL fence and a flush that the frame worker waits for on a context of its own; `QAR_FRAME_FENCE` selects `worker` or `gui`.
+- A GPU progress gate, a watch thread that follows a fence of every frame, closes a series of frames while the GPU makes no progress, so that the scheduler skips the batch (`QAR_GPU_GATE`, `QAR_GPU_GATE_TEST`).
+- The session owner has the state `kLost` and rejoins by itself after the Hub stopped answering, with a supervisor thread that makes no QarOS call, the calls `release_lost_session`, `rejoin_now` and `declare_lost`, and the reports `health` and `rejoin_info`.
+- A release lane lets a sender, a panel adapter or an input source release its QarOS handles on the thread that owns the session (`QAR_ADAPTER_STREAM_RELEASE`).
+- The session owner exits within a bound, and an owner thread that is left behind when a QarOS call does not return is replaced by a fresh owner.
+- `IQarUrlPanelAdapter` has the call `closed_in_ar()`, true while the last report of the runtime for the panel says closed, so that a host can show that the operator closed a panel in AR.
+- The 3D senders are released when the Hub process ends and made again when the new Hub runs, with `QarSessionOwner::hub_process()` and lines of the factory about the Hub and about each render request.
+- Screen-space objects, such as the selection box of RViz, are left out of the colour and depth images of the AR eyes, with one log line for each stream.
+- A visible URL panel is hidden before its page is changed (`hide_before_swap` of the attach decision), and `log_runtime_record()` of the URL panel adapter logs the state, pose and size of a panel without the URL.
+- A breaker pauses the frame calls of a sender after two slow calls, a sender is made again when the runtime asks it for no frames (`QAR_RENDER_RECYCLE_S`), and a creation that gets no answer is cancelled and tried again.
 
 ### Enhancements
 
 - The package installs the QarOS C++ headers `qar_streaming_cpp` next to `qar_streaming.h`, and the qaros licence as `share/qar_ogre_adapter/LICENSE.qaros` (was `LICENSE.qar_streaming_header`) ([#5](https://github.com/Quaternar/qaros-ogre/pull/5)).
 - The components of `qar_qar_adapter` are compiled with `/we4996`, so a call of a QarOS C API function the header marks deprecated fails the build ([#5](https://github.com/Quaternar/qaros-ogre/pull/5)).
+- The line of a failed `wglMakeCurrent` names the thread and the thread that bound the context last.
+- The diagnostic copy probe is made on the frame worker path only when `QAR_ADAPTER_PROBE_EVERY` is set.
+- No thread of the host waits for QarOS when the Hub or the Visualizer is gone: the calls that can wait run on the thread of the owner or on a frame worker, and `QAR_FRAME_CALLS=gui` keeps the earlier behaviour for comparison.
 
 ### Removed
 

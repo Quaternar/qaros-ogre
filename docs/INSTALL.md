@@ -313,7 +313,7 @@ include\qar_streaming.h        True
 
 ### How the stack finds QAROS
 
-A program calls `qar_library_load` with no path. The C header documents the order in which that call looks for the library and takes the first hit: a library that is already loaded in the process; `qar-streaming-c.dll` beside the module that calls it; the folder that the environment variable `QAROS_RUNTIME_DIR` names; the install folder of the installed QAROS; a folder on `PATH`. A library found beside the program is loaded before the installed one, which is why a program must not ship its own copy. Each candidate is loaded with its dependencies taken from its own folder and from `System32` only.
+A program calls `qar_library_load` with no path. The C header documents the order in which that call looks for the library and takes the first hit: a library that is already loaded in the process; `qar-streaming-c.dll` beside the module that calls it; the runtime folder of the QAROS instance that the environment variable `QAR_INSTANCE` names, when it is set (`default` is the installed QAROS); the install folder of the installed QAROS; a folder on `PATH`. A library found beside the program is loaded before the installed one, which is why a program must not ship its own copy. Each candidate is loaded with its dependencies taken from its own folder and from `System32` only.
 
 The runtime initialisation leaves the field `runtime_binaries_folder_path` empty: the runtime then uses the folder that the loaded library came from, which is the `bin` folder of the installation and holds the launcher.
 
@@ -471,14 +471,14 @@ ctest --preset vs2019-x64
 ```text
 Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
         Start   1: check_layering_qar_ar_core
-  1/546 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.17 sec
+  1/576 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.17 sec
         Start   2: check_layering_qar_ogre_streaming
-  2/546 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.15 sec
+  2/576 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.15 sec
         Start   3: check_layering_qar_qar_adapter
-  3/546 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.21 sec
+  3/576 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.21 sec
         Start   4: check_layering_examples
 ...
-100% tests passed, 0 tests failed out of 546
+100% tests passed, 0 tests failed out of 576
 
 Total Test time (real) =  95.12 sec
 ```
@@ -495,9 +495,7 @@ cmake --install build\vs2019-x64 --config RelWithDebInfo --prefix $env:QAR_PREFI
 ...
 -- Installing: C:\qar\install/include/qar_qar_adapter/target_rule.hpp
 -- Installing: C:\qar\install/include/qar_streaming.h
--- Installing: C:\qar\install/include/qar_streaming_cpp/Runtime.hpp
-...
--- Installing: C:\qar\install/share/qar_ogre_adapter/LICENSE.qaros
+-- Installing: C:\qar\install/share/qar_ogre_adapter/LICENSE.qar_streaming_header
 -- Installing: C:\qar\install/share/qar_ogre_adapter/LICENSE
 -- Installing: C:\qar\install/share/qar_ogre_adapter/cmake/qar_ogre_adapterTargets.cmake
 -- Installing: C:\qar\install/share/qar_ogre_adapter/cmake/qar_ogre_adapterTargets-relwithdebinfo.cmake
