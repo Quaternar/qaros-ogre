@@ -19,6 +19,7 @@
 #include "qar_ar_core/panel_input_source.hpp"
 #include "qar_ar_core/pointing_ray.hpp"
 #include "qar_qar_adapter/qar_capi_input_slots.hpp"
+#include "qar_qar_adapter/qar_capi_session_owner.hpp"
 
 namespace qar_qar_adapter
 {
@@ -95,7 +96,12 @@ struct SpatialGestureStats
 class QarCApiSpatialGestureSource : public qar_ar_core::IPanelInputSource
 {
 public:
-  explicit QarCApiSpatialGestureSource(QarSession * session);
+  /// @param release_lane Where unsubscribe() hands the cancel and the destroy of the tokens:
+  /// the thread that owns the session runs them, so the thread that calls unsubscribe() makes no
+  /// QarOS call. Null: unsubscribe() makes them itself. A lane that refuses leaves the tokens
+  /// unreleased (they go with the session).
+  explicit QarCApiSpatialGestureSource(
+    QarSession * session, std::shared_ptr<IReleaseLane> release_lane = nullptr);
   ~QarCApiSpatialGestureSource() override;
 
   QarCApiSpatialGestureSource(const QarCApiSpatialGestureSource &) = delete;
@@ -110,8 +116,13 @@ public:
   /// @return false and records @ref last_error if the runtime refused both.
   bool subscribe(const QarAppVolumeId & volume_id);
 
-  /// @brief Retire the subscriptions. Idempotent; safe during teardown.
+  /// @brief Retire the subscriptions. Idempotent; safe during teardown. The callbacks are
+  /// disowned on the calling thread (no QarOS call); the tokens are cancelled and destroyed on the
+  /// release lane when there is one.
   void unsubscribe();
+
+  /// @brief Sets the lane for the tokens of later unsubscribe() calls. Call before subscribe().
+  void set_release_lane(std::shared_ptr<IReleaseLane> release_lane);
 
   /// @brief Where to read the FALLBACK AR pointing ray from.
   ///
@@ -236,6 +247,7 @@ private:
   std::shared_ptr<qar_ar_core::PointingRaySlot> pointing_ray_slot_;
 
   QarSession * session_ = nullptr;
+  std::shared_ptr<IReleaseLane> release_lane_;
   qar_ar_core::QueuedPanelInputSource queue_;
 
   mutable std::mutex mutex_;

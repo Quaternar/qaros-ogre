@@ -67,7 +67,7 @@ Every public header of the repository, by module. The sections below describe th
 | `ogre_qar_render_scheduler.hpp` | `OgreQarRenderScheduler`: the batched render tick |
 | `render_budget.hpp` | `RenderBudgetConfig`, `RenderBudget`: pacing and shedding |
 | `ogre_qar_stereo_stream.hpp` | `OgreQarStereoStream`: one peer's stream, its batch phases and the eye poses of its last frame; `compute_eye_render_params`, `assemble_separated_stereo_frame` |
-| `ogre_stereo_render_target.hpp` | `OgreStereoRenderTarget`: the colour and depth textures of one eye |
+| `ogre_stereo_render_target.hpp` | `OgreStereoRenderTarget`: the colour and depth textures of one eye, with `screen_space_left_out()`, the number of screen-space renderables its colour passes left out, and the functions `ar_render_keeps` and `should_report_left_out` |
 | `ogre_opengl_texture_bridge.hpp` | `OgreOpenGlTextureBridge` (native texture id, frame marshalling) and `GlFenceHook` |
 | `gl_interop.hpp` | the OpenGL entry points of the texture hand-off: fences and read-back |
 | `gl_fence_hook.hpp` | `IGlFenceHook`: the fence step of the batch |
@@ -112,11 +112,11 @@ The module uses the types of the QarOS C API and calls none of its functions, so
 
 The module holds the Qt-free decisions that a library which streams a panel needs, and the interface that brings AR pointer samples in. A library that shows a panel in AR, such as the Qt library of this stack, defines its own panel interfaces; the helpers below do not depend on them.
 
-`decide_panel_attach` decides what to do with the panel that `qar_gui_panels_get_or_create` returned: it is new, it is an earlier panel of the same name and is reused with its content, size and pose brought up to date, or its name is taken by a panel that cannot be reused, and the repeat with `qar_gui_panels_get_or_create` appends `-v2` for a panel of the other content type or `-r1` to `-r8` for a closed one. `PanelProbe` holds what the probe read, `PanelAttachDecision` the decision and the steps it implies, and `plan_visible_to` turns the list of the peers that see a panel into the additions and the removals that bring it to a wanted list.
+`decide_panel_attach` decides what to do with the panel that `qar_gui_panels_get_or_create` returned: it is new, it is an earlier panel of the same name and is reused with its content, size and pose brought up to date, or its name is taken by a panel that cannot be reused, and the repeat with `qar_gui_panels_get_or_create` appends `-v2` for a panel of the other content type or `-r1` to `-r8` for a closed one. `PanelProbe` holds what the probe read, `PanelAttachDecision` the decision and the steps it implies, and `plan_visible_to` turns the list of the peers that see a panel into the additions and the removals that bring it to a wanted list. The decision has the flag `hide_before_swap`, which is true for a panel that is on show and whose content is replaced, so that a browser panel is hidden before its page changes.
 
 `PanelStateGuard` of `panel_state_guard.hpp` keeps a panel in the state that was asked for, against a QarOS that reports the opposite: it decides whether a record of the runtime is a reason to ask for the state again, and it holds the count of the asks. `PanelOpResult` of `panel_op_result.hpp` is the outcome of one queued call on a panel, which an adapter hands back through its `drain_results`. The common names of the panels (`make_panel_common_name`, made from the key and a `NameScope`) are the stable names under which QarOS finds a panel again.
 
-The URL seam of `qar_url_panel.hpp` is a panel whose content is a URL: `IQarUrlPanelFactory::create_url_panel` takes a `UrlPanelDesc` and returns an `IQarUrlPanelAdapter` with `navigate`, `set_placement`, `set_state`, `close` and `detach`. QarOS renders the page in its own browser, so nothing is streamed, and the pose goes to QarOS unchanged, as a panel-space pose. `UrlPanelDesc::visible_to_peers` lists the peers that see the panel, and an empty list means every peer; the adapter passes the list to QarOS only when it is not empty. The adapter prints a line for each change of the state of the panel.
+The URL seam of `qar_url_panel.hpp` is a panel whose content is a URL: `IQarUrlPanelFactory::create_url_panel` takes a `UrlPanelDesc` and returns an `IQarUrlPanelAdapter` with `navigate`, `set_placement`, `set_state`, `close`, `detach` and `closed_in_ar`. QarOS renders the page in its own browser, so nothing is streamed, and the pose goes to QarOS unchanged, as a panel-space pose. `UrlPanelDesc::visible_to_peers` lists the peers that see the panel, and an empty list means every peer; the adapter passes the list to QarOS only when it is not empty. The adapter prints a line for each change of the state of the panel. `closed_in_ar` is true while the last report of the runtime for the panel says closed, which is when the operator closed it in AR; it reads one atomic and makes no QarOS call, a later report of another state clears it, and a close or a detach that the adapter makes itself never sets it. The caller only shows the value: it neither closes nor makes the panel again. The default of the interface is false. `log_runtime_record()` queues one read of the panel in the runtime on the thread of the owner, which prints its state, pose, size and whether its page is the given URL, and returns false when the panel is not live; `runtime_record()` gives the text of the last record, empty before the first read.
 
 ### Pointer samples
 
@@ -394,6 +394,7 @@ The component holds the session owner. `QarSessionOwner` loads the library, crea
 | `invite_device(kind, host)` | asks the Hub of this PC to start the app of a HoloLens or a headset; it returns an empty text when the request started and the refusal otherwise, and the answer arrives as an event |
 | `ready()`, `session()`, `post_session_task()` | the interface `IQarSessionOwner` |
 | `task_stats()` | the counters of the task queue for the heartbeat line |
+| `hub_process()` | the Hub process as the last snapshot of the hints saw it: `known`, `pid`, `gone_count` and `last_gone_pid` |
 
 `SessionState` runs from `kIdle` through `kLoading`, `kWaitingForApproval` (the Hub asks the person at the PC to allow the program) and `kRunning` to `kReconnecting` (joined, but the Hub does not answer; the session stays valid), `kStopping` and `kFailed`. The owner joins the Hub of its own PC as a local source app (`QarOnboardLocalAppExt`): the Hub asks for approval once, no code is needed, and the program stores nothing. To work with the Hub of another PC, make the Hub of this PC a member of that Hub in QAROS; the program still joins the Hub of its own PC.
 
@@ -426,6 +427,7 @@ config.app_volume_center_y_m = 5.0f;                             // the centre o
 | `poll_new_peer_requests(out)` | appends the targets that need a stream, and forgets them |
 | `create_sender(peer)` | the render sender of a peer; the first call starts an asynchronous creation and returns null, and later calls poll it |
 | `on_render_request(peer)` | asks again for a peer whose creation is not done |
+| `note_hub_process(info)`, `senders_held_for_hub()`, `log_render_requests()` | fed by the producer tick from `hub_process()`: when a Hub process ended, the peers are listed as closed and no peer is handed out until the new Hub runs; the lines for the Hub and for the render requests |
 | `poll_closed_peers(out)`, `forget(peer)` | appends the peers whose stream is over; it lists them until `forget` is called after the stream is destroyed |
 | `app_volume(out)`, `scene_placement(out)`, `pointing_ray_slot()` | the app volume of the factory, where QarOS shows the scene (the last placement that was seen, never a call), and the slot of the aiming ray |
 | `set_geo_anchor_wgs84`, `set_geo_anchor_ecef`, `clear_geo_anchor`, `take_geo_anchor_result`, `has_geo_anchor` | the geo anchor of the app volume: the setters queue the change and return an empty text when it was queued, and `take_geo_anchor_result` returns the outcome once |
@@ -458,7 +460,7 @@ When the sender factory returns null for a peer, the manager logs one Error line
 
 Both need only `qar_ar_core` and `capi`: no Ogre and no Qt. The URL panel factory takes an `IQarSessionOwner`, which must outlive it, and returns null from `create_url_panel` when the owner is not ready, and `last_error()` says so.
 
-The adapters keep the state they asked for. When QarOS reports the opposite one, `HIDDEN` for `VISIBLE` or the reverse, within 5 seconds of the change, the adapter asks again after a hold of one second, at most 3 times within 10 seconds, and a confirming report or the adapter's own state restarts the count; a state that the operator sets later in AR, and `MINIMIZED` or `CLOSED`, are never contested. The decision is the pure `PanelStateKeeper` of `panel_state_guard.hpp`, and the guard prints a line for each ask and a warning when QarOS keeps reporting the opposite after the last ask.
+The adapters keep the state they asked for. When QarOS reports the opposite one, `HIDDEN` for `VISIBLE` or the reverse, within 5 seconds of the change, the adapter asks again after a hold of one second, at most 3 times within 10 seconds, and a confirming report or the adapter's own state restarts the count; a state that the operator sets later in AR, and `MINIMIZED` or `CLOSED`, are never contested; the keeper remembers only whether the last report was `CLOSED`, for `closed_in_ar`. The decision is the pure `PanelStateKeeper` of `panel_state_guard.hpp`, and the guard prints a line for each ask and a warning when QarOS keeps reporting the opposite after the last ask.
 
 **`url`.** `QarCApiUrlPanelFactory` adds a QarOS panel whose content is a URL, which the browser of QarOS loads. It refuses an empty URL and a size that is not positive, and it needs no input source: the page talks to its own server. Its adapter queues the work of its calls for the thread that owns the session, and `drain_results` reports the outcomes. In the code, `owner` is an `IQarSessionOwner`.
 
@@ -569,10 +571,12 @@ include\qar_ar_core\qar_url_panel.hpp
 include\qar_ar_core\spatial_frames.hpp
 include\qar_ar_core\spatial_pick.hpp
 include\qar_ar_core\timing_log.hpp
+...
 include\qar_ogre_streaming\clock.hpp
 include\qar_ogre_streaming\diagnostics.hpp
 include\qar_ogre_streaming\gl_fence_hook.hpp
 include\qar_ogre_streaming\gl_interop.hpp
+...
 include\qar_ogre_streaming\mock_qar_frame_info_source.hpp
 include\qar_ogre_streaming\ogre_opengl_texture_bridge.hpp
 include\qar_ogre_streaming\ogre_qar_render_scheduler.hpp
@@ -589,10 +593,13 @@ include\qar_ogre_streaming\spatial_pick_visual.hpp
 include\qar_ogre_streaming\types.hpp
 include\qar_qar_adapter\env_config.hpp
 include\qar_qar_adapter\frame_stall_probe.hpp
+...
 include\qar_qar_adapter\geo_anchor.hpp
+...
 include\qar_qar_adapter\gui_call_guard.hpp
 include\qar_qar_adapter\log_time.hpp
 include\qar_qar_adapter\onboarding_status.hpp
+...
 include\qar_qar_adapter\panel_state_guard.hpp
 include\qar_qar_adapter\panel_state_log.hpp
 include\qar_qar_adapter\qar_capi_input_slots.hpp
@@ -603,6 +610,7 @@ include\qar_qar_adapter\qar_capi_url_panel_adapter.hpp
 include\qar_qar_adapter\qar_session_owner.hpp
 include\qar_qar_adapter\render_timing.hpp
 include\qar_qar_adapter\target_rule.hpp
+...
 lib\qar_ar_core.lib
 lib\qar_ogre_streaming.lib
 lib\qar_qar_adapter_capi.lib
@@ -611,7 +619,7 @@ lib\qar_qar_adapter_render.lib
 lib\qar_qar_adapter_session.lib
 lib\qar_qar_adapter_url.lib
 share\qar_ogre_adapter\LICENSE
-share\qar_ogre_adapter\LICENSE.qaros
+...
 share\qar_ogre_adapter\cmake\qar_ogre_adapterConfig.cmake
 share\qar_ogre_adapter\cmake\qar_ogre_adapterConfigVersion.cmake
 share\qar_ogre_adapter\cmake\qar_ogre_adapterTargets-relwithdebinfo.cmake

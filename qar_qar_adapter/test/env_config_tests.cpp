@@ -312,3 +312,26 @@ TEST(ZenohLogging, OnlyUnderTraceOrDebugSeverity)
   EXPECT_FALSE(zenoh_logging_allowed(LogSeverity::kError));
   EXPECT_FALSE(zenoh_logging_allowed(LogSeverity::kFatal));
 }
+
+// --- parse_render_recycle_seconds (QAR_RENDER_RECYCLE_S) ---------------------
+
+TEST(RenderRecycleSeconds, AnUnsetOrUnreadableValueKeepsTheDefault)
+{
+  using qar_qar_adapter::parse_render_recycle_seconds;
+  EXPECT_DOUBLE_EQ(parse_render_recycle_seconds(nullptr, 45.0), 45.0);
+  EXPECT_DOUBLE_EQ(parse_render_recycle_seconds("", 45.0), 45.0);
+  EXPECT_DOUBLE_EQ(parse_render_recycle_seconds("soon", 45.0), 45.0);
+  EXPECT_DOUBLE_EQ(parse_render_recycle_seconds("-3", 45.0), 45.0);
+  EXPECT_DOUBLE_EQ(parse_render_recycle_seconds("nan", 45.0), 45.0);
+  EXPECT_DOUBLE_EQ(parse_render_recycle_seconds("inf", 45.0), 45.0);
+  EXPECT_DOUBLE_EQ(parse_render_recycle_seconds("3601", 45.0), 45.0);
+}
+
+TEST(RenderRecycleSeconds, AFiniteNonNegativeValueIsHonouredAndZeroSwitchesTheRuleOff)
+{
+  using qar_qar_adapter::parse_render_recycle_seconds;
+  EXPECT_DOUBLE_EQ(parse_render_recycle_seconds("0", 45.0), 0.0);
+  EXPECT_DOUBLE_EQ(parse_render_recycle_seconds("30", 45.0), 30.0);
+  EXPECT_DOUBLE_EQ(parse_render_recycle_seconds("0.5", 45.0), 0.5);
+  EXPECT_DOUBLE_EQ(parse_render_recycle_seconds("3600", 45.0), 3600.0);
+}

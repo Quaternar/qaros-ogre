@@ -783,14 +783,18 @@ TEST(SessionOwnerHandOver, TheConsumerIsNeverReadyWithoutASessionAcrossManyCycle
   Harness h;
   h.start();
   std::atomic<bool> stop{false};
-  std::atomic<bool> idle_phase{false};
+  // Odd while the owner is kIdle and nobody has asked for a new session; every change counts
+  // up. A poll counts only when the same idle window lasted from before it until after ready(),
+  // so a consumer that is descheduled across the end of the window is not mistaken.
+  std::atomic<int> idle_generation{0};
   std::atomic<int> violations{0};
-  std::thread consumer([&h, &stop, &idle_phase, &violations] {
+  std::thread consumer([&h, &stop, &idle_generation, &violations] {
       std::vector<SessionEvent> sink;
       while (!stop.load()) {
-        const bool idle_before = idle_phase.load();
+        const int generation_before = idle_generation.load();
         h.owner().poll(sink);
-        if (idle_before && h.owner().ready()) {
+        const bool ready = h.owner().ready();
+        if ((generation_before % 2) == 1 && ready && idle_generation.load() == generation_before) {
           violations.fetch_add(1);
         }
         sink.clear();
@@ -810,9 +814,9 @@ TEST(SessionOwnerHandOver, TheConsumerIsNeverReadyWithoutASessionAcrossManyCycle
       std::this_thread::sleep_for(1ms);
     }
     ASSERT_EQ(h.owner().state(), SessionState::kIdle);
-    idle_phase.store(true);
+    idle_generation.fetch_add(1);
     std::this_thread::sleep_for(3ms);
-    idle_phase.store(false);
+    idle_generation.fetch_add(1);
   }
   stop.store(true);
   consumer.join();
@@ -980,7 +984,8 @@ TEST(SessionOwnerTasks, ASlowTaskIsNamedInTheLogAndInTheStats)
   EXPECT_GE(stats.slowest_ms, 1000.0);
   EXPECT_EQ(stats.queued, 0u);
   EXPECT_TRUE(stats.running.empty());
-  EXPECT_TRUE(h.logged("task 'slow-one' took"));
+  // The owner counts the task done and then writes the line.
+  EXPECT_TRUE(h.wait_for([&h] { return h.logged("task 'slow-one' took"); }));
 }
 
 TEST(SessionOwnerTasks, ACallOfHalfASecondOrMoreIsNamedInTheLog)
@@ -1051,6 +1056,10 @@ TEST(SessionOwnerTasks, TasksQueuedBeforeDisconnectRunAndNoneTouchesTheReleasedS
 TEST(SessionOwnerTasks, DrainBudgetDropsLateTasks)
 {
   Harness h;
+  // The destructor's own budget is 3 s inside an exit of 5 s; this test is about the 8 s budget
+  // of a disconnect, which the destructor takes when it is given that much time.
+  h.config().timings.exit_drain = 8s;
+  h.config().timings.exit_join = 14s;
   h.start();
   ASSERT_TRUE(h.connect_and_run());
   std::atomic<int> ran{0};

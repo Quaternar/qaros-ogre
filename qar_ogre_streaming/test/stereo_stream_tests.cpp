@@ -194,6 +194,15 @@ TEST(StereoStreamLifecycle, AccessorsAndActiveFlag)
   EXPECT_EQ(d.frames_skipped, 0u);
 }
 
+// A stream whose eye targets do not exist yet has left nothing out of its 3D stream, so
+// it reports nothing (the count of left-out screen-space objects needs a real render).
+TEST(StereoStreamLifecycle, NothingIsReportedAsLeftOutBeforeTheTargetsExist)
+{
+  qos::OgreQarStereoStream s(qos::test::fake_scene_manager(), make_stream_config(5), make_sender());
+  EXPECT_EQ(s.take_left_out_report(), 0u);
+  EXPECT_EQ(s.take_left_out_report(), 0u);
+}
+
 // --- Skip reasons: a skipped tick must say WHY --------------------------------
 //
 // A stall presents as `sub=` frozen while `skip=` climbs at the tick rate, with no

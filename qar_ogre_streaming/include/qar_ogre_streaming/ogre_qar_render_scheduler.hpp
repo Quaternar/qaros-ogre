@@ -13,6 +13,7 @@
 #include "qar_ogre_streaming/clock.hpp"
 #include "qar_ogre_streaming/diagnostics.hpp"
 #include "qar_ogre_streaming/gl_fence_hook.hpp"
+#include "qar_ogre_streaming/gpu_progress_gate.hpp"
 #include "qar_ogre_streaming/render_budget.hpp"
 #include "qar_ogre_streaming/render_lock.hpp"
 #include "qar_ogre_streaming/render_thread_executor.hpp"
@@ -85,6 +86,24 @@ public:
     lighting_ = std::move(lighting);
   }
 
+  /// @brief Install (or clear) the GPU progress gate. While it is closed the scheduler renders no
+  /// batch (the tick returns success, last_skip_reason() names why); after a batch it tells the
+  /// gate that GL work was issued.
+  void set_gpu_gate(std::shared_ptr<IGpuProgressGate> gate) { gpu_gate_ = std::move(gate); }
+
+  /// @brief Why the last tick rendered nothing although streams were due: "GPU not progressing"
+  /// while the gate was closed, empty otherwise.
+  const char * last_skip_reason() const { return last_skip_reason_; }
+
+  /// @brief How many batches were skipped because the gate was closed.
+  uint64_t gate_skipped_batches() const { return gate_skipped_batches_; }
+
+  /// @brief A batch that takes this long or longer (milliseconds, default 250) is reported once
+  /// to the diagnostics sink with the time of each phase: begin, cameras (with the lights),
+  /// render (with the fence step) and submit. The first five are reported, then one in a hundred.
+  void set_slow_batch_ms(double milliseconds) { slow_batch_ms_ = milliseconds; }
+  double slow_batch_ms() const { return slow_batch_ms_; }
+
   /// @brief Drop cached per-peer budget/timing state for a removed stream.
   void forget_stream(const QarPeerId & peer_id);
 
@@ -114,6 +133,9 @@ private:
   };
 
   void record_submit(const QarPeerId & peer_id, double now_seconds);
+  void report_slow_batch(
+    double batch_ms, double begin_ms, double cameras_ms, double render_ms, double submit_ms,
+    std::size_t streams);
 
   std::shared_ptr<IRenderThreadExecutor> executor_;
   RenderBudget budget_;
@@ -122,6 +144,9 @@ private:
   std::shared_ptr<IClock> clock_;
   std::shared_ptr<IGlFenceHook> fence_hook_;
   std::shared_ptr<QarSceneLighting> lighting_;
+  std::shared_ptr<IGpuProgressGate> gpu_gate_;
+  const char * last_skip_reason_ = "";
+  uint64_t gate_skipped_batches_ = 0;
 
   std::map<QarPeerId, PeerTiming, PeerIdLess> timing_;
 
@@ -131,6 +156,10 @@ private:
   std::deque<double> batch_ms_window_;  ///< Recent batch times for the rolling avg.
   uint32_t last_batch_streams_served_ = 0;
   uint32_t last_batch_streams_skipped_ = 0;
+  double slow_batch_ms_ = 250.0;
+  uint64_t slow_batches_ = 0;
+  static constexpr uint64_t kSlowBatchReportFirst = 5;
+  static constexpr uint64_t kSlowBatchReportEvery = 100;
 
   /// Rolling-window sizes (ticks). 120 ~= 2 s at 60 FPS.
   static constexpr std::size_t kBatchWindow = 120;

@@ -64,6 +64,16 @@ TEST(PanelAttach, AHiddenPanelOfAnEarlierSessionIsReattachedAndShown)
   EXPECT_EQ(visible.kind, PanelAttachKind::Reattached);
   EXPECT_TRUE(visible.swap_content);
   EXPECT_FALSE(visible.show);
+  EXPECT_TRUE(visible.hide_before_swap) << "a browser panel is hidden before its page changes";
+
+  // Only a visible panel whose content is replaced is hidden first.
+  EXPECT_FALSE(hidden.hide_before_swap);
+  EXPECT_FALSE(minimized.hide_before_swap);
+  const PanelAttachDecision resized =
+    decide_panel_attach(found_probe(QAR_GUI_PANEL_STATE_VISIBLE, false, true), 0);
+  EXPECT_EQ(resized.kind, PanelAttachKind::Reattached);
+  EXPECT_FALSE(resized.swap_content);
+  EXPECT_FALSE(resized.hide_before_swap);
 }
 
 TEST(PanelAttach, APanelOfTheOtherContentTypeIsRetriedOnceWithV2ThenRefused)

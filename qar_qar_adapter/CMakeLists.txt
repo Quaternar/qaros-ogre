@@ -9,7 +9,8 @@
 #   capi      qar_qar_adapter_capi      the program's one QarOS C API loader
 #                                       (QAR_IMPLEMENT_DYNAMIC_LOADING), the
 #                                       callback-slot arena, IQarSessionOwner, the
-#                                       timer of QarOS calls on a GUI thread.
+#                                       timer of QarOS calls on a GUI thread, the
+#                                       frame worker thread of a sender.
 #                                       Every other component links it.
 #   session   qar_qar_adapter_session   the session owner (QarSessionOwner): library
 #                                       load, runtime, joining the QAROS Hub of this PC, the
@@ -85,6 +86,8 @@ qar_adapter_component(qar_qar_adapter_capi capi
   src/qar_capi_input_slots.cpp
   # Times the QarOS calls of a GUI thread; every component calls through it.
   src/gui_call_guard.cpp
+  # The thread that makes the QarOS frame calls of one sender, off the GUI thread.
+  src/frame_worker.cpp
 )
 target_link_libraries(qar_qar_adapter_capi PUBLIC
   qar_ogre_adapter::qar_ar_core
@@ -96,6 +99,8 @@ target_compile_definitions(qar_qar_adapter_capi PUBLIC QAR_ENABLE_DYNAMIC_LOADIN
 
 qar_adapter_component(qar_qar_adapter_session session
   src/qar_session_owner.cpp
+  # The supervisor's policy and its two read-only hints about the Hub (no QarOS call).
+  src/owner_watch.cpp
   # Pure units, kept separate so they are unit testable without a QarOS session
   # (qar_qar_adapter/test): the status texts, the env-var parsing.
   src/onboarding_status.cpp
@@ -108,6 +113,9 @@ target_link_libraries(qar_qar_adapter_session PUBLIC
 
 qar_adapter_component(qar_qar_adapter_render render
   src/qar_capi_render_sender_adapter.cpp
+  # The GL fence seam and the watch that follows whether the GPU finishes the frames the render
+  # thread issues.
+  src/gpu_progress_watch.cpp
   # SDK-free geodetic -> ECEF math, kept separate so it is unit testable without a
   # live QarSession (qar_qar_adapter/test).
   src/geo_anchor.cpp

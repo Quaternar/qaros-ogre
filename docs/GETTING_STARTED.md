@@ -200,7 +200,6 @@ target_link_libraries(qar_ogre_live_stream_example PRIVATE qar_ogre_adapter::ren
 
 ```cpp
 #include <chrono>
-#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
@@ -211,6 +210,7 @@ target_link_libraries(qar_ogre_live_stream_example PRIVATE qar_ogre_adapter::ren
 
 #include "qar_ar_core/common_name.hpp"
 #include "qar_ar_core/qar_streaming_c.hpp"
+#include "qar_ar_core/version.hpp"
 #include "qar_ogre_streaming/ogre_qar_stereo_stream.hpp"
 #include "qar_ogre_streaming/ogre_qar_streaming_manager.hpp"
 #include "qar_qar_adapter/env_config.hpp"

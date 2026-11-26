@@ -2,12 +2,14 @@
 
 ## Supported QAROS versions
 
-QAROS has a product version. The setup program records it in the registry value `Version` of the key `HKLM\SOFTWARE\Quaternar\QAROS`, for example `0.9.0-dev.3008+65dc9aeb`; the library `qar-streaming-c.dll` itself carries no version resource. This stack states the version that it was verified against.
+QAROS has a product version. The setup program records it in the registry value `Version` of the key `HKLM\SOFTWARE\Quaternar\QAROS`, for example `0.9.0-dev.3008+65dc9aeb`; the library `qar-streaming-c.dll` itself carries no version resource. This stack states the version that earlier builds of it were checked with.
 
 | QAROS version | Status | Meaning |
 |---|---|---|
-| 0.9.0-dev.3008+65dc9aeb | verified | The installation that this stack was built, tested and run against. The C header then vendored in this repository was the header of this installation; the header now comes from the qaros submodule (see [The QarOS header](#the-qaros-header)). |
+| 0.9.0-dev.3008+65dc9aeb | checked with earlier builds | The installation that earlier builds of this stack were built, tested and run against. Its export table lacks 12 of the functions that the header of the qaros submodule requires (see below), so by the rule of that header a module built on it does not load this installation; this build has not been run against it. |
 | any other version | not verified | The stack may work with it, but nobody has checked. |
+
+The libraries are compiled against the C API of the header in the qaros submodule, and the header has a rule of its own for a runtime that lacks a function. A function whose status in its table is `ACTIVE`, or marks it as deprecated for callers, is required, and a runtime without its symbol fails the load of the module; a function with the status `OPTIONAL_SYMBOL` may be missing, and a call of it returns `QAR_STATUS_NOT_IMPLEMENTED`. A QAROS that does not export every required function of that header cannot be used with these libraries, whatever its version number, and the header does not say from which release of QAROS a function is exported. The installed QAROS 0.9.0-dev.3008+65dc9aeb does not export 12 of the functions that the header of the pinned revision requires, which is read from the export table of its `qar-streaming-c.dll` without loading the library, so by that rule these libraries do not load it; no run has shown that, and a QAROS that exports these functions has not been checked yet. To check another installation, list the exports of its `qar-streaming-c.dll` with the tool of your toolchain that does so, and compare them with the table of the header.
 
 The QarOS C header declares these two parts of the C API, both of which the code uses:
 
@@ -70,8 +72,6 @@ git -C external\qaros fetch origin
 git -C external\qaros checkout <commit>
 git add external\qaros
 ```
-
-A clone of this repository fetches the pinned commit with `git clone --recurse-submodules`, and an existing clone with `git submodule update --init`. The configure step stops with an error that names these commands when the submodule is missing. Another qaros checkout can be used with `-DQAROS_SOURCE_DIR=<folder>`.
 
 ### Rebuild order
 
@@ -179,7 +179,7 @@ app_volume_id                                  True
 
 The QarOS runtime is not a build dependency of this repository. Nothing links an import library, so the libraries build and the tests run without QAROS, and the configure step only warns when it cannot find the library ([CMake warns that the QarOS SDK DLL was not found](TROUBLESHOOTING.md#cmake-warns-that-the-qaros-sdk-dll-was-not-found)). The library is loaded when a program connects, from the installed QAROS.
 
-**Use the installed QAROS.** QAROS is installed once on the PC, and a program does not ship a copy of its `bin` folder. The session owner calls `qar_library_load` with no path, which takes the first library in the order of the header; a program that wants a particular library file puts its path into `SessionOwnerConfig::library_path`, and the environment variable `QAROS_RUNTIME_DIR` names another runtime folder for the lookup. The owner leaves the field `runtime_binaries_folder_path` empty, so the runtime starts its launcher from the folder that the loaded library came from. [The QarOS SDK](INSTALL.md#the-qaros-sdk) lists the order.
+**Use the installed QAROS.** QAROS is installed once on the PC, and a program does not ship a copy of its `bin` folder. The session owner calls `qar_library_load` with no path, which takes the first library in the order of the header; a program that wants a particular library file puts its path into `SessionOwnerConfig::library_path`, and the environment variable `QAR_INSTANCE` names the instance whose runtime folder the lookup uses. The owner leaves the field `runtime_binaries_folder_path` empty, so the runtime starts its launcher from the folder that the loaded library came from. [The QarOS SDK](INSTALL.md#the-qaros-sdk) lists the order.
 
 **Where Windows looks for the dependencies.** The loader of the QarOS C header loads the library by its full path with the flags `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR` and `LOAD_LIBRARY_SEARCH_SYSTEM32`. Windows then resolves the dependencies of the library from the folder of the library and from the system folder, in that order. It does not search the folder of the program, the current folder or the folders of the `PATH` environment variable, so putting the QAROS folder on `PATH` achieves nothing, and a runtime file that is missing from the QAROS folder is not taken from the folder of the program. Microsoft describes the flags in [LoadLibraryExA](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-loadlibraryexa).
 

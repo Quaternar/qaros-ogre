@@ -101,9 +101,16 @@ pointer_sample_from_gesture_event(
 //  QarCApiSpatialGestureSource
 // ===========================================================================
 
-QarCApiSpatialGestureSource::QarCApiSpatialGestureSource(QarSession * session)
-: session_(session)
+QarCApiSpatialGestureSource::QarCApiSpatialGestureSource(
+  QarSession * session, std::shared_ptr<IReleaseLane> release_lane)
+: session_(session), release_lane_(std::move(release_lane))
 {
+}
+
+void
+QarCApiSpatialGestureSource::set_release_lane(std::shared_ptr<IReleaseLane> release_lane)
+{
+  release_lane_ = std::move(release_lane);
 }
 
 QarCApiSpatialGestureSource::~QarCApiSpatialGestureSource()
@@ -264,6 +271,37 @@ QarCApiSpatialGestureSource::unsubscribe()
     std::swap(hover_slot, hover_slot_);
     std::swap(click_token, click_token_);
     std::swap(hover_token, hover_token_);
+  }
+  if (release_lane_ != nullptr) {
+    // The callbacks are disowned here (no QarOS call: the slot only clears its owner), then the
+    // tokens go to the thread that owns the session. A callback that still arrives finds a slot
+    // without an owner and returns.
+    detail::retire_slot(all_slot);
+    detail::retire_slot(click_slot);
+    detail::retire_slot(hover_slot);
+    if (all_token == nullptr && click_token == nullptr && hover_token == nullptr) {
+      return;
+    }
+    const bool posted = release_lane_->post_release(
+      "spatial-gestures-release", [all_token, click_token, hover_token] {
+        for (QarCancelToken * token : {all_token, click_token, hover_token}) {
+          if (token != nullptr) {
+            QAR_CALL(qar_cancel_token_cancel, token);
+          }
+        }
+        for (QarCancelToken * token : {all_token, click_token, hover_token}) {
+          if (token != nullptr) {
+            QAR_CALL(qar_cancel_token_handle_destroy, token);
+          }
+        }
+      });
+    if (!posted) {
+      std::fprintf(
+        stderr,
+        "[qar-spatial] gesture subscriptions left unreleased (the owner thread is gone)\n");
+      std::fflush(stderr);
+    }
+    return;
   }
   for (QarCancelToken * token : {all_token, click_token, hover_token}) {
     if (token != nullptr) {

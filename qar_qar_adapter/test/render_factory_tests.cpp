@@ -756,7 +756,10 @@ TEST(RenderFactoryAsync, DetachEndsThePlacementSubscriptionOnTheOwnersThread)
   qar_ar_core::ScenePlacement placement;
   EXPECT_FALSE(factory->scene_placement(placement)) << "nothing is known after a detach";
   ASSERT_TRUE(wait_until([&h] { return h.fake().volume_subscriptions() == 0; }));
-  EXPECT_EQ(h.fake().live_tokens(), tokens - 1) << "the token of the subscription is released";
+  // The fake ends the subscription at the cancel and counts the token out at the destroy, a moment
+  // later on the owner's thread.
+  ASSERT_TRUE(wait_until([&h, tokens] { return h.fake().live_tokens() == tokens - 2; }))
+    << "the tokens of the placement and render request subscriptions are released";
   const int cancel = h.fake().last_index("cancel_token_cancel");
   ASSERT_GE(cancel, 0);
   EXPECT_EQ(h.fake().calls()[static_cast<std::size_t>(cancel)].thread, h.owner_thread());

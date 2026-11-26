@@ -17,6 +17,15 @@ namespace qar_qar_adapter
 /// C API: the library could not be loaded at all.
 constexpr int kStatusNoRuntime = -1;
 
+/// @brief The status of the cause "the session was given up without a disconnect". It is not a
+/// code of the C API: the Hub stopped answering and the owner released the session. The sentence
+/// of the cause comes from the owner, which knows what it saw.
+constexpr int kStatusSessionLost = -2;
+
+/// @brief The status of the cause "the thread that talks to QAROS was left behind". It is not a
+/// code of the C API: a call did not return, so the program stops using that thread.
+constexpr int kStatusOwnerAbandoned = -3;
+
 /// @brief The call that returned a code. The same code reads differently in different calls.
 enum class OnboardingContext
 {

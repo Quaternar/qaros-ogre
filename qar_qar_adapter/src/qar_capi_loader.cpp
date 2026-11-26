@@ -12,8 +12,8 @@
 //   0. a qar-streaming-c.dll that the process already holds (nothing is loaded);
 //   1. the folder of the module this header is compiled into (the executable, or the plugin
 //      DLL that loads QAROS);
-//   2. the folder named by the environment variable QAROS_RUNTIME_DIR (when it is set, a
-//      runtime that is missing there or fails to load is an error);
+//   2. the runtime folder of the QAROS instance that QAR_INSTANCE names (when it is set, an
+//      unknown instance or a runtime that fails to load there is an error);
 //   3. the installed QAROS, `<InstallFolder>\bin` from HKLM\SOFTWARE\Quaternar\QAROS (when
 //      QAROS is installed, a copy that fails to load there is an error);
 //   4. every folder on PATH, in order.

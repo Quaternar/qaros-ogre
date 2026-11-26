@@ -27,6 +27,21 @@ namespace qar_ogre_streaming
 /// testable without a GL context.
 QarPixelFormat depth_output_qar_format(QarPixelFormat requested) noexcept;
 
+/// @brief Whether the AR render keeps a renderable of the RViz scene.
+///
+/// A renderable with an identity projection (an @c Ogre::Rectangle2D such as RViz's
+/// selection box, a camera overlay, a full-screen backdrop) is placed in SCREEN
+/// space. The AR eye views have their own camera, so such a quad would land at the
+/// same screen fraction in both eyes, in the colour image and in the depth image.
+/// Only world-space renderables are kept.
+///
+/// Pure function (no Ogre dependency), unit testable without a GL context.
+bool ar_render_keeps(bool identity_projection) noexcept;
+
+/// @brief Whether to report the objects an AR render left out: once, when the
+/// running total @p now first exceeds @p previous and nothing was reported yet.
+bool should_report_left_out(uint64_t previous, uint64_t now, bool reported) noexcept;
+
 /// @brief Owns and manages one Ogre color render texture plus a metric depth
 /// render texture, each with an attached camera + viewport.
 ///
@@ -92,6 +107,11 @@ public:
   /// lockRender()/unlockRender(). @return Ok if rendered; InvalidState if not
   /// created.
   Result render();
+
+  /// @brief Total of screen-space renderables left out of the colour passes so far
+  /// (see ar_render_keeps()). The depth pass leaves out the same ones and is not
+  /// counted again.
+  uint64_t screen_space_left_out() const { return screen_space_left_out_; }
 
   /// @brief Blit the color target to a CPU RGBA8 buffer (row-major, 4 bytes/px,
   /// byte order R,G,B,A). @param out resized to width*height*4. @return Ok on
@@ -162,6 +182,7 @@ private:
   QarPixelFormat depth_format_ = QAR_PIXEL_FORMAT_D32_FLOAT;
   bool has_depth_ = false;
   bool created_ = false;
+  uint64_t screen_space_left_out_ = 0;
 };
 
 }  // namespace qar_ogre_streaming

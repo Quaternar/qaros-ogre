@@ -143,6 +143,30 @@ TEST(UrlPanel, ADetachedPanelIsKeptAndReattachedByTheNextOne)
   EXPECT_TRUE(created->reattached);
 }
 
+TEST(UrlPanel, ANewPanelIsMadeWithOnePanelListQueryAndItsOutcomeIsNotAReattach)
+{
+  Harness h;
+  h.start();
+  ASSERT_TRUE(h.connect_and_run());
+  qar_qar_adapter::QarCApiUrlPanelFactory factory(&h.owner());
+  const int queries_before = h.fake().count("query_gui_panels");
+  auto adapter = factory.create_url_panel(url_desc("tools"));
+  ASSERT_NE(adapter, nullptr);
+  std::vector<PanelOpResult> results;
+  ASSERT_TRUE(drain_until(*adapter, results, [](const std::vector<PanelOpResult> & r) {
+        return has_result(r, PanelOpResult::Op::Create);
+      }));
+  ASSERT_TRUE(owner_caught_up(h));
+  const auto created = std::find_if(results.begin(), results.end(),
+      [](const PanelOpResult & r) { return r.op == PanelOpResult::Op::Create; });
+  ASSERT_NE(created, results.end());
+  EXPECT_TRUE(created->ok);
+  EXPECT_FALSE(created->reattached) << "the consumer reads the runtime record after a reattach";
+  EXPECT_EQ(h.fake().count("query_gui_panels") - queries_before, 1)
+    << "the probe's list query is the only one of a new panel";
+  EXPECT_TRUE(adapter->runtime_record().empty()) << "the create reads no record by itself";
+}
+
 // ---------------------------------------------------------------------------------------------
 // The end of a session: hide, keep, release
 // ---------------------------------------------------------------------------------------------
@@ -169,6 +193,104 @@ TEST(UrlPanel, HideThenDetachRightAwayHidesThePanelAndKeepsIt)
         return !panels.empty() && panels[0].state == QAR_GUI_PANEL_STATE_HIDDEN;
       }));
   EXPECT_EQ(h.fake().count("gui_panels_close_panel"), 0);
+}
+
+TEST(UrlPanel, AVisiblePanelWithAnotherPageIsHiddenBeforeItsPageChangesAndShownAfter)
+{
+  Harness h;
+  h.start();
+  ASSERT_TRUE(h.connect_and_run());
+  qar_qar_adapter::QarCApiUrlPanelFactory factory(&h.owner());
+  auto first = factory.create_url_panel(url_desc("tools"));
+  ASSERT_NE(first, nullptr);
+  std::vector<PanelOpResult> results;
+  ASSERT_TRUE(drain_until(*first, results, [](const std::vector<PanelOpResult> & r) {
+        return has_result(r, PanelOpResult::Op::Create);
+      }));
+  // The earlier session ended without the hide: the panel is left on show with its old page.
+  first->detach();
+  first.reset();
+  ASSERT_TRUE(owner_caught_up(h));
+  ASSERT_EQ(h.fake().panels().size(), 1u);
+  ASSERT_EQ(h.fake().panels()[0].state, QAR_GUI_PANEL_STATE_VISIBLE);
+  const int calls_before = static_cast<int>(h.fake().calls().size());
+  const int queries_before = h.fake().count("query_gui_panels");
+
+  qar_ar_core::UrlPanelDesc other = url_desc("tools");
+  other.url = "http://127.0.0.1:9/second";
+  auto second = factory.create_url_panel(other);
+  ASSERT_NE(second, nullptr);
+  std::vector<PanelOpResult> second_results;
+  ASSERT_TRUE(drain_until(*second, second_results, [](const std::vector<PanelOpResult> & r) {
+        return has_result(r, PanelOpResult::Op::Create);
+      }));
+
+  // set_state(HIDDEN) < navigate_to_uri < set_state(VISIBLE), among the calls of the second create.
+  const auto calls = h.fake().calls();
+  int hidden_at = -1;
+  int navigate_at = -1;
+  int shown_at = -1;
+  int sets = 0;
+  for (std::size_t i = static_cast<std::size_t>(calls_before); i < calls.size(); ++i) {
+    if (calls[i].name == "gui_panels_set_state") {
+      ++sets;
+      (sets == 1 ? hidden_at : shown_at) = static_cast<int>(i);
+    } else if (calls[i].name == "gui_panels_navigate_to_uri") {
+      navigate_at = static_cast<int>(i);
+    }
+  }
+  ASSERT_GE(hidden_at, 0);
+  ASSERT_GE(navigate_at, 0);
+  ASSERT_GE(shown_at, 0);
+  EXPECT_LT(hidden_at, navigate_at) << "hidden before the page changes";
+  EXPECT_LT(navigate_at, shown_at) << "shown after it";
+  EXPECT_EQ(sets, 2);
+  EXPECT_EQ(h.fake().panels()[0].state, QAR_GUI_PANEL_STATE_VISIBLE);
+  EXPECT_EQ(h.fake().panels()[0].uri, other.url);
+  EXPECT_EQ(h.fake().count("query_gui_panels") - queries_before, 1)
+    << "one panel list query for the whole create";
+  EXPECT_EQ(h.fake().count("gui_panels_close_panel"), 0);
+}
+
+TEST(UrlPanel, TheRuntimeRecordIsReadOnceOnTheOwnerThreadAndNothingIsChanged)
+{
+  Harness h;
+  h.start();
+  ASSERT_TRUE(h.connect_and_run());
+  qar_qar_adapter::QarCApiUrlPanelFactory factory(&h.owner());
+  auto adapter = factory.create_url_panel(url_desc("tools"));
+  ASSERT_NE(adapter, nullptr);
+  std::vector<PanelOpResult> results;
+  ASSERT_TRUE(drain_until(*adapter, results, [](const std::vector<PanelOpResult> & r) {
+        return has_result(r, PanelOpResult::Op::Create);
+      }));
+  EXPECT_TRUE(adapter->runtime_record().empty()) << "nothing read yet";
+  ASSERT_TRUE(owner_caught_up(h));
+  const int calls_before = static_cast<int>(h.fake().calls().size());
+  const int queries_before = h.fake().count("query_gui_panels");
+
+  EXPECT_TRUE(adapter->log_runtime_record());
+  ASSERT_TRUE(wait_until([&adapter] { return !adapter->runtime_record().empty(); }));
+  ASSERT_TRUE(owner_caught_up(h));
+
+  EXPECT_EQ(h.fake().count("query_gui_panels") - queries_before, 1) << "one panel list query";
+  const std::string record = adapter->runtime_record();
+  EXPECT_NE(record.find("state=VISIBLE"), std::string::npos) << record;
+  EXPECT_NE(record.find("pose=("), std::string::npos) << record;
+  EXPECT_NE(record.find("size=0.50x0.75"), std::string::npos) << record;
+  EXPECT_NE(record.find("url_matches=y"), std::string::npos) << record;
+  EXPECT_EQ(record.find("http"), std::string::npos) << "never the URL";
+  // Only reads: no call that changes the panel, and the query ran on the owner thread.
+  const auto calls = h.fake().calls();
+  for (std::size_t i = static_cast<std::size_t>(calls_before); i < calls.size(); ++i) {
+    EXPECT_EQ(calls[i].name.find("gui_panels_set_"), std::string::npos) << calls[i].name;
+    EXPECT_EQ(calls[i].name.find("gui_panels_update_"), std::string::npos) << calls[i].name;
+    EXPECT_EQ(calls[i].name.find("gui_panels_navigate"), std::string::npos) << calls[i].name;
+    EXPECT_EQ(calls[i].thread, h.owner_thread()) << calls[i].name;
+  }
+
+  adapter->detach();
+  EXPECT_FALSE(adapter->log_runtime_record()) << "a detached adapter queues nothing";
 }
 
 TEST(UrlPanel, AFailedStateChangeComesBackAsAResult)
@@ -348,6 +470,89 @@ TEST(PanelStateGuard, AUrlPanelReportedHiddenSixSecondsAfterTheChangeIsLeftAlone
 TEST(PanelStateGuard, AUrlPanelNeverContestsClosedOrMinimized)
 {
   expect_closed_and_minimized_to_be_left_alone<UrlKit>();
+}
+
+// ---------------------------------------------------------------------------------------------
+// A panel that the operator closed in AR
+// ---------------------------------------------------------------------------------------------
+
+TEST(UrlPanelClosedInAr, TheOperatorsCloseIsSeenAndALaterStateClearsIt)
+{
+  Harness h;
+  h.start();
+  ASSERT_TRUE(h.connect_and_run());
+  UrlKit::Factory factory = UrlKit::factory(h);
+  auto adapter = reattach_hidden_panel<UrlKit>(h, factory, "tools");
+  ASSERT_NE(adapter, nullptr);
+  EXPECT_FALSE(adapter->closed_in_ar()) << "a panel that was shown is not closed";
+  const int calls_before = h.fake().count("gui_panels_set_state");
+  const int closes_before = h.fake().count("gui_panels_close_panel");
+
+  h.fake().deliver_panel_state(adapter->common_name(), QAR_GUI_PANEL_STATE_CLOSED);
+  ASSERT_TRUE(owner_caught_up(h));
+  EXPECT_TRUE(adapter->closed_in_ar());
+  EXPECT_EQ(h.fake().count("gui_panels_set_state"), calls_before) << "nothing is asked again";
+  EXPECT_EQ(h.fake().count("gui_panels_close_panel"), closes_before) << "nothing is closed";
+
+  // Another report of the same close keeps it; a report of another state clears it.
+  h.fake().deliver_panel_state(adapter->common_name(), QAR_GUI_PANEL_STATE_CLOSED);
+  ASSERT_TRUE(owner_caught_up(h));
+  EXPECT_TRUE(adapter->closed_in_ar());
+  h.fake().deliver_panel_state(adapter->common_name(), QAR_GUI_PANEL_STATE_MINIMIZED);
+  ASSERT_TRUE(owner_caught_up(h));
+  EXPECT_FALSE(adapter->closed_in_ar());
+  h.fake().deliver_panel_state(adapter->common_name(), QAR_GUI_PANEL_STATE_CLOSED);
+  ASSERT_TRUE(owner_caught_up(h));
+  EXPECT_TRUE(adapter->closed_in_ar());
+  h.fake().deliver_panel_state(adapter->common_name(), QAR_GUI_PANEL_STATE_VISIBLE);
+  ASSERT_TRUE(owner_caught_up(h));
+  EXPECT_FALSE(adapter->closed_in_ar());
+}
+
+TEST(UrlPanelClosedInAr, AnOwnHideOrCloseNeverCountsAndAnOwnShowClearsOnlyWithTheReport)
+{
+  Harness h;
+  h.start();
+  ASSERT_TRUE(h.connect_and_run());
+  UrlKit::Factory factory = UrlKit::factory(h);
+  auto adapter = reattach_hidden_panel<UrlKit>(h, factory, "tools");
+  ASSERT_NE(adapter, nullptr);
+
+  // The adapter's own hide is not a close.
+  ASSERT_TRUE(adapter->set_state(QAR_GUI_PANEL_STATE_HIDDEN));
+  ASSERT_TRUE(owner_caught_up(h));
+  h.fake().deliver_panel_state(adapter->common_name(), QAR_GUI_PANEL_STATE_HIDDEN);
+  ASSERT_TRUE(owner_caught_up(h));
+  EXPECT_FALSE(adapter->closed_in_ar());
+
+  // A close the operator made, then the adapter's own show: the show is asked of QarOS and the
+  // flag stays until the runtime reports a state other than CLOSED.
+  h.fake().deliver_panel_state(adapter->common_name(), QAR_GUI_PANEL_STATE_CLOSED);
+  ASSERT_TRUE(owner_caught_up(h));
+  EXPECT_TRUE(adapter->closed_in_ar());
+  const int sets_before_show = h.fake().count("gui_panels_set_state");
+  ASSERT_TRUE(adapter->set_state(QAR_GUI_PANEL_STATE_VISIBLE));
+  ASSERT_TRUE(owner_caught_up(h));
+  EXPECT_EQ(h.fake().count("gui_panels_set_state"), sets_before_show + 1) << "the show was asked";
+  EXPECT_TRUE(adapter->closed_in_ar()) << "the show alone does not clear the close";
+  h.fake().deliver_panel_state(adapter->common_name(), QAR_GUI_PANEL_STATE_VISIBLE);
+  ASSERT_TRUE(owner_caught_up(h));
+  EXPECT_FALSE(adapter->closed_in_ar()) << "the runtime's report of the shown panel clears it";
+
+  // A close the operator made, then the adapter's own close: the row is gone, nothing is left.
+  h.fake().deliver_panel_state(adapter->common_name(), QAR_GUI_PANEL_STATE_CLOSED);
+  ASSERT_TRUE(owner_caught_up(h));
+  EXPECT_TRUE(adapter->closed_in_ar());
+  const std::string name = adapter->common_name();
+  adapter->close();
+  EXPECT_FALSE(adapter->closed_in_ar());
+  ASSERT_TRUE(wait_until([&h] {
+        const auto panels = h.fake().panels();
+        return !panels.empty() && panels[0].state == QAR_GUI_PANEL_STATE_CLOSED;
+      }));
+  h.fake().deliver_panel_state(name, QAR_GUI_PANEL_STATE_CLOSED);
+  ASSERT_TRUE(owner_caught_up(h));
+  EXPECT_FALSE(adapter->closed_in_ar()) << "the runtime's report of our own close is ignored";
 }
 
 TEST(PanelStateGuard, AUrlPanelThatTheAdapterHidesIsNotShownAgain)

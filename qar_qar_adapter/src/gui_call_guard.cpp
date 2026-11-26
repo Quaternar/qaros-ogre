@@ -23,6 +23,10 @@ constexpr std::uint64_t kPrintEvery = 100;
 
 thread_local bool t_gui_thread = false;
 thread_local OwnerCallReport t_owner_report;
+thread_local OwnerCallClock * t_owner_clock = nullptr;
+thread_local const std::atomic<bool> * t_owner_abandoned = nullptr;
+thread_local double t_report_limit_ms = kOwnerCallLimitMs;
+thread_local bool t_frame_worker = false;
 
 std::mutex g_mutex;
 GuiCallStats g_stats;
@@ -106,19 +110,73 @@ double gui_call_limit_ms()
 
 void mark_owner_thread(OwnerCallReport report)
 {
+  mark_owner_thread(std::move(report), nullptr, nullptr);
+}
+
+void mark_owner_thread(OwnerCallReport report, OwnerCallClock * clock)
+{
+  mark_owner_thread(std::move(report), clock, nullptr);
+}
+
+void mark_owner_thread(
+  OwnerCallReport report, OwnerCallClock * clock, const std::atomic<bool> * abandoned)
+{
+  if (t_owner_clock != nullptr && t_owner_clock != clock) {
+    t_owner_clock->call.store(nullptr);
+  }
   t_owner_report = std::move(report);
+  t_owner_clock = clock;
+  t_owner_abandoned = abandoned;
+  t_report_limit_ms = kOwnerCallLimitMs;
+  t_frame_worker = false;
+}
+
+void mark_frame_worker_thread(
+  OwnerCallReport report, OwnerCallClock * clock, const std::atomic<bool> * abandoned,
+  double report_limit_ms)
+{
+  mark_owner_thread(std::move(report), clock, abandoned);
+  t_report_limit_ms = report_limit_ms;
+  t_frame_worker = true;
+}
+
+bool owner_calls_blocked()
+{
+  return t_owner_abandoned != nullptr && t_owner_abandoned->load();
+}
+
+bool frame_worker_calls_blocked()
+{
+  return t_frame_worker && owner_calls_blocked();
 }
 
 GuiCallTimer::GuiCallTimer(const char * call) noexcept
-: call_(call), start_(), armed_(t_gui_thread), owner_armed_(static_cast<bool>(t_owner_report))
+: call_(call), start_(), armed_(t_gui_thread), owner_armed_(static_cast<bool>(t_owner_report)),
+  clock_(t_owner_clock), outer_call_(nullptr), outer_since_ns_(0)
 {
-  if (armed_ || owner_armed_) {
+  if (armed_ || owner_armed_ || clock_ != nullptr) {
     start_ = std::chrono::steady_clock::now();
+  }
+  if (clock_ != nullptr) {
+    // A call inside a timed scope hides the outer one until it returns.
+    outer_call_ = clock_->call.load();
+    outer_since_ns_ = clock_->since_ns.load();
+    clock_->since_ns.store(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        start_.time_since_epoch()).count());
+    clock_->call.store(call_);
   }
 }
 
 GuiCallTimer::~GuiCallTimer()
 {
+  if (clock_ != nullptr) {
+    // The call goes first and a top-level call leaves its start in place: a reader that still
+    // sees a call reads the start of a call that has really run that long, never 0.
+    clock_->call.store(outer_call_);
+    if (outer_call_ != nullptr) {
+      clock_->since_ns.store(outer_since_ns_);
+    }
+  }
   if (!armed_ && !owner_armed_) {
     return;
   }
@@ -130,7 +188,7 @@ GuiCallTimer::~GuiCallTimer()
       record_slow(call_, took_ms, limit_ms);
     }
   }
-  if (owner_armed_ && took_ms >= kOwnerCallLimitMs && t_owner_report) {
+  if (owner_armed_ && took_ms >= t_report_limit_ms && t_owner_report) {
     t_owner_report(call_, took_ms);
   }
 }

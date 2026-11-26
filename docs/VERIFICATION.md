@@ -47,12 +47,13 @@ Preset CMake variables:
 -- The CXX compiler identification is MSVC 19.29.30151.0
 ...
 -- ROS 2 distribution: C:/qar/deps/ros2_humble/ros2-windows
+-- qaros headers: C:/qar/src/qar_ogre_adapter/external/qaros
 -- Found rviz_ogre_vendor: 11.2.25 (C:/qar/deps/ros2_humble/ros2-windows/share/rviz_ogre_vendor/cmake)
 ...
 -- qar_qar_adapter: QarOS SDK backend, DYNAMIC loading of C:\Program Files\Quaternar\QAROS/bin/qar-streaming-c.dll (no import lib linked)
 ...
--- Configuring done (12.8s)
--- Generating done (0.3s)
+-- Configuring done (14.8s)
+-- Generating done (0.8s)
 -- Build files have been written to: C:/qar/src/qar_ogre_adapter/build/vs2019-x64
 ```
 
@@ -67,15 +68,15 @@ cmake --build --preset vs2019-x64
   qar_ogre_streaming.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\qar_ogre_streaming\RelWithDebInfo\qar_ogre_streaming.lib
 ...
   qar_qar_adapter_render.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\qar_qar_adapter\RelWithDebInfo\qar_qar_adapter_render.lib
-...
   qar_ogre_standalone_streaming_sample.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\examples\ogre_standalone_streaming_sample\RelWithDebInfo\qar_ogre_standalone_streaming_sample.exe
 ...
   qar_ogre_live_stream_example.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\examples\qaros_live_stream\RelWithDebInfo\qar_ogre_live_stream_example.exe
 ...
   qar_ogre_adapter_doc_snippets.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\docs\snippets\RelWithDebInfo\qar_ogre_adapter_doc_snippets.exe
 ...
-  qar_qar_adapter_tests.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\qar_qar_adapter\test\RelWithDebInfo\qar_qar_adapter_tests.exe
   qar_ogre_streaming_tests.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\qar_ogre_streaming\test\RelWithDebInfo\qar_ogre_streaming_tests.exe
+...
+  qar_qar_adapter_tests.vcxproj -> C:\qar\src\qar_ogre_adapter\build\vs2019-x64\qar_qar_adapter\test\RelWithDebInfo\qar_qar_adapter_tests.exe
 ```
 
 ### Run all tests
@@ -88,16 +89,17 @@ ctest --preset vs2019-x64
 ```text
 Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
         Start   1: check_layering_qar_ar_core
-  1/546 Test   #1: check_layering_qar_ar_core .................................................................   Passed    0.13 sec
+  1/788 Test   #1: check_layering_qar_ar_core .......................................................................................................................   Passed    0.14 sec
         Start   2: check_layering_qar_ogre_streaming
-  2/546 Test   #2: check_layering_qar_ogre_streaming ..........................................................   Passed    0.13 sec
+  2/788 Test   #2: check_layering_qar_ogre_streaming ................................................................................................................   Passed    0.14 sec
         Start   3: check_layering_qar_qar_adapter
-  3/546 Test   #3: check_layering_qar_qar_adapter .............................................................   Passed    0.20 sec
+  3/788 Test   #3: check_layering_qar_qar_adapter ...................................................................................................................   Passed    0.30 sec
         Start   4: check_layering_examples
 ...
-100% tests passed, 0 tests failed out of 546
 
-Total Test time (real) =  94.95 sec
+100% tests passed, 0 tests failed out of 788
+
+Total Test time (real) = 208.37 sec
 ```
 
 [Testing](TESTING.md#what-the-automated-tests-do-not-cover) lists what these tests leave out: every call into QarOS, the handover of the pictures through OpenGL and the live desktop. Of the checks of the next levels, only those of Level 1 were run for this release: the headless sample, which runs the Ogre side without QarOS, and `--connect-only`, which covers the bootstrap of a QarOS session. The calls into QarOS beyond that bootstrap and the live desktop were exercised only in the live checks of qar_rviz_plugin on the desktop Visualizer, with a build that differs from this release only in comments and the text of one tool tip, and the check of Level 2 has not been run.
@@ -110,9 +112,9 @@ The guard checks the include rules of every module and of the examples, and its 
 & "$env:QAR_VENV\Scripts\python.exe" scripts\check_layering.py --all
 ```
 ```text
-check_layering qar_ar_core: OK (26 files)
-check_layering qar_ogre_streaming: OK (54 files)
-check_layering qar_qar_adapter: OK (46 files)
+check_layering qar_ar_core: OK (27 files)
+check_layering qar_ogre_streaming: OK (55 files)
+check_layering qar_qar_adapter: OK (65 files)
 check_layering examples: OK (7 files)
 ```
 
@@ -136,7 +138,11 @@ cmake --install build\vs2019-x64 --config RelWithDebInfo --prefix $env:QAR_PREFI
 -- Installing: C:\qar\install/lib/qar_qar_adapter_capi.lib
 ...
 -- Installing: C:\qar\install/include/qar_qar_adapter/target_rule.hpp
+...
 -- Installing: C:\qar\install/include/qar_streaming.h
+...
+-- Installing: C:\qar\install/include/qar_streaming_cpp/Runtime.hpp
+...
 -- Installing: C:\qar\install/share/qar_ogre_adapter/LICENSE.qaros
 -- Installing: C:\qar\install/share/qar_ogre_adapter/LICENSE
 -- Installing: C:\qar\install/share/qar_ogre_adapter/cmake/qar_ogre_adapterTargets.cmake
@@ -152,7 +158,7 @@ cmake -S docs\snippets\consumer -B build\consumer -G "Visual Studio 16 2019" -A 
 -- Selecting Windows SDK version 10.0.22621.0 to target Windows 10.0.26200.
 -- The CXX compiler identification is MSVC 19.29.30151.0
 ...
--- Configuring done (2.1s)
+-- Configuring done (2.0s)
 -- Generating done (0.0s)
 -- Build files have been written to: C:/qar/src/qar_ogre_adapter/build/consumer
 ```
@@ -234,7 +240,7 @@ $submodule = 'external\qaros\qar-streaming-c\include\qar_streaming.h'
 (Get-FileHash -LiteralPath $sdk -Algorithm SHA256).Hash -eq (Get-FileHash -LiteralPath $submodule -Algorithm SHA256).Hash
 ```
 ```text
-True
+False
 ```
 
 ## Desktop Visualizer checks (Level 2)
@@ -289,7 +295,7 @@ Two lines of the adapter look like errors and are expected. Neither is a failure
 When the streams close at the end of a run, the adapter can fail to make the OpenGL context of a sender current, and it writes a line that has this form:
 
 ```text
-[qar-adapter] *** wglMakeCurrent FAILED (err=%lu)
+[qar-adapter] %s *** wglMakeCurrent FAILED (err=%lu) tid=%llu ctx held by tid=%llu
 ```
 
 While a peer is still negotiating with QarOS, the adapter reports that the creation of its sender takes long, with a line that has this form:

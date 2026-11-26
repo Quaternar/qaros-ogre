@@ -231,6 +231,11 @@ public:
   /// @brief Copy of current per-stream diagnostics accounting.
   StreamDiagnostics diagnostics() const;
 
+  /// @brief How many screen-space objects of the scene the AR render left out of
+  /// one eye image since the last call, the first time there are any; 0 on every
+  /// other call (the report is made once per stream). Render thread only.
+  uint64_t take_left_out_report();
+
 private:
   /// @brief Record one skipped frame together with WHY it was skipped. Every
   /// bail-out from a render+submit cycle goes through here, so `frames_skipped_`
@@ -271,6 +276,11 @@ private:
   double avg_render_ms_ = 0.0;
   double last_left_render_ms_ = 0.0;
   double last_right_render_ms_ = 0.0;
+
+  // The left eye's running total of screen-space objects left out, as of the last
+  // take_left_out_report(), and whether that report was made.
+  uint64_t left_out_seen_ = 0;
+  bool left_out_reported_ = false;
 };
 
 }  // namespace qar_ogre_streaming

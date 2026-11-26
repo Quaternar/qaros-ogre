@@ -158,6 +158,9 @@ public:
     for (;;) {
       owner_->poll(events_);
       if (predicate()) {
+        // The state and its event are published together but a predicate on the state can hold
+        // before the poll above has seen the event: one more poll delivers it.
+        owner_->poll(events_);
         return true;
       }
       if (std::chrono::steady_clock::now() >= end) {

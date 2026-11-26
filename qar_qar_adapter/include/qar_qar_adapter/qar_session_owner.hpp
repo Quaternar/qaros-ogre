@@ -31,6 +31,18 @@
 //  messages (the results of the onboarding, the presence of the Hub) are handled in posting
 //  order, behind the tasks posted before them.
 //
+//  Outage. A supervisor thread watches the owner thread and makes no QAROS call. When one call
+//  or task runs far longer than a healthy one, or the Hub's own peers stay gone, the session is
+//  kReconnecting (kept). When that lasts, or the consumer says so (declare_lost), the session is
+//  kLost: the consumer releases what it built on it and calls release_lost_session(); the owner
+//  releases the session and joins the Hub again by itself, with a growing pause between attempts.
+//  A call that never returns costs only the owner thread: after a longer wait the thread is left
+//  behind and replaced by a fresh owner, and the destructor waits for it only a fixed time. A
+//  thread that was left behind makes no further QAROS call when its call returns. A command of
+//  the person (disconnect, cancel, join again) that arrives while a call is stalled
+//  leaves the thread behind at once; a command that the thread never ran stands, the fresh owner
+//  follows it. A join that never succeeded is not rejoined: the fresh owner is failed.
+//
 //  The owner joins the QAROS Hub of this PC as a source app (QarOnboardLocalAppExt): the Hub asks
 //  the person at the PC to allow the program once, and the program stores nothing. To work with a
 //  Hub on another PC, make the Hub of this PC a member of that Hub (in QAROS); the program still
@@ -41,6 +53,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -51,6 +64,7 @@
 #include "qar_ar_core/version.hpp"
 #include "qar_qar_adapter/env_config.hpp"
 #include "qar_qar_adapter/onboarding_status.hpp"
+#include "qar_qar_adapter/owner_watch.hpp"
 #include "qar_qar_adapter/qar_capi_session_owner.hpp"
 #include "qar_qar_adapter/target_rule.hpp"
 
@@ -66,7 +80,9 @@ enum class SessionState
   kRunning,             ///< Joined; the session is the consumer's.
   kReconnecting,        ///< Joined, but the Hub does not answer; the session stays valid.
   kStopping,            ///< Releasing the session.
-  kFailed               ///< Stopped by an error; connect() tries again.
+  kFailed,              ///< Stopped by an error; connect() tries again.
+  kLost                 ///< The session was given up without a disconnect; the owner releases
+                        ///< it and joins the Hub again by itself.
 };
 
 /// @brief A kind of device the Hub can start an app for.
@@ -91,6 +107,53 @@ struct SessionOwnerConfig
   bool enable_console_logging = true;
   /// Receives each `QAROS: ...` log line. Empty: the line goes to stderr.
   std::function<void(const std::string &)> log_sink;
+  OutageTimings timings;                    ///< Every limit of the outage handling.
+  /// The supervisor reads the Hub's endpoint file and process.
+  bool watch_hub_hints = true;
+  /// Replaces read_hub_hints() (a test). Empty: the real reading.
+  std::function<HubHints()> hint_source;
+};
+
+/// @brief Why the Hub counts as silent. A set of bits.
+enum HubSilence : std::uint32_t
+{
+  kSilenceNone = 0,
+  kSilenceHubPeersGone = 1,    ///< Every RUNTIME peer of the Hub is offline.
+  kSilenceCallStalled = 2,     ///< One call or task of the owner thread runs far too long.
+  kSilenceEndpointGone = 4,    ///< Hint only: the endpoint file of the Hub is missing.
+  kSilenceHubProcessGone = 8   ///< Hint only: the Hub process is not running.
+};
+
+/// @brief How the Hub and the owner thread are doing. A thread-safe copy (health()).
+struct OwnerHealth
+{
+  std::uint32_t silence = kSilenceNone;  ///< HubSilence bits.
+  int silent_for_ms = 0;                 ///< Since the first silent bit was set; 0 when none is.
+  std::string stalled_in;                ///< The call or task the owner thread is stuck in.
+  int stalled_for_ms = 0;
+  int abandoned_owners = 0;              ///< abandoned_owner_threads() of this process.
+};
+
+/// @brief The process of the Hub of this PC as the supervisor saw it (hub_process()). Needs the
+/// process snapshot of the hints (OwnerConfig::watch_hub_hints); without it @c known stays false
+/// and the counter does not move.
+struct HubProcessInfo
+{
+  bool known = false;                    ///< A snapshot of the processes was read at least once.
+  std::uint32_t pid = 0;                 ///< The Hub process now; 0: not running.
+  std::uint32_t gone_count = 0;          ///< How many Hub processes were seen to end.
+  std::uint32_t last_gone_pid = 0;       ///< The pid of the one that ended last; 0: none.
+};
+
+/// @brief The automatic rejoin. A thread-safe copy (rejoin_info()).
+struct RejoinInfo
+{
+  bool automatic = false;    ///< Lost, or an attempt the owner started by itself.
+  int attempt = 0;           ///< 1 for the first automatic attempt; 0 when none.
+  int next_in_ms = -1;       ///< Until the next attempt; -1 while one runs or none is planned.
+  bool prompt_open = false;  ///< The Hub reported its approval prompt for this attempt.
+  std::string lost_cause;    ///< The plain words of the loss.
+  int lost_for_ms = 0;
 };
 
 /// @brief One peer that is, or was, a render target.
@@ -174,10 +237,19 @@ public:
 
   /// @brief kIdle or kFailed to kLoading; ignored in every other state.
   void connect();
-  /// @brief Cancels the wait for approval.
+  /// @brief Cancels the wait for approval. In kLost and in an
+  /// automatic attempt it ends the automatic rejoin: the state becomes kIdle.
   void cancel();
   /// @brief kRunning to kStopping to kIdle.
   void disconnect();
+  /// @brief kLost: the consumer has released everything built on the lost session. Any thread.
+  void release_lost_session();
+  /// @brief kLost: starts the next automatic attempt at once (never sooner than the spacing
+  /// after the previous start).
+  void rejoin_now();
+  /// @brief kRunning or kReconnecting: gives the session up as lost (the consumer saw no stream
+  /// come back, or the person asked to join again). @p reason is logged and shown.
+  void declare_lost(std::string reason);
   /// @brief Sets who hears about targets. A new listener first hears of the targets that have a
   /// stream. An empty listener removes it, and the call returns only after a delivery that is
   /// running has ended, so the caller may release the old listener right after. Consumer thread.
@@ -193,6 +265,12 @@ public:
   SessionState state() const;
   /// @brief The targets that are here (thread-safe copy).
   std::vector<TargetInfo> targets() const;
+  /// @brief How the Hub and the owner thread are doing.
+  OwnerHealth health() const;
+  /// @brief The state of the automatic rejoin.
+  RejoinInfo rejoin_info() const;
+  /// @brief The Hub process as the last snapshot of the hints saw it.
+  HubProcessInfo hub_process() const;
   QarPeerId self_peer() const;
   /// @brief "0.9.0 release v0 from <path>" once the library is loaded; empty before.
   std::string runtime_description() const;
@@ -209,6 +287,9 @@ public:
   /// @brief Queues @p task for the owner thread (see IQarSessionOwner::post_session_task).
   bool post_session_task(
     const char * name, SessionTask task, std::function<void()> dropped = {}) override;
+
+  /// @brief The lane that releases handles on the owner thread (see IReleaseLane).
+  std::shared_ptr<IReleaseLane> release_lane() const override;
 
   /// @brief How the task queue is doing, for the heartbeat line.
   struct TaskStats
@@ -232,7 +313,14 @@ private:
   friend struct QarSessionOwnerTestAccess;
 
   struct Impl;
-  std::unique_ptr<Impl> impl_;
+  Impl * current() const { return impl_.load(); }
+  /// Called by poll() on the consumer thread when the owner thread has to be left behind.
+  void replace_impl();
+  /// The current implementation. Replaced only after an owner thread was left behind; a left-behind
+  /// implementation is never freed, so a reader that races with the swap sees a live object.
+  std::atomic<Impl *> impl_{nullptr};
+  SessionOwnerConfig config_;
+  std::shared_ptr<ILibraryLoader> loader_;
   /// Runs inside poll() after it read the state and before it sets the flag of ready(); a test
   /// sets it to hold poll() at that point. Empty in a program.
   std::function<void()> poll_hook_;
@@ -240,6 +328,13 @@ private:
   /// it to hold the post at that point. Empty in a program.
   std::function<void()> task_post_hook_;
 };
+
+/// @brief Owner threads this process left running, at an exit that ran out of time or after a
+/// call that did not return. Once it is above 0 the QarOS library is never destroyed or unloaded.
+int abandoned_owner_threads();
+
+/// @brief Of those, the ones whose thread has not returned yet. For tests.
+int abandoned_owner_threads_running();
 
 /// @brief For console programs, which may block: polls until the session runs, joining stops
 /// at a failure, or @p deadline passes.

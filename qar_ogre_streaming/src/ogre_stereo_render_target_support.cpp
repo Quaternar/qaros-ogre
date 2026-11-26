@@ -25,4 +25,14 @@ QarPixelFormat depth_output_qar_format(QarPixelFormat /*requested*/) noexcept
   return QAR_PIXEL_FORMAT_R32_FLOAT;
 }
 
+bool ar_render_keeps(bool identity_projection) noexcept
+{
+  return !identity_projection;
+}
+
+bool should_report_left_out(uint64_t previous, uint64_t now, bool reported) noexcept
+{
+  return !reported && now > previous;
+}
+
 }  // namespace qar_ogre_streaming

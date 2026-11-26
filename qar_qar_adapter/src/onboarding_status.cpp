@@ -19,6 +19,8 @@ struct Named
 
 constexpr Named kNames[] = {
   {kStatusNoRuntime, "NO_RUNTIME"},
+  {kStatusSessionLost, "LOST"},
+  {kStatusOwnerAbandoned, "OWNER_ABANDONED"},
   {QAR_STATUS_NOT_IMPLEMENTED, "QAR_STATUS_NOT_IMPLEMENTED"},
   {QAR_STATUS_ARGUMENT_NOT_SUPPORTED, "QAR_STATUS_ARGUMENT_NOT_SUPPORTED"},
   {QAR_STATUS_TIMEOUT, "QAR_STATUS_TIMEOUT"},
@@ -85,6 +87,16 @@ StatusText describe_status(int code, OnboardingContext context, const char * det
       out.message =
         "QAROS is not installed on this PC (and QAROS_RUNTIME_DIR is not set). Install QAROS, "
         "then connect again.";
+      out.retry_offered = true;
+      break;
+    case kStatusSessionLost:
+      out.message = "The QAROS Hub is gone. The session was released; RViz joins the Hub again "
+        "by itself.";
+      out.retry_offered = true;
+      break;
+    case kStatusOwnerAbandoned:
+      out.message = "QAROS stopped answering inside a call. RViz keeps working; restart RViz to "
+        "stream again.";
       out.retry_offered = true;
       break;
     case QAR_STATUS_ONBOARDING_FAILED:

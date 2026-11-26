@@ -25,6 +25,7 @@
 #include <OgreMaterialManager.h>
 #include <OgrePass.h>
 #include <OgrePixelFormat.h>
+#include <OgreRenderQueue.h>
 #include <OgreRenderTexture.h>
 #include <OgreResourceGroupManager.h>
 #include <OgreSceneManager.h>
@@ -194,6 +195,66 @@ bool ensureLinearDepthScheme(std::string & error_out)
   }
 }
 
+/// Render-queue listener installed around the AR passes: a screen-space renderable
+/// (see ar_render_keeps()) is not queued. Every other renderable goes to the listener
+/// that was installed before, if any, so a host that filters the queue itself keeps
+/// its behaviour.
+class ArRenderableListener : public Ogre::RenderQueue::RenderableListener
+{
+public:
+  ArRenderableListener(Ogre::RenderQueue::RenderableListener * previous, uint64_t * left_out)
+  : previous_(previous), left_out_(left_out)
+  {
+  }
+
+  bool renderableQueued(
+    Ogre::Renderable * rend, Ogre::uint8 group_id, Ogre::ushort priority,
+    Ogre::Technique ** technique, Ogre::RenderQueue * queue) override
+  {
+    // Ogre::Rectangle2D (RViz's selection box) sets the identity projection in its constructor,
+    // so the flag alone tells a screen-space renderable; a cast per queued renderable is not
+    // needed.
+    if (!ar_render_keeps(rend->getUseIdentityProjection())) {
+      if (left_out_ != nullptr) {
+        ++*left_out_;
+      }
+      return false;
+    }
+    if (previous_ != nullptr) {
+      return previous_->renderableQueued(rend, group_id, priority, technique, queue);
+    }
+    return true;
+  }
+
+private:
+  Ogre::RenderQueue::RenderableListener * previous_;
+  uint64_t * left_out_;
+};
+
+/// Installs an ArRenderableListener on a scene manager's render queue and puts the
+/// previous listener back when it goes out of scope, also when Ogre throws.
+class ScopedArRenderFilter
+{
+public:
+  ScopedArRenderFilter(Ogre::SceneManager * scene_manager, uint64_t * left_out)
+  : queue_(scene_manager->getRenderQueue()),
+    previous_(queue_->getRenderableListener()),
+    listener_(previous_, left_out)
+  {
+    queue_->setRenderableListener(&listener_);
+  }
+
+  ~ScopedArRenderFilter() { queue_->setRenderableListener(previous_); }
+
+  ScopedArRenderFilter(const ScopedArRenderFilter &) = delete;
+  ScopedArRenderFilter & operator=(const ScopedArRenderFilter &) = delete;
+
+private:
+  Ogre::RenderQueue * queue_;
+  Ogre::RenderQueue::RenderableListener * previous_;
+  ArRenderableListener listener_;
+};
+
 Ogre::PixelFormat mapColorFormat(QarPixelFormat f)
 {
   switch (f) {
@@ -350,8 +411,14 @@ Result OgreStereoRenderTarget::render()
     return Result::error(Status::InvalidState, "render: target not created");
   }
   // update(false): render into the FBO but do NOT swap buffers (offscreen).
-  color_target_->update(false);
+  // The filter lives for the two passes only, so RViz's own windows never see it.
+  // The colour pass counts what it leaves out; the depth pass leaves out the same.
+  {
+    ScopedArRenderFilter filter(scene_manager_, &screen_space_left_out_);
+    color_target_->update(false);
+  }
   if (has_depth_ && depth_target_ != nullptr) {
+    ScopedArRenderFilter filter(scene_manager_, nullptr);
     depth_target_->update(false);
   }
   return Result::success();

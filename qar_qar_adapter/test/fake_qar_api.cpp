@@ -10,6 +10,7 @@
 #include <deque>
 #include <list>
 #include <map>
+#include <set>
 #include <utility>
 
 namespace qar_qar_adapter
@@ -39,6 +40,40 @@ QarResult error_result(int code)
 struct FakeToken
 {
   bool cancelled = false;
+  /// The same fact as @c cancelled, readable by a render sender creation after the token is gone.
+  std::shared_ptr<bool> flag = std::make_shared<bool>(false);
+};
+
+/// One qar_render_sender_create_async that has not answered yet.
+struct RenderCreateState
+{
+  std::shared_ptr<bool> token_flag;  ///< Null when the call had no token.
+  bool answered = false;
+  bool cancel_counted = false;
+};
+
+struct RenderSenderObject
+{
+  QarPeerId peer{};
+  QarStreamId stream{};
+};
+
+/// One render stream request as the fake delivers it.
+struct RenderRequestObject
+{
+  QarPeerId peer{};
+  QarStreamId stream{};
+};
+
+struct RenderFrameInfoObject
+{
+  int magic = 0xF4A3;
+};
+
+struct GestureObject
+{
+  FakeGesture gesture;
+  QarAppVolumeId volume{};
 };
 
 struct FakeSession
@@ -96,6 +131,34 @@ struct FakeQarApi::State
     bool active = true;
   };
 
+  /// A subscription to the gesture events of an app volume.
+  struct GestureSubscription
+  {
+    FakeToken * token = nullptr;
+    qar_app_volume_gesture_event_callback_t callback = nullptr;
+    void * user = nullptr;
+    int kind = -1;  ///< A QarGestureKind, or -1 for every kind.
+    int running = 0;
+    bool active = true;
+  };
+
+  /// A subscription to the gesture events of a GUI panel (only counted).
+  struct PanelGestureSubscription
+  {
+    FakeToken * token = nullptr;
+    bool active = true;
+  };
+
+  /// A subscription to the render stream requests of the session.
+  struct RenderRequestSubscription
+  {
+    FakeToken * token = nullptr;
+    qar_render_sender_request_callback_t callback = nullptr;
+    void * user = nullptr;
+    int running = 0;
+    bool active = true;
+  };
+
   struct SenderObject
   {
     QarStreamId stream{};
@@ -109,6 +172,11 @@ struct FakeQarApi::State
   std::vector<Call> calls;
   std::list<VolumeSubscription> volume_subs;
   std::list<PanelSubscription> panel_subs;
+  std::list<GestureSubscription> gesture_subs;
+  std::list<PanelGestureSubscription> panel_gesture_subs;
+  std::list<RenderRequestSubscription> render_request_subs;
+  std::atomic<int> next_render_stream{1};
+  std::atomic<int> render_requests_released{0};
   std::map<std::string, int> failures;
   int latest_code = 0;
   std::vector<PanelRecord> panels;
@@ -130,6 +198,19 @@ struct FakeQarApi::State
   std::vector<FakePeer> initial_peers;
   std::list<Subscription> subscriptions;
   std::vector<std::thread> threads;
+  std::vector<std::thread> detached;
+  int detached_running = 0;
+  std::deque<Outcome> render_script;
+  std::vector<std::shared_ptr<RenderCreateState>> render_creating;
+  std::set<const void *> render_senders;
+  RenderFrameScript render_frame;
+  HubGone hub_gone = HubGone::kNo;
+  int hub_code = 1802;
+  int hub_blocked = 0;
+  bool frame_block = false;
+  int frame_blocked = 0;
+  int frame_delay_all = 0;
+  std::map<std::string, int> frame_delay;
   std::function<void(const std::string &)> hook;
   std::function<void(const void *)> sync_failure_hook;
   std::uint64_t release_epoch = 0;
@@ -143,6 +224,13 @@ struct FakeQarApi::State
   std::atomic<int> invite_results{0};
   std::atomic<int> live_tokens{0};
   std::atomic<int> render_streams_destroyed{0};
+  std::atomic<int> live_render_senders{0};
+  std::atomic<int> render_creates{0};
+  std::atomic<int> render_creates_cancelled{0};
+  std::atomic<int> live_render_infos{0};
+  std::atomic<int> render_frames_shown{0};
+  std::atomic<int> live_runtimes{0};
+  std::atomic<int> runtime_creates{0};
   std::atomic<int> next_id{1};
   FakeRuntime runtime;
   int sentinel = 0;
@@ -163,6 +251,65 @@ void record(const std::string & name)
   }
   if (hook) {
     hook(name);
+  }
+}
+
+// Decides what a session call does while the Hub may be gone. Waits (in kBlockAll) until the mode
+// changes, release_pending() is called after @p epoch, @p also_wake says so, or the fake ends.
+// @return 0 when the Hub is there (or @p also_wake ended the wait), else the status the call fails
+// with. The caller holds @p lock.
+int hub_answer(
+  std::unique_lock<std::mutex> & lock, std::uint64_t epoch,
+  const std::function<bool()> & also_wake = nullptr)
+{
+  if (g_state->hub_gone == HubGone::kBlockAll) {
+    ++g_state->hub_blocked;
+    g_state->cv.wait(lock, [&epoch, &also_wake] {
+        return g_state->hub_gone != HubGone::kBlockAll || g_state->release_epoch > epoch ||
+               g_state->shutting_down || (also_wake && also_wake());
+      });
+    --g_state->hub_blocked;
+    g_state->cv.notify_all();
+    if (also_wake && also_wake()) {
+      return 0;
+    }
+    if (g_state->shutting_down) {
+      return g_state->hub_code;
+    }
+  }
+  return g_state->hub_gone == HubGone::kNo ? 0 : g_state->hub_code;
+}
+
+// The gate of every session call: @return 0 to go on, else the status to fail with.
+int hub_gate()
+{
+  std::unique_lock<std::mutex> lock(g_state->mutex);
+  if (g_state->hub_gone == HubGone::kNo) {
+    return 0;
+  }
+  return hub_answer(lock, g_state->release_epoch);
+}
+
+// The gate of a frame call: waits while the frame calls are blocked, then sleeps the scripted time.
+void frame_gate(const char * name)
+{
+  int delay_ms = 0;
+  {
+    std::unique_lock<std::mutex> lock(g_state->mutex);
+    if (g_state->frame_block) {
+      ++g_state->frame_blocked;
+      g_state->cv.wait(lock, [] { return !g_state->frame_block || g_state->shutting_down; });
+      --g_state->frame_blocked;
+      g_state->cv.notify_all();
+    }
+    delay_ms = g_state->frame_delay_all;
+    const auto it = g_state->frame_delay.find(name);
+    if (it != g_state->frame_delay.end()) {
+      delay_ms = it->second;
+    }
+  }
+  if (delay_ms > 0) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
   }
 }
 
@@ -269,6 +416,21 @@ void end_subscriptions(FakeToken * token)
       sub.active = false;
     }
   }
+  for (auto & sub : g_state->gesture_subs) {
+    if (sub.token == token) {
+      sub.active = false;
+    }
+  }
+  for (auto & sub : g_state->panel_gesture_subs) {
+    if (sub.token == token) {
+      sub.active = false;
+    }
+  }
+  for (auto & sub : g_state->render_request_subs) {
+    if (sub.token == token) {
+      sub.active = false;
+    }
+  }
   g_state->cv.wait(lock, [&token] {
       for (const auto & sub : g_state->subscriptions) {
         if (sub.token == token && sub.running > 0) {
@@ -285,8 +447,32 @@ void end_subscriptions(FakeToken * token)
           return false;
         }
       }
+      for (const auto & sub : g_state->gesture_subs) {
+        if (sub.token == token && sub.running > 0) {
+          return false;
+        }
+      }
+      for (const auto & sub : g_state->render_request_subs) {
+        if (sub.token == token && sub.running > 0) {
+          return false;
+        }
+      }
       return true;
     });
+}
+
+// Marks @p token cancelled and counts the render sender creations it owned that had not answered.
+// The caller holds the mutex.
+void mark_cancelled(FakeToken * token)
+{
+  token->cancelled = true;
+  *token->flag = true;
+  for (auto & creating : g_state->render_creating) {
+    if (creating->token_flag == token->flag && !creating->answered && !creating->cancel_counted) {
+      creating->cancel_counted = true;
+      g_state->render_creates_cancelled.fetch_add(1);
+    }
+  }
 }
 
 QarResult fake_cancel_token_cancel(QarCancelToken * handle)
@@ -295,7 +481,7 @@ QarResult fake_cancel_token_cancel(QarCancelToken * handle)
   auto * token = reinterpret_cast<FakeToken *>(handle);
   {
     std::lock_guard<std::mutex> lock(g_state->mutex);
-    token->cancelled = true;
+    mark_cancelled(token);
   }
   g_state->cv.notify_all();
   end_subscriptions(token);
@@ -308,7 +494,7 @@ void fake_cancel_token_handle_destroy(QarCancelToken * handle)
   auto * token = reinterpret_cast<FakeToken *>(handle);
   {
     std::lock_guard<std::mutex> lock(g_state->mutex);
-    token->cancelled = true;
+    mark_cancelled(token);
   }
   g_state->cv.notify_all();
   end_subscriptions(token);
@@ -321,6 +507,17 @@ void fake_cancel_token_handle_destroy(QarCancelToken * handle)
         return sub.token == token;
       });
     g_state->panel_subs.remove_if([token](const FakeQarApi::State::PanelSubscription & sub) {
+        return sub.token == token;
+      });
+    g_state->gesture_subs.remove_if([token](const FakeQarApi::State::GestureSubscription & sub) {
+        return sub.token == token;
+      });
+    g_state->panel_gesture_subs.remove_if(
+      [token](const FakeQarApi::State::PanelGestureSubscription & sub) {
+        return sub.token == token;
+      });
+    g_state->render_request_subs.remove_if(
+      [token](const FakeQarApi::State::RenderRequestSubscription & sub) {
         return sub.token == token;
       });
   }
@@ -359,27 +556,43 @@ QarResult fake_runtime_create(const QarRuntimeInit *, QarRuntime ** out)
     return error_result(g_state->runtime_create_code);
   }
   *out = reinterpret_cast<QarRuntime *>(&g_state->runtime);
+  g_state->runtime_creates.fetch_add(1);
+  g_state->live_runtimes.fetch_add(1);
   return ok_result();
 }
 
 void fake_runtime_handle_destroy(QarRuntime *)
 {
   record("runtime_handle_destroy");
+  int live = g_state->live_runtimes.load();
+  while (live > 0 && !g_state->live_runtimes.compare_exchange_weak(live, live - 1)) {
+  }
 }
 
 void fake_session_handle_destroy(QarSession * handle)
 {
   record("session_handle_destroy");
+  hub_gate();
   delete reinterpret_cast<FakeSession *>(handle);
   g_state->live_sessions.fetch_sub(1);
 }
 
 // --- render streams ----------------------------------------------------------------------------
 
-void fake_render_stream_handle_destroy(QarRenderSender *)
+void fake_render_stream_handle_destroy(QarRenderSender * handle)
 {
   record("render_stream_handle_destroy");
   g_state->render_streams_destroyed.fetch_add(1);
+  hub_gate();
+  bool known = false;
+  {
+    std::lock_guard<std::mutex> lock(g_state->mutex);
+    known = g_state->render_senders.erase(handle) > 0;
+  }
+  if (known) {
+    delete reinterpret_cast<RenderSenderObject *>(handle);
+    g_state->live_render_senders.fetch_sub(1);
+  }
 }
 
 // --- asynchronous calls ------------------------------------------------------------------------
@@ -405,12 +618,20 @@ struct OnboardOp
 
 void run_onboard(OnboardOp op)
 {
-  if (op.outcome.progress && op.progress != nullptr) {
+  // A Hub that is gone answers with its code (after the release, in kBlockAll).
+  int gone = 0;
+  {
+    std::unique_lock<std::mutex> lock(g_state->mutex);
+    gone = hub_answer(lock, op.epoch, [&op] { return token_cancelled(op); });
+  }
+  if (gone == 0 && op.outcome.progress && op.progress != nullptr) {
     op.progress(QAR_ACTION_SEVERITY_INFO, 10.0f, "Waiting for approval in QAROS hub", op.user);
   }
   {
     std::unique_lock<std::mutex> lock(g_state->mutex);
-    if (op.outcome.wait_for_release) {
+    if (gone != 0) {
+      // Nothing to wait for.
+    } else if (op.outcome.wait_for_release) {
       g_state->cv.wait(lock, [&op] {
           return token_cancelled(op) || g_state->shutting_down || g_state->release_epoch > op.epoch;
         });
@@ -430,6 +651,8 @@ void run_onboard(OnboardOp op)
   }
   if (cancelled || g_state->shutting_down) {
     result = error_result(QAR_STATUS_UNCLASSIFIED);
+  } else if (gone != 0) {
+    result = error_result(gone);
   } else if (op.outcome.code != 0) {
     result = error_result(op.outcome.code);
   } else {
@@ -545,9 +768,16 @@ struct InviteOp
 
 void run_invite(InviteOp op)
 {
+  int gone = 0;
   {
     std::unique_lock<std::mutex> lock(g_state->mutex);
-    if (op.outcome.wait_for_release) {
+    gone = hub_answer(lock, op.epoch, [&op] { return token_cancelled(op); });
+  }
+  {
+    std::unique_lock<std::mutex> lock(g_state->mutex);
+    if (gone != 0) {
+      // Nothing to wait for.
+    } else if (op.outcome.wait_for_release) {
       g_state->cv.wait(lock, [&op] {
           return token_cancelled(op) || g_state->shutting_down || g_state->release_epoch > op.epoch;
         });
@@ -569,6 +799,8 @@ void run_invite(InviteOp op)
   QarResult result = ok_result();
   if (cancelled || g_state->shutting_down) {
     result = error_result(QAR_STATUS_UNCLASSIFIED);
+  } else if (gone != 0) {
+    result = error_result(gone);
   } else if (op.outcome.code != 0) {
     result = error_result(op.outcome.code);
   }
@@ -615,6 +847,9 @@ QarResult fake_app_volumes_get_or_create(
   QarSession *, const QarAppVolumeInit * init, QarAppVolumeId * out)
 {
   record("app_volumes_get_or_create");
+  if (const int gone = hub_gate()) {
+    return error_result(gone);
+  }
   std::lock_guard<std::mutex> lock(g_state->mutex);
   VolumeRequest request;
   request.common_name = init->common_name != nullptr ? init->common_name : "";
@@ -644,6 +879,9 @@ int forced_code(const char * name);
 QarResult fake_query_app_volumes_count(QarSession *, size_t * count)
 {
   record("query_app_volumes_count");
+  if (const int gone = hub_gate()) {
+    return error_result(gone);
+  }
   if (const int code = forced_code("query_app_volumes_count")) {
     return error_result(code);
   }
@@ -656,6 +894,9 @@ QarResult fake_query_app_volumes(
   QarSession *, QarAppVolume ** handles, size_t capacity, size_t * written)
 {
   record("query_app_volumes");
+  if (const int gone = hub_gate()) {
+    return error_result(gone);
+  }
   std::lock_guard<std::mutex> lock(g_state->mutex);
   size_t n = 0;
   if (g_state->volume_exists && capacity > 0) {
@@ -748,6 +989,9 @@ QarResult fake_app_volumes_subscribe_updates(
   QarSession *, qar_app_volume_update_callback_t callback, void * user, QarCancelToken * token)
 {
   record("app_volumes_subscribe_updates");
+  if (const int gone = hub_gate()) {
+    return error_result(gone);
+  }
   const int forced = forced_code("app_volumes_subscribe_updates");
   if (forced != 0) {
     return error_result(forced);
@@ -764,6 +1008,9 @@ QarResult fake_app_volumes_subscribe_updates(
 QarResult latest_result(const char * name)
 {
   record(name);
+  if (const int gone = hub_gate()) {
+    return error_result(gone);
+  }
   std::lock_guard<std::mutex> lock(g_state->mutex);
   return g_state->latest_code == 0 ? ok_result() : error_result(g_state->latest_code);
 }
@@ -803,6 +1050,9 @@ QarResult fake_app_volumes_change_app_world_anchor(
   QarSession *, const QarAppVolumeId *, const QarGeoAnchorFrame *)
 {
   record("app_volumes_change_app_world_anchor");
+  if (const int gone = hub_gate()) {
+    return error_result(gone);
+  }
   const int forced = forced_code("app_volumes_change_app_world_anchor");
   return forced == 0 ? ok_result() : error_result(forced);
 }
@@ -810,8 +1060,387 @@ QarResult fake_app_volumes_change_app_world_anchor(
 QarResult fake_app_volumes_clear_app_world_anchor(QarSession *, const QarAppVolumeId *)
 {
   record("app_volumes_clear_app_world_anchor");
+  if (const int gone = hub_gate()) {
+    return error_result(gone);
+  }
   const int forced = forced_code("app_volumes_clear_app_world_anchor");
   return forced == 0 ? ok_result() : error_result(forced);
+}
+
+// --- app-volume gestures -----------------------------------------------------------------------
+
+QarResult add_gesture_subscription(
+  const char * name, int kind, qar_app_volume_gesture_event_callback_t callback, void * user,
+  QarCancelToken * token)
+{
+  record(name);
+  if (const int gone = hub_gate()) {
+    return error_result(gone);
+  }
+  const int forced = forced_code(name);
+  if (forced != 0) {
+    return error_result(forced);
+  }
+  std::lock_guard<std::mutex> lock(g_state->mutex);
+  FakeQarApi::State::GestureSubscription sub;
+  sub.token = reinterpret_cast<FakeToken *>(token);
+  sub.callback = callback;
+  sub.user = user;
+  sub.kind = kind;
+  g_state->gesture_subs.push_back(sub);
+  return ok_result();
+}
+
+QarResult fake_app_volumes_subscribe_all_gesture_events(
+  QarSession *, const QarAppVolumeId *, qar_app_volume_gesture_event_callback_t callback,
+  void * user, QarCancelToken * token)
+{
+  return add_gesture_subscription(
+    "app_volumes_subscribe_all_gesture_events", -1, callback, user, token);
+}
+
+QarResult fake_app_volumes_subscribe_gesture_events(
+  QarSession *, const QarAppVolumeId *, QarGestureKind kind,
+  qar_app_volume_gesture_event_callback_t callback, void * user, QarCancelToken * token)
+{
+  return add_gesture_subscription(
+    "app_volumes_subscribe_gesture_events", static_cast<int>(kind), callback, user, token);
+}
+
+GestureObject * as_gesture(QarAppVolumeGesture * handle)
+{
+  return reinterpret_cast<GestureObject *>(handle);
+}
+
+QarResult fake_app_volume_gesture_get_lifecycle(
+  QarAppVolumeGesture * handle, QarPeerId * out_source, QarAppVolumeId * out_volume)
+{
+  *out_source = as_gesture(handle)->gesture.source;
+  *out_volume = as_gesture(handle)->volume;
+  return ok_result();
+}
+
+QarResult fake_app_volume_gesture_get_classification(
+  QarAppVolumeGesture * handle, QarGestureKind * out_kind, QarGesturePhase * out_phase)
+{
+  *out_kind = as_gesture(handle)->gesture.kind;
+  *out_phase = as_gesture(handle)->gesture.phase;
+  return ok_result();
+}
+
+QarResult fake_app_volume_gesture_get_points(
+  QarAppVolumeGesture * handle, QarVector3 * out_action, bool * out_has_action,
+  QarVector3 * out_start, bool * out_has_start)
+{
+  const FakeGesture & gesture = as_gesture(handle)->gesture;
+  *out_action = gesture.action_point;
+  *out_has_action = gesture.has_action_point;
+  *out_start = gesture.start_point;
+  *out_has_start = gesture.has_start_point;
+  return ok_result();
+}
+
+QarResult fake_app_volume_gesture_get_timestamp(
+  QarAppVolumeGesture * handle, QarTimePoint * out_timestamp)
+{
+  out_timestamp->unix_ns = as_gesture(handle)->gesture.unix_ns;
+  return ok_result();
+}
+
+// --- render senders ----------------------------------------------------------------------------
+
+struct RenderCreateOp
+{
+  qar_render_sender_create_callback_t result = nullptr;
+  void * user = nullptr;
+  Outcome outcome;
+  QarPeerId peer{};
+  std::uint64_t epoch = 0;
+  std::shared_ptr<RenderCreateState> state;
+};
+
+// The creation answers on a thread of its own. Cancelling its token wakes it only when the outcome
+// says fire_on_cancel; otherwise it keeps waiting for release_pending() or its delay and then
+// answers as scripted (a late sender for a caller that gave up). A fake that ends calls back only
+// for a cancelled creation, because the caller may be gone.
+void run_render_create(RenderCreateOp op)
+{
+  bool cancelled = false;
+  bool fire = true;
+  {
+    std::unique_lock<std::mutex> lock(g_state->mutex);
+    const auto woken = [&op] {
+        return g_state->shutting_down ||
+               (op.outcome.fire_on_cancel && op.state->token_flag && *op.state->token_flag);
+      };
+    if (op.outcome.wait_for_release) {
+      g_state->cv.wait(lock, [&op, &woken] {
+          return woken() || g_state->release_epoch > op.epoch;
+        });
+    } else if (op.outcome.delay_ms > 0) {
+      g_state->cv.wait_for(lock, std::chrono::milliseconds(op.outcome.delay_ms), woken);
+    }
+    cancelled = op.outcome.fire_on_cancel && op.state->token_flag && *op.state->token_flag;
+    fire = cancelled || !g_state->shutting_down;
+    op.state->answered = true;
+  }
+  if (!fire) {
+    return;
+  }
+  QarResult result{};
+  QarRenderSender * stream = nullptr;
+  if (cancelled) {
+    result = error_result(QAR_STATUS_UNCLASSIFIED);
+  } else if (op.outcome.code != 0) {
+    result = error_result(op.outcome.code);
+  } else {
+    auto * object = new RenderSenderObject{op.peer};
+    std::memset(
+      object->stream.data, FakeQarApi::render_stream_tag(g_state->next_render_stream.fetch_add(1)),
+      sizeof(object->stream.data));
+    {
+      std::lock_guard<std::mutex> lock(g_state->mutex);
+      g_state->render_senders.insert(object);
+    }
+    g_state->live_render_senders.fetch_add(1);
+    stream = reinterpret_cast<QarRenderSender *>(object);
+    result = ok_result();
+  }
+  op.result(result, stream, op.user);
+}
+
+QarResult fake_render_sender_create_async(
+  QarSession *, QarRenderSenderInit * init, qar_render_sender_create_callback_t callback,
+  void * user, QarCancelToken * token)
+{
+  record("render_sender_create_async");
+  if (const int gone = hub_gate()) {
+    return error_result(gone);
+  }
+  const int forced = forced_code("render_sender_create_async");
+  if (forced != 0) {
+    return error_result(forced);
+  }
+  RenderCreateOp op;
+  op.result = callback;
+  op.user = user;
+  op.peer = init != nullptr ? init->peer_id : QarPeerId{};
+  op.state = std::make_shared<RenderCreateState>();
+  if (token != nullptr) {
+    op.state->token_flag = reinterpret_cast<FakeToken *>(token)->flag;
+  }
+  op.outcome = next_outcome(g_state->render_script);
+  {
+    std::lock_guard<std::mutex> lock(g_state->mutex);
+    op.epoch = g_state->release_epoch;
+    auto & creating = g_state->render_creating;
+    creating.erase(
+      std::remove_if(creating.begin(), creating.end(),
+      [](const std::shared_ptr<RenderCreateState> & state) { return state->answered; }),
+      creating.end());
+    creating.push_back(op.state);
+    g_state->threads.emplace_back([op] { run_render_create(op); });
+  }
+  g_state->render_creates.fetch_add(1);
+  if (op.outcome.sync_error_code != 0) {
+    note_sync_failure(user);
+    return error_result(op.outcome.sync_error_code);
+  }
+  return ok_result();
+}
+
+QarResult fake_render_sender_subscribe_requests(
+  QarSession *, qar_render_sender_request_callback_t callback, void * user, QarCancelToken * token)
+{
+  record("render_sender_subscribe_requests");
+  if (const int gone = hub_gate()) {
+    return error_result(gone);
+  }
+  const int forced = forced_code("render_sender_subscribe_requests");
+  if (forced != 0) {
+    return error_result(forced);
+  }
+  std::lock_guard<std::mutex> lock(g_state->mutex);
+  FakeQarApi::State::RenderRequestSubscription sub;
+  sub.token = reinterpret_cast<FakeToken *>(token);
+  sub.callback = callback;
+  sub.user = user;
+  g_state->render_request_subs.push_back(sub);
+  return ok_result();
+}
+
+QarResult fake_render_request_get_target_peer_id(
+  QarRenderStreamRequest * request, QarPeerId * out)
+{
+  *out = reinterpret_cast<RenderRequestObject *>(request)->peer;
+  return ok_result();
+}
+
+QarResult fake_render_request_get_stream_id(QarRenderStreamRequest * request, QarStreamId * out)
+{
+  *out = reinterpret_cast<RenderRequestObject *>(request)->stream;
+  return ok_result();
+}
+
+void fake_render_request_handle_destroy(QarRenderStreamRequest *)
+{
+  g_state->render_requests_released.fetch_add(1);
+}
+
+QarResult fake_render_sender_stream_id(QarRenderSender * stream, QarStreamId * out)
+{
+  record("render_sender_stream_id");
+  const int forced = forced_code("render_sender_stream_id");
+  if (forced != 0) {
+    return error_result(forced);
+  }
+  std::lock_guard<std::mutex> lock(g_state->mutex);
+  if (g_state->render_senders.count(stream) == 0) {
+    return error_result(QAR_STATUS_UNCLASSIFIED);
+  }
+  *out = reinterpret_cast<RenderSenderObject *>(stream)->stream;
+  return ok_result();
+}
+
+QarResult fake_render_sender_try_begin_frame(
+  QarRenderSender *, QarRenderFrameInfo ** out_info, bool * out_ready)
+{
+  record("render_sender_try_begin_frame");
+  frame_gate("render_sender_try_begin_frame");
+  RenderFrameScript script;
+  {
+    std::lock_guard<std::mutex> lock(g_state->mutex);
+    script = g_state->render_frame;
+  }
+  if (out_info != nullptr) {
+    *out_info = nullptr;
+  }
+  if (out_ready != nullptr) {
+    *out_ready = false;
+  }
+  if (script.error_code != 0) {
+    return error_result(script.error_code);
+  }
+  if (script.ready && out_info != nullptr && out_ready != nullptr) {
+    *out_info = reinterpret_cast<QarRenderFrameInfo *>(new RenderFrameInfoObject());
+    g_state->live_render_infos.fetch_add(1);
+    *out_ready = true;
+  }
+  return ok_result();
+}
+
+QarResult fake_render_sender_get_stream_state(
+  QarRenderSender *, QarRenderSenderStreamState * out_state)
+{
+  record("render_sender_get_stream_state");
+  int state = -1;
+  {
+    std::lock_guard<std::mutex> lock(g_state->mutex);
+    state = g_state->render_frame.stream_state;
+  }
+  if (state < 0) {
+    return error_result(QAR_STATUS_NOT_IMPLEMENTED);
+  }
+  if (out_state != nullptr) {
+    *out_state = static_cast<QarRenderSenderStreamState>(state);
+  }
+  return ok_result();
+}
+
+void fake_render_frame_info_handle_destroy(QarRenderFrameInfo * handle)
+{
+  record("render_frame_info_handle_destroy");
+  if (handle != nullptr) {
+    delete reinterpret_cast<RenderFrameInfoObject *>(handle);
+    g_state->live_render_infos.fetch_sub(1);
+  }
+}
+
+QarResult fake_render_frame_info_get_view_pose(QarRenderFrameInfo *, size_t, QarPose * out_pose)
+{
+  record("render_frame_info_get_view_pose");
+  const int forced = forced_code("render_frame_info_get_view_pose");
+  if (forced != 0) {
+    return error_result(forced);
+  }
+  *out_pose = QarPose{};
+  out_pose->orientation.w = 1.0f;
+  return ok_result();
+}
+
+QarResult fake_render_frame_info_get_view_fov(QarRenderFrameInfo *, size_t, QarFov * out_fov)
+{
+  record("render_frame_info_get_view_fov");
+  const int forced = forced_code("render_frame_info_get_view_fov");
+  if (forced != 0) {
+    return error_result(forced);
+  }
+  out_fov->angle_left = -0.5f;
+  out_fov->angle_right = 0.5f;
+  out_fov->angle_up = 0.5f;
+  out_fov->angle_down = -0.5f;
+  return ok_result();
+}
+
+/// The layout a render sender settled on: two colour and two depth views of 64 x 64 pixels, one
+/// texture each.
+QarResult fake_render_sender_layout(QarRenderSender *, QarVideoFrameLayout * out)
+{
+  record("render_sender_layout");
+  const int forced = forced_code("render_sender_layout");
+  if (forced != 0) {
+    return error_result(forced);
+  }
+  *out = QarVideoFrameLayout{};
+  for (int i = 0; i < 4; ++i) {
+    QarTextureSize & size = out->textures[i];
+    size.format = i < 2 ? QAR_PIXEL_FORMAT_R8G8B8A8 : QAR_PIXEL_FORMAT_R32_FLOAT;
+    size.width = 64;
+    size.height = 64;
+    size.array_layers = 1;
+    QarVideoFrameView & view = out->views[i];
+    view.end_x = 64;
+    view.end_y = 64;
+    view.texture_index = static_cast<uint32_t>(i);
+    view.texture_format = size.format;
+    view.data_type = i < 2 ? QAR_VIDEO_FRAME_VIEW_TYPE_COLOR : QAR_VIDEO_FRAME_VIEW_TYPE_DEPTH;
+    view.eye = (i % 2) == 0 ? QAR_VIDEO_FRAME_VIEW_EYE_LEFT : QAR_VIDEO_FRAME_VIEW_EYE_RIGHT;
+  }
+  out->textures_count = 4;
+  out->views_count = 4;
+  return ok_result();
+}
+
+QarResult fake_render_sender_frame_opengl(QarRenderSender *, QarVideoFrameOpenGl *)
+{
+  record("render_sender_frame_opengl");
+  frame_gate("render_sender_frame_opengl");
+  const int forced = forced_code("render_sender_frame_opengl");
+  return forced == 0 ? ok_result() : error_result(forced);
+}
+
+QarResult fake_render_sender_show_frame(QarRenderSender *, const QarRenderFrameShow *)
+{
+  record("render_sender_show_frame");
+  frame_gate("render_sender_show_frame");
+  const int forced = forced_code("render_sender_show_frame");
+  if (forced != 0) {
+    return error_result(forced);
+  }
+  g_state->render_frames_shown.fetch_add(1);
+  return ok_result();
+}
+
+QarResult fake_render_sender_last_hands(QarRenderSender *, QarDeviceHandsWithJoints * out_hands)
+{
+  record("render_sender_last_hands");
+  frame_gate("render_sender_last_hands");
+  const int forced = forced_code("render_sender_last_hands");
+  if (forced != 0) {
+    return error_result(forced);
+  }
+  *out_hands = QarDeviceHandsWithJoints{};
+  return ok_result();
 }
 
 // --- GUI panels --------------------------------------------------------------------------------
@@ -849,6 +1478,9 @@ QarResult fake_gui_panels_get_or_create(
   QarSession *, const QarGuiPanelInit * init, QarGuiPanelId * out)
 {
   record("gui_panels_get_or_create");
+  if (const int gone = hub_gate()) {
+    return error_result(gone);
+  }
   const int forced = forced_code("gui_panels_get_or_create");
   if (forced != 0) {
     return error_result(forced);
@@ -889,6 +1521,9 @@ template<typename Change>
 QarResult change_panel(const char * name, const QarGuiPanelId * id, Change change)
 {
   record(name);
+  if (const int gone = hub_gate()) {
+    return error_result(gone);
+  }
   const int forced = forced_code(name);
   if (forced != 0) {
     return error_result(forced);
@@ -960,11 +1595,21 @@ QarResult fake_gui_panels_update_visible_to(
 
 QarResult fake_gui_panels_subscribe_all_gesture_events(
   QarSession *, const QarGuiPanelId *, qar_gui_panel_gesture_event_callback_t, void *,
-  QarCancelToken *)
+  QarCancelToken * token)
 {
   record("gui_panels_subscribe_all_gesture_events");
+  if (const int gone = hub_gate()) {
+    return error_result(gone);
+  }
   const int forced = forced_code("gui_panels_subscribe_all_gesture_events");
-  return forced == 0 ? ok_result() : error_result(forced);
+  if (forced != 0) {
+    return error_result(forced);
+  }
+  std::lock_guard<std::mutex> lock(g_state->mutex);
+  FakeQarApi::State::PanelGestureSubscription sub;
+  sub.token = reinterpret_cast<FakeToken *>(token);
+  g_state->panel_gesture_subs.push_back(sub);
+  return ok_result();
 }
 
 QarResult fake_gui_panels_subscribe_panel_updates(
@@ -972,6 +1617,9 @@ QarResult fake_gui_panels_subscribe_panel_updates(
   QarCancelToken * token)
 {
   record("gui_panels_subscribe_panel_updates");
+  if (const int gone = hub_gate()) {
+    return error_result(gone);
+  }
   const int forced = forced_code("gui_panels_subscribe_panel_updates");
   if (forced != 0) {
     return error_result(forced);
@@ -989,6 +1637,9 @@ QarResult fake_gui_panels_subscribe_panel_updates(
 QarResult fake_query_gui_panels_count(QarSession *, size_t * count)
 {
   record("query_gui_panels_count");
+  if (const int gone = hub_gate()) {
+    return error_result(gone);
+  }
   const int forced = forced_code("query_gui_panels_count");
   if (forced != 0) {
     return error_result(forced);
@@ -1002,6 +1653,9 @@ QarResult fake_query_gui_panels(
   QarSession *, QarGuiPanel ** handles, size_t capacity, size_t * written)
 {
   record("query_gui_panels");
+  if (const int gone = hub_gate()) {
+    return error_result(gone);
+  }
   const int forced = forced_code("query_gui_panels");
   if (forced != 0) {
     return error_result(forced);
@@ -1035,6 +1689,12 @@ QarResult fake_gui_panel_get_id(QarGuiPanel * handle, QarGuiPanelId * out)
 QarResult fake_gui_panel_get_size(QarGuiPanel * handle, QarGuiPanelSize * out)
 {
   *out = as_panel(handle)->record.info.size;
+  return ok_result();
+}
+
+QarResult fake_gui_panel_get_pose(QarGuiPanel * handle, QarPose * out)
+{
+  *out = as_panel(handle)->record.info.pose;
   return ok_result();
 }
 
@@ -1080,6 +1740,10 @@ QarResult fake_video_sender_create(
   QarSession *, const QarVideoSenderInit * init, QarVideoSender ** out)
 {
   record("video_sender_create");
+  if (const int gone = hub_gate()) {
+    *out = nullptr;
+    return error_result(gone);
+  }
   const int forced = forced_code("video_sender_create");
   if (forced != 0) {
     *out = nullptr;
@@ -1107,6 +1771,7 @@ QarResult fake_video_sender_stream_id(QarVideoSender * handle, QarStreamId * out
 QarResult fake_video_sender_try_begin_frame(QarVideoSender *, bool * out_ready)
 {
   record("video_sender_try_begin_frame");
+  frame_gate("video_sender_try_begin_frame");
   std::lock_guard<std::mutex> lock(g_state->mutex);
   *out_ready = g_state->sender_ready;
   return ok_result();
@@ -1115,6 +1780,7 @@ QarResult fake_video_sender_try_begin_frame(QarVideoSender *, bool * out_ready)
 QarResult fake_video_sender_frame_cpu(QarVideoSender * handle, QarVideoFrameCpu * out)
 {
   record("video_sender_frame_cpu");
+  frame_gate("video_sender_frame_cpu");
   auto * sender = reinterpret_cast<FakeQarApi::State::SenderObject *>(handle);
   out->textures_count = 1;
   out->textures[0].size.width = sender->width;
@@ -1128,6 +1794,7 @@ QarResult fake_video_sender_frame_cpu(QarVideoSender * handle, QarVideoFrameCpu 
 QarResult fake_video_sender_show_frame(QarVideoSender *)
 {
   record("video_sender_show_frame");
+  frame_gate("video_sender_show_frame");
   g_state->frames_shown.fetch_add(1);
   return ok_result();
 }
@@ -1135,6 +1802,7 @@ QarResult fake_video_sender_show_frame(QarVideoSender *)
 void fake_video_sender_handle_destroy(QarVideoSender * handle)
 {
   record("video_sender_handle_destroy");
+  hub_gate();
   delete reinterpret_cast<FakeQarApi::State::SenderObject *>(handle);
   g_state->live_senders.fetch_sub(1);
 }
@@ -1174,6 +1842,10 @@ void fake_peer_spec_handle_destroy(QarPeerSpec * handle)
 QarResult fake_session_get_my_spec(const QarSession *, QarPeerSpec ** out)
 {
   record("session_get_my_spec");
+  if (const int gone = hub_gate()) {
+    *out = nullptr;
+    return error_result(gone);
+  }
   FakePeer self;
   self.id = fake_self_id();
   self.role = QAR_PEER_ROLE_SOURCE;
@@ -1185,6 +1857,9 @@ QarResult fake_session_get_my_spec(const QarSession *, QarPeerSpec ** out)
 QarResult fake_query_peer_specs_count(QarSession *, size_t * count)
 {
   record("query_peer_specs_count");
+  if (const int gone = hub_gate()) {
+    return error_result(gone);
+  }
   std::lock_guard<std::mutex> lock(g_state->mutex);
   *count = g_state->initial_peers.size();
   return ok_result();
@@ -1194,6 +1869,10 @@ QarResult fake_query_peer_specs(QarSession *, QarPeerSpec ** handles, size_t cap
   size_t * written)
 {
   record("query_peer_specs");
+  if (const int gone = hub_gate()) {
+    *written = 0;
+    return error_result(gone);
+  }
   std::vector<FakePeer> peers;
   {
     std::lock_guard<std::mutex> lock(g_state->mutex);
@@ -1211,6 +1890,9 @@ QarResult fake_peer_subscribe_updates(
   QarSession *, qar_peer_update_callback_t callback, void * user, QarCancelToken * token)
 {
   record("peer_subscribe_updates");
+  if (const int gone = hub_gate()) {
+    return error_result(gone);
+  }
   std::lock_guard<std::mutex> lock(g_state->mutex);
   FakeQarApi::State::Subscription sub;
   sub.token = reinterpret_cast<FakeToken *>(token);
@@ -1320,6 +2002,30 @@ FakeQarApi::FakeQarApi() : state_(std::make_unique<State>())
   g_qar_session_api.session_handle_destroy = &fake_session_handle_destroy;
 
   g_qar_render_stream_sender_api.render_stream_handle_destroy = &fake_render_stream_handle_destroy;
+  g_qar_render_stream_sender_api.render_sender_create_async = &fake_render_sender_create_async;
+  g_qar_render_stream_sender_api.render_sender_subscribe_requests =
+    &fake_render_sender_subscribe_requests;
+  g_qar_render_stream_sender_api.render_request_get_target_peer_id =
+    &fake_render_request_get_target_peer_id;
+  g_qar_render_stream_sender_api.render_request_get_stream_id =
+    &fake_render_request_get_stream_id;
+  g_qar_render_stream_sender_api.render_request_handle_destroy =
+    &fake_render_request_handle_destroy;
+  g_qar_render_stream_sender_api.render_sender_stream_id = &fake_render_sender_stream_id;
+  g_qar_render_stream_sender_api.render_sender_try_begin_frame =
+    &fake_render_sender_try_begin_frame;
+  g_qar_render_stream_sender_api.render_sender_get_stream_state =
+    &fake_render_sender_get_stream_state;
+  g_qar_render_stream_sender_api.render_frame_info_handle_destroy =
+    &fake_render_frame_info_handle_destroy;
+  g_qar_render_stream_sender_api.render_frame_info_get_view_pose =
+    &fake_render_frame_info_get_view_pose;
+  g_qar_render_stream_sender_api.render_frame_info_get_view_fov =
+    &fake_render_frame_info_get_view_fov;
+  g_qar_render_stream_sender_api.render_sender_layout = &fake_render_sender_layout;
+  g_qar_render_stream_sender_api.render_sender_frame_opengl = &fake_render_sender_frame_opengl;
+  g_qar_render_stream_sender_api.render_sender_show_frame = &fake_render_sender_show_frame;
+  g_qar_render_stream_sender_api.render_sender_last_hands = &fake_render_sender_last_hands;
 
   g_qar_onboarding_api.runtime_onboard_async = &fake_runtime_onboard_async;
 
@@ -1341,6 +2047,15 @@ FakeQarApi::FakeQarApi() : state_(std::make_unique<State>())
     &fake_app_volumes_change_app_world_anchor;
   g_qar_app_volumes_api.app_volumes_clear_app_world_anchor =
     &fake_app_volumes_clear_app_world_anchor;
+  g_qar_app_volumes_api.app_volumes_subscribe_all_gesture_events =
+    &fake_app_volumes_subscribe_all_gesture_events;
+  g_qar_app_volumes_api.app_volumes_subscribe_gesture_events =
+    &fake_app_volumes_subscribe_gesture_events;
+  g_qar_app_volumes_api.app_volume_gesture_get_lifecycle = &fake_app_volume_gesture_get_lifecycle;
+  g_qar_app_volumes_api.app_volume_gesture_get_classification =
+    &fake_app_volume_gesture_get_classification;
+  g_qar_app_volumes_api.app_volume_gesture_get_points = &fake_app_volume_gesture_get_points;
+  g_qar_app_volumes_api.app_volume_gesture_get_timestamp = &fake_app_volume_gesture_get_timestamp;
 
   g_qar_gui_panels_api.gui_panels_get_or_create = &fake_gui_panels_get_or_create;
   g_qar_gui_panels_api.gui_panels_update_pose = &fake_gui_panels_update_pose;
@@ -1359,6 +2074,7 @@ FakeQarApi::FakeQarApi() : state_(std::make_unique<State>())
   g_qar_gui_panels_api.gui_panel_handle_destroy = &fake_gui_panel_handle_destroy;
   g_qar_gui_panels_api.gui_panel_get_id = &fake_gui_panel_get_id;
   g_qar_gui_panels_api.gui_panel_get_size = &fake_gui_panel_get_size;
+  g_qar_gui_panels_api.gui_panel_get_pose = &fake_gui_panel_get_pose;
   g_qar_gui_panels_api.gui_panel_get_state = &fake_gui_panel_get_state;
   g_qar_gui_panels_api.gui_panel_get_content_type = &fake_gui_panel_get_content_type;
   g_qar_gui_panels_api.gui_panel_get_content_stream_id = &fake_gui_panel_get_content_stream_id;
@@ -1392,13 +2108,28 @@ FakeQarApi::FakeQarApi() : state_(std::make_unique<State>())
 FakeQarApi::~FakeQarApi()
 {
   std::vector<std::thread> threads;
+  std::vector<std::thread> detached;
   {
     std::lock_guard<std::mutex> lock(state_->mutex);
     state_->shutting_down = true;
     threads.swap(state_->threads);
+    detached.swap(state_->detached);
   }
   state_->cv.notify_all();
+  {
+    // The calls that wait in a blocking mode leave their wait and fail; a test releases them first
+    // all the same, because what they do after the wait reads this state.
+    std::unique_lock<std::mutex> lock(state_->mutex);
+    state_->cv.wait_for(lock, std::chrono::seconds(5), [this] {
+        return state_->hub_blocked == 0 && state_->frame_blocked == 0;
+      });
+  }
   for (std::thread & thread : threads) {
+    if (thread.joinable()) {
+      thread.join();
+    }
+  }
+  for (std::thread & thread : detached) {
     if (thread.joinable()) {
       thread.join();
     }
@@ -1485,22 +2216,173 @@ void FakeQarApi::set_sync_failure_hook(std::function<void(const void *)> hook)
   state_->sync_failure_hook = std::move(hook);
 }
 
+void FakeQarApi::script_render_create(const Outcome & outcome)
+{
+  std::lock_guard<std::mutex> lock(state_->mutex);
+  state_->render_script.push_back(outcome);
+}
+
+void FakeQarApi::set_render_frame(const RenderFrameScript & script)
+{
+  std::lock_guard<std::mutex> lock(state_->mutex);
+  state_->render_frame = script;
+}
+
+void FakeQarApi::set_hub_gone(HubGone mode, int code)
+{
+  {
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    state_->hub_gone = mode;
+    state_->hub_code = code;
+  }
+  state_->cv.notify_all();
+}
+
+void FakeQarApi::set_frame_block(bool block)
+{
+  {
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    state_->frame_block = block;
+  }
+  state_->cv.notify_all();
+}
+
+void FakeQarApi::set_frame_delay_ms(int ms, const std::string & call_name)
+{
+  std::lock_guard<std::mutex> lock(state_->mutex);
+  if (call_name.empty()) {
+    state_->frame_delay_all = ms;
+  } else {
+    state_->frame_delay[call_name] = ms;
+  }
+}
+
+namespace
+{
+
+// Marks the active peer subscriptions as running a callback and returns them.
+std::vector<FakeQarApi::State::Subscription *> begin_peer_deliveries(FakeQarApi::State & state)
+{
+  std::vector<FakeQarApi::State::Subscription *> targets;
+  std::lock_guard<std::mutex> lock(state.mutex);
+  for (auto & sub : state.subscriptions) {
+    if (sub.active) {
+      ++sub.running;
+      targets.push_back(&sub);
+    }
+  }
+  return targets;
+}
+
+void run_peer_deliveries(
+  FakeQarApi::State & state, const std::vector<FakeQarApi::State::Subscription *> & targets,
+  const FakePeer & peer)
+{
+  for (FakeQarApi::State::Subscription * sub : targets) {
+    HandleObject object{peer, true};
+    sub->callback(as_handle(&object), sub->user);
+    {
+      std::lock_guard<std::mutex> lock(state.mutex);
+      --sub->running;
+    }
+    state.cv.notify_all();
+  }
+}
+
+// Marks the gesture subscriptions that want @p kind as running a callback and returns them.
+std::vector<FakeQarApi::State::GestureSubscription *> begin_gesture_deliveries(
+  FakeQarApi::State & state, QarGestureKind kind)
+{
+  std::vector<FakeQarApi::State::GestureSubscription *> targets;
+  std::lock_guard<std::mutex> lock(state.mutex);
+  for (auto & sub : state.gesture_subs) {
+    if (sub.active && (sub.kind < 0 || sub.kind == static_cast<int>(kind))) {
+      ++sub.running;
+      targets.push_back(&sub);
+    }
+  }
+  return targets;
+}
+
+void run_gesture_deliveries(
+  FakeQarApi::State & state, const std::vector<FakeQarApi::State::GestureSubscription *> & targets,
+  const FakeGesture & gesture)
+{
+  GestureObject object;
+  object.gesture = gesture;
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    object.volume = state.volume_id;
+  }
+  for (FakeQarApi::State::GestureSubscription * sub : targets) {
+    sub->callback(reinterpret_cast<QarAppVolumeGesture *>(&object), sub->user);
+    {
+      std::lock_guard<std::mutex> lock(state.mutex);
+      --sub->running;
+    }
+    state.cv.notify_all();
+  }
+}
+
+// Runs @p work on a thread the test does not wait for; wait_detached_deliveries() sees it end.
+void run_detached(FakeQarApi::State & state, std::function<void()> work)
+{
+  std::lock_guard<std::mutex> lock(state.mutex);
+  ++state.detached_running;
+  state.detached.emplace_back([&state, work = std::move(work)] {
+      work();
+      {
+        std::lock_guard<std::mutex> inner(state.mutex);
+        --state.detached_running;
+      }
+      state.cv.notify_all();
+    });
+}
+
+}  // namespace
+
 void FakeQarApi::deliver_peer(const FakePeer & peer)
 {
-  std::thread library_thread([this, &peer] {
-      std::vector<State::Subscription *> targets;
-      {
-        std::lock_guard<std::mutex> lock(state_->mutex);
-        for (auto & sub : state_->subscriptions) {
-          if (sub.active) {
-            ++sub.running;
-            targets.push_back(&sub);
-          }
-        }
+  const auto targets = begin_peer_deliveries(*state_);
+  std::thread library_thread([this, &targets, &peer] {
+      run_peer_deliveries(*state_, targets, peer);
+    });
+  library_thread.join();
+}
+
+void FakeQarApi::deliver_peer_detached(const FakePeer & peer)
+{
+  const auto targets = begin_peer_deliveries(*state_);
+  run_detached(*state_, [this, targets, peer] { run_peer_deliveries(*state_, targets, peer); });
+}
+
+void FakeQarApi::deliver_volume_gesture(const FakeGesture & gesture)
+{
+  const auto targets = begin_gesture_deliveries(*state_, gesture.kind);
+  std::thread library_thread([this, &targets, &gesture] {
+      run_gesture_deliveries(*state_, targets, gesture);
+    });
+  library_thread.join();
+}
+
+void FakeQarApi::deliver_render_request(const QarPeerId & peer, const QarStreamId & stream)
+{
+  std::vector<State::RenderRequestSubscription *> targets;
+  {
+    std::lock_guard<std::mutex> lock(state_->mutex);
+    for (auto & sub : state_->render_request_subs) {
+      if (sub.active) {
+        ++sub.running;
+        targets.push_back(&sub);
       }
-      for (State::Subscription * sub : targets) {
-        HandleObject object{peer, true};
-        sub->callback(as_handle(&object), sub->user);
+    }
+  }
+  std::thread library_thread([this, &targets, &peer, &stream] {
+      for (State::RenderRequestSubscription * sub : targets) {
+        RenderRequestObject object;
+        object.peer = peer;
+        object.stream = stream;
+        sub->callback(reinterpret_cast<QarRenderStreamRequest *>(&object), sub->user);
         {
           std::lock_guard<std::mutex> lock(state_->mutex);
           --sub->running;
@@ -1509,6 +2391,31 @@ void FakeQarApi::deliver_peer(const FakePeer & peer)
       }
     });
   library_thread.join();
+}
+
+QarStreamId FakeQarApi::render_stream_id(int n)
+{
+  QarStreamId id{};
+  std::memset(id.data, render_stream_tag(n), sizeof(id.data));
+  return id;
+}
+
+int FakeQarApi::render_requests_released() const { return state_->render_requests_released.load(); }
+
+void FakeQarApi::deliver_volume_gesture_detached(const FakeGesture & gesture)
+{
+  const auto targets = begin_gesture_deliveries(*state_, gesture.kind);
+  run_detached(*state_, [this, targets, gesture] {
+      run_gesture_deliveries(*state_, targets, gesture);
+    });
+}
+
+bool FakeQarApi::wait_detached_deliveries(int timeout_ms)
+{
+  std::unique_lock<std::mutex> lock(state_->mutex);
+  return state_->cv.wait_for(lock, std::chrono::milliseconds(timeout_ms), [this] {
+      return state_->detached_running == 0;
+    });
 }
 
 void FakeQarApi::deliver_volume_update()
@@ -1695,6 +2602,64 @@ int FakeQarApi::render_streams_destroyed() const
   return state_->render_streams_destroyed.load();
 }
 int FakeQarApi::live_tokens() const { return state_->live_tokens.load(); }
+int FakeQarApi::live_render_senders() const { return state_->live_render_senders.load(); }
+int FakeQarApi::render_creates() const { return state_->render_creates.load(); }
+int FakeQarApi::render_creates_cancelled() const
+{
+  return state_->render_creates_cancelled.load();
+}
+
+int FakeQarApi::render_creates_pending() const
+{
+  std::lock_guard<std::mutex> lock(state_->mutex);
+  return static_cast<int>(std::count_if(
+    state_->render_creating.begin(), state_->render_creating.end(),
+    [](const std::shared_ptr<RenderCreateState> & creating) { return !creating->answered; }));
+}
+
+int FakeQarApi::live_render_frame_infos() const { return state_->live_render_infos.load(); }
+int FakeQarApi::render_frames_shown() const { return state_->render_frames_shown.load(); }
+
+int FakeQarApi::gesture_subscriptions() const
+{
+  std::lock_guard<std::mutex> lock(state_->mutex);
+  return static_cast<int>(std::count_if(state_->gesture_subs.begin(), state_->gesture_subs.end(),
+    [](const State::GestureSubscription & sub) { return sub.active; }));
+}
+
+int FakeQarApi::panel_gesture_subscriptions() const
+{
+  std::lock_guard<std::mutex> lock(state_->mutex);
+  return static_cast<int>(std::count_if(
+    state_->panel_gesture_subs.begin(), state_->panel_gesture_subs.end(),
+    [](const State::PanelGestureSubscription & sub) { return sub.active; }));
+}
+
+int FakeQarApi::live_runtimes() const { return state_->live_runtimes.load(); }
+int FakeQarApi::runtime_creates() const { return state_->runtime_creates.load(); }
+
+int FakeQarApi::hub_blocked_calls() const
+{
+  std::lock_guard<std::mutex> lock(state_->mutex);
+  return state_->hub_blocked;
+}
+
+int FakeQarApi::frame_calls_blocked() const
+{
+  std::lock_guard<std::mutex> lock(state_->mutex);
+  return state_->frame_blocked;
+}
+
+std::thread::id FakeQarApi::thread_of_last(const std::string & name) const
+{
+  std::lock_guard<std::mutex> lock(state_->mutex);
+  for (std::size_t i = state_->calls.size(); i > 0; --i) {
+    if (state_->calls[i - 1].name == name) {
+      return state_->calls[i - 1].thread;
+    }
+  }
+  return std::thread::id();
+}
 
 std::unique_ptr<ILibraryLoader> FakeQarApi::make_loader(bool installed, bool load_ok)
 {

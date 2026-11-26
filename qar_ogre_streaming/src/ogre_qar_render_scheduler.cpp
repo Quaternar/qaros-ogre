@@ -3,7 +3,9 @@
 
 #include "qar_ogre_streaming/ogre_qar_render_scheduler.hpp"
 
+#include <cstdio>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 #include "qar_ogre_streaming/ogre_qar_stereo_stream.hpp"
@@ -53,6 +55,7 @@ Result OgreQarRenderScheduler::render_tick(
   }
 
   const double now = clock_->now_seconds();
+  last_skip_reason_ = "";
 
   // Step 1 (collect): budget FPS gate + time-budget shedding. Pure; no Ogre.
   // `active` is the filtered, ordered set of collectable streams; candidate index
@@ -92,6 +95,16 @@ Result OgreQarRenderScheduler::render_tick(
     }
   }
 
+  // Step 2 (GPU gate): while the GPU makes no progress, the batch would issue GL work that the
+  // render thread can end up waiting for. The streams stay due; the next tick asks again.
+  if (gpu_gate_ != nullptr && gpu_gate_->gate_closed()) {
+    last_skip_reason_ = "GPU not progressing";
+    last_batch_streams_served_ = 0;
+    ++gate_skipped_batches_;
+    gpu_gate_->note_batch_skipped();
+    return Result::success();
+  }
+
   // --- ONE render lock around the WHOLE batch --------------------------------
   const double batch_start = clock_->now_seconds();
   if (render_lock_ != nullptr) {
@@ -99,6 +112,7 @@ Result OgreQarRenderScheduler::render_tick(
   }
 
   // Step 3 (begin all Qar frames): everyone samples the SAME scene snapshot.
+  const double begin_start = clock_->now_seconds();
   std::vector<OgreQarStereoStream *> rendering;
   rendering.reserve(due.size());
   for (OgreQarStereoStream * s : due) {
@@ -108,6 +122,7 @@ Result OgreQarRenderScheduler::render_tick(
   }
 
   Result first_error = Result::success();
+  const double cameras_start = clock_->now_seconds();
 
   // Step 5 (update all cameras).
   for (OgreQarStereoStream * s : rendering) {
@@ -133,10 +148,26 @@ Result OgreQarRenderScheduler::render_tick(
   }
 
   // Step 6 (render all offscreen targets back-to-back).
+  const double render_start = clock_->now_seconds();
   for (OgreQarStereoStream * s : rendering) {
     const Result r = s->render_targets_phase();
     if (!r.ok() && first_error.ok()) {
       first_error = r;
+    }
+  }
+  // The first frame of a stream that leaves screen-space objects of the scene out of
+  // the 3D stream is announced once; the host sees why such an object is not in AR.
+  if (diagnostics_ != nullptr) {
+    for (OgreQarStereoStream * s : rendering) {
+      const uint64_t left_out = s->take_left_out_report();
+      if (left_out > 0u) {
+        diagnostics_->on_message(
+          DiagnosticSeverity::Info, "render",
+          "AR render: " + std::to_string(left_out) +
+          " screen-space object(s) of the RViz scene (such as the selection box) are left "
+          "out of the 3D stream",
+          peer_id_to_hex(s->peer_id()));
+      }
     }
   }
   // Step 7 (fence all textures): a no-op unless a fence hook is installed.
@@ -144,6 +175,7 @@ Result OgreQarRenderScheduler::render_tick(
     s->fence_phase(fence_hook_.get());
   }
   // Step 8 (submit all frames).
+  const double submit_start = clock_->now_seconds();
   uint32_t served = 0;
   for (OgreQarStereoStream * s : rendering) {
     if (!s->wants_frame_this_tick()) {
@@ -161,12 +193,22 @@ Result OgreQarRenderScheduler::render_tick(
     record_submit(s->peer_id(), now);
   }
 
+  const double submit_end = clock_->now_seconds();
   if (render_lock_ != nullptr) {
     render_lock_->unlock_render();
+  }
+  // The batch issued GL work: the gate follows how far the GPU gets with it.
+  if (gpu_gate_ != nullptr && !rendering.empty()) {
+    gpu_gate_->note_batch_issued();
   }
 
   // --- Timing + accounting (outside the lock) -------------------------------
   const double batch_ms = (clock_->now_seconds() - batch_start) * 1000.0;
+  if (batch_ms >= slow_batch_ms_) {
+    report_slow_batch(
+      batch_ms, (cameras_start - begin_start) * 1000.0, (render_start - cameras_start) * 1000.0,
+      (submit_start - render_start) * 1000.0, (submit_end - submit_start) * 1000.0, due.size());
+  }
   last_batch_ms_ = batch_ms;
   last_batch_streams_served_ = served;
   ++batches_rendered_;
@@ -182,6 +224,26 @@ Result OgreQarRenderScheduler::render_tick(
   avg_batch_ms_ = batch_ms_window_.empty() ? 0.0 : sum / static_cast<double>(batch_ms_window_.size());
 
   return first_error;
+}
+
+void OgreQarRenderScheduler::report_slow_batch(
+  double batch_ms, double begin_ms, double cameras_ms, double render_ms, double submit_ms,
+  std::size_t streams)
+{
+  // The first few are reported, then one in a hundred, so a scene that is slow on every batch
+  // does not fill the log.
+  const uint64_t n = ++slow_batches_;
+  if (diagnostics_ == nullptr || (n > kSlowBatchReportFirst && (n % kSlowBatchReportEvery) != 0)) {
+    return;
+  }
+  // The cameras phase includes the placing of the per-peer lights, the render phase the fence step.
+  char text[192];
+  std::snprintf(
+    text, sizeof(text),
+    "render batch took %.0f ms: begin %.0f ms, cameras %.0f ms, render %.0f ms, submit %.0f ms "
+    "(%zu streams)",
+    batch_ms, begin_ms, cameras_ms, render_ms, submit_ms, streams);
+  diagnostics_->on_message(DiagnosticSeverity::Warning, "scheduler", text, "");
 }
 
 void OgreQarRenderScheduler::record_submit(const QarPeerId & peer_id, double now_seconds)
