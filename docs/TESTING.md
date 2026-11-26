@@ -22,16 +22,17 @@ ctest --preset vs2019-x64
 ```text
 Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
         Start   1: check_layering_qar_ar_core
-  1/774 Test   #1: check_layering_qar_ar_core ..............................................................................   Passed    0.11 sec
+  1/788 Test   #1: check_layering_qar_ar_core .......................................................................................................................   Passed    0.14 sec
         Start   2: check_layering_qar_ogre_streaming
-  2/774 Test   #2: check_layering_qar_ogre_streaming .......................................................................   Passed    0.11 sec
+  2/788 Test   #2: check_layering_qar_ogre_streaming ................................................................................................................   Passed    0.14 sec
         Start   3: check_layering_qar_qar_adapter
-  3/774 Test   #3: check_layering_qar_qar_adapter ..........................................................................   Passed    0.27 sec
+  3/788 Test   #3: check_layering_qar_qar_adapter ...................................................................................................................   Passed    0.30 sec
         Start   4: check_layering_examples
 ...
-100% tests passed, 0 tests failed out of 774
 
-Total Test time (real) = 177.00 sec
+100% tests passed, 0 tests failed out of 788
+
+Total Test time (real) = 208.37 sec
 ```
 
 The last lines are the summary: how many tests passed, and the names of those that failed. A test that is skipped is reported as skipped and does not count as a failure.
@@ -54,9 +55,9 @@ Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
   Test   #6: StereoStreamConfig.DefaultsAreValid
   Test   #7: StereoStreamConfig.RejectsZeroDimensions
 ...
-  Test #774: TargetRule.APresenceTheHeaderDoesNotNameReadsAsUnknown
+  Test #788: TargetRule.APresenceTheHeaderDoesNotNameReadsAsUnknown
 
-Total Tests: 774
+Total Tests: 788
 ```
 
 ```powershell
@@ -109,6 +110,7 @@ The unit tests are four GoogleTest executables, `qar_ar_core_tests`, `qar_ogre_s
 | `qar_qar_adapter_tests` | `FakeQarLibrary` | the fake of the QarOS function tables, which every outage test relies on: scripted creations, frame calls that are delayed or blocked until a test releases them, a Hub that is gone, and gesture subscriptions |
 | `qar_qar_adapter_tests` | `RenderWorker`, `RenderFence`, `RenderCopyHook` | the render sender with its frame calls on a worker thread: no frame call on the caller's thread, the caller never waits for a call that blocks, the breaker that pauses the frame calls, the release of the stream and of its GL context on the worker, the fence wait on a fake of the GL calls, and the copy hook that forgets the textures it targeted |
 | `qar_qar_adapter_tests` | `RenderFactoryOutage`, `RecycleWatch`, `SpatialGestureOutage`, `UrlPanelOutage` | the render sender factory, the spatial gesture source and the URL panel adapter when the Hub stops answering: no call on the calling thread waits, handles are released on the thread of the owner, a creation that gets no answer is cancelled and tried again with a growing pause, and a sender that the runtime asks for no frames is made again only as a last resort |
+| `qar_qar_adapter_tests` | `RenderFactoryStreamState` | the stream state of a 3D sender, read when a begin-frame call finds no frame ready, with the frame calls on the worker and on the render thread: a state *reconnecting* for longer than the limit makes the sender again and a shorter one does not, the states paused, waiting for the receiver and streaming never do, the state *closed* closes the sender, a runtime without the call is asked once and the answer stands alone, and the state is read at most every 200 ms, also while frames keep coming |
 | `qar_qar_adapter_tests` | `GpuWatchTest` | the GPU progress watch and its gate on a fake of the GL fence calls, with no GL context: healthy rates never close a series, a stalled frame closes it, a probe reopens it, and the two series are independent |
 | `qar_qar_adapter_tests` | `RenderRecycleSeconds` | the parse rule of `QAR_RENDER_RECYCLE_S` |
 | `qar_qar_adapter_session_tests` | `SessionOwnerOutage`, `SessionOwnerRelease` | the owner when the Hub stops answering, with every limit scaled down: silence, `kLost`, the release lane, the hand-back of the consumer, and the automatic rejoin with its pauses |

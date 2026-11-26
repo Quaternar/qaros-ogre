@@ -41,6 +41,10 @@ written and how a version is released is in [AGENTS.md](AGENTS.md).
 - The diagnostic copy probe is made on the frame worker path only when `QAR_ADAPTER_PROBE_EVERY` is set.
 - No thread of the host waits for QarOS when the Hub or the Visualizer is gone: the calls that can wait run on the thread of the owner or on a frame worker, and `QAR_FRAME_CALLS=gui` keeps the earlier behaviour for comparison.
 
+### Bug fixes
+
+- A 3D sender reads the stream state of the runtime (`qar_render_sender_get_stream_state`) when a begin-frame call finds no frame ready, so that a reconnect, a pause and a closed stream are told apart on QAROS 0.10.0: a state reconnecting for more than 90 seconds makes the sender again, a closed stream is replaced, and a change of the state is logged.
+
 ### Removed
 
 - `third_party/qar` (the copy of `qar_streaming.h`) and `scripts/update_qar_headers.ps1` ([#5](https://github.com/Quaternar/qaros-ogre/pull/5)).

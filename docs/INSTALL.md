@@ -475,16 +475,17 @@ ctest --preset vs2019-x64
 ```text
 Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
         Start   1: check_layering_qar_ar_core
-  1/774 Test   #1: check_layering_qar_ar_core ..............................................................................   Passed    0.12 sec
+  1/788 Test   #1: check_layering_qar_ar_core .......................................................................................................................   Passed    0.15 sec
         Start   2: check_layering_qar_ogre_streaming
-  2/774 Test   #2: check_layering_qar_ogre_streaming .......................................................................   Passed    0.11 sec
+  2/788 Test   #2: check_layering_qar_ogre_streaming ................................................................................................................   Passed    0.15 sec
         Start   3: check_layering_qar_qar_adapter
-  3/774 Test   #3: check_layering_qar_qar_adapter ..........................................................................   Passed    0.27 sec
+  3/788 Test   #3: check_layering_qar_qar_adapter ...................................................................................................................   Passed    0.36 sec
         Start   4: check_layering_examples
 ...
-100% tests passed, 0 tests failed out of 774
 
-Total Test time (real) = 180.61 sec
+100% tests passed, 0 tests failed out of 788
+
+Total Test time (real) = 208.35 sec
 ```
 
 Install it into the prefix. The install puts the libraries of the three modules `qar_ar_core`, `qar_ogre_streaming` and `qar_qar_adapter` and the QarOS C and C++ headers of the qaros submodule below `$env:QAR_PREFIX`, together with the CMake package that the other repositories of this stack find there.

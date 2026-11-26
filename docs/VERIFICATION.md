@@ -89,16 +89,17 @@ ctest --preset vs2019-x64
 ```text
 Test project C:/qar/src/qar_ogre_adapter/build/vs2019-x64
         Start   1: check_layering_qar_ar_core
-  1/774 Test   #1: check_layering_qar_ar_core ..............................................................................   Passed    0.11 sec
+  1/788 Test   #1: check_layering_qar_ar_core .......................................................................................................................   Passed    0.14 sec
         Start   2: check_layering_qar_ogre_streaming
-  2/774 Test   #2: check_layering_qar_ogre_streaming .......................................................................   Passed    0.11 sec
+  2/788 Test   #2: check_layering_qar_ogre_streaming ................................................................................................................   Passed    0.14 sec
         Start   3: check_layering_qar_qar_adapter
-  3/774 Test   #3: check_layering_qar_qar_adapter ..........................................................................   Passed    0.27 sec
+  3/788 Test   #3: check_layering_qar_qar_adapter ...................................................................................................................   Passed    0.30 sec
         Start   4: check_layering_examples
 ...
-100% tests passed, 0 tests failed out of 774
 
-Total Test time (real) = 177.00 sec
+100% tests passed, 0 tests failed out of 788
+
+Total Test time (real) = 208.37 sec
 ```
 
 [Testing](TESTING.md#what-the-automated-tests-do-not-cover) lists what these tests leave out: every call into QarOS, the handover of the pictures through OpenGL and the live desktop. Of the checks of the next levels, only those of Level 1 were run for this release: the headless sample, which runs the Ogre side without QarOS, and `--connect-only`, which covers the bootstrap of a QarOS session. The calls into QarOS beyond that bootstrap and the live desktop were exercised only in the live checks of qar_rviz_plugin on the desktop Visualizer, with a build that differs from this release only in comments and the text of one tool tip, and the check of Level 2 has not been run.
