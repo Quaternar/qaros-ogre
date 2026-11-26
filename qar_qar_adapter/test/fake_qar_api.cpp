@@ -1329,6 +1329,24 @@ QarResult fake_render_sender_try_begin_frame(
   return ok_result();
 }
 
+QarResult fake_render_sender_get_stream_state(
+  QarRenderSender *, QarRenderSenderStreamState * out_state)
+{
+  record("render_sender_get_stream_state");
+  int state = -1;
+  {
+    std::lock_guard<std::mutex> lock(g_state->mutex);
+    state = g_state->render_frame.stream_state;
+  }
+  if (state < 0) {
+    return error_result(QAR_STATUS_NOT_IMPLEMENTED);
+  }
+  if (out_state != nullptr) {
+    *out_state = static_cast<QarRenderSenderStreamState>(state);
+  }
+  return ok_result();
+}
+
 void fake_render_frame_info_handle_destroy(QarRenderFrameInfo * handle)
 {
   record("render_frame_info_handle_destroy");
@@ -1996,6 +2014,8 @@ FakeQarApi::FakeQarApi() : state_(std::make_unique<State>())
   g_qar_render_stream_sender_api.render_sender_stream_id = &fake_render_sender_stream_id;
   g_qar_render_stream_sender_api.render_sender_try_begin_frame =
     &fake_render_sender_try_begin_frame;
+  g_qar_render_stream_sender_api.render_sender_get_stream_state =
+    &fake_render_sender_get_stream_state;
   g_qar_render_stream_sender_api.render_frame_info_handle_destroy =
     &fake_render_frame_info_handle_destroy;
   g_qar_render_stream_sender_api.render_frame_info_get_view_pose =

@@ -886,6 +886,192 @@ TEST(RenderFactoryOutage, AnAnswerOfNoFrameWithoutAnErrorNeverMakesTheSenderAgai
   EXPECT_FALSE(closes_within(*adapter, 600ms));
 }
 
+// The stream states of the runtime (QarRenderSenderStreamState) as the fake answers them.
+constexpr int kStateWaiting = QAR_RENDER_SENDER_STREAM_STATE_WAITING_FOR_RECEIVER;
+constexpr int kStateStreaming = QAR_RENDER_SENDER_STREAM_STATE_STREAMING;
+constexpr int kStatePaused = QAR_RENDER_SENDER_STREAM_STATE_PAUSED;
+constexpr int kStateReconnecting = QAR_RENDER_SENDER_STREAM_STATE_RECONNECTING;
+constexpr int kStateClosed = QAR_RENDER_SENDER_STREAM_STATE_CLOSED;
+
+// Not ready and no error, with the stream state the runtime reports (-1: the call is missing).
+RenderFrameScript not_ready_in_state(int state)
+{
+  RenderFrameScript script;
+  script.stream_state = state;
+  return script;
+}
+
+// The stream-state cases run on both ways of making the frame calls: on the frame worker (what
+// RViz runs) and on the render thread (the fallback).
+class RenderFactoryStreamState : public testing::TestWithParam<bool>
+{
+protected:
+  QarCApiSenderFactory::Config config(
+    std::chrono::milliseconds reconnecting_limit = 1500ms) const
+  {
+    QarCApiSenderFactory::Config config = recycle_config(reconnecting_limit);
+    config.frame_calls_on_worker = GetParam();
+    return config;
+  }
+};
+
+INSTANTIATE_TEST_SUITE_P(
+  FrameCalls, RenderFactoryStreamState, testing::Bool(),
+  [](const testing::TestParamInfo<bool> & info) {
+    return std::string(info.param ? "OnTheWorker" : "OnTheRenderThread");
+  });
+
+TEST_P(RenderFactoryStreamState, ANotReadyAnswerInTheStateReconnectingForTooLongMakesTheSenderAgain)
+{
+  Rig rig(config(/*reconnecting_limit=*/400ms));
+  ASSERT_TRUE(rig.ok);
+  // The runtime answers success with "no frame" for a reconnect: no error, no 603.
+  rig.h.fake().set_render_frame(not_ready_in_state(kStateReconnecting));
+  testing::internal::CaptureStderr();
+  auto adapter = adapter_of(rig, peer_with(36));
+  ASSERT_NE(adapter, nullptr);
+  const auto started = std::chrono::steady_clock::now();
+  const bool closed = closes_within(*adapter, 3s);
+  const double after_ms = milliseconds_since(started);
+  const std::string err = testing::internal::GetCapturedStderr();
+  ASSERT_TRUE(closed) << err;
+  EXPECT_GE(after_ms, 380.0) << "not before the reconnecting limit of 400 ms";
+  EXPECT_TRUE(adapter->recycled());
+  EXPECT_TRUE(contains(
+      err, "(the stream state says reconnecting); the 3D sender is made again\n")) << err;
+  EXPECT_FALSE(contains(err, "the runtime answers")) << "no status was answered: " << err;
+  EXPECT_TRUE(contains(err, " stream state: reconnecting (was ")) << err;
+  EXPECT_TRUE(contains(adapter->last_skip_detail(), "state=reconnecting"))
+    << adapter->last_skip_detail();
+}
+
+TEST_P(RenderFactoryStreamState, AReconnectingStateBelowTheLimitDoesNotMakeTheSenderAgain)
+{
+  Rig rig(config());
+  ASSERT_TRUE(rig.ok);
+  rig.h.fake().set_render_frame(not_ready_in_state(kStateReconnecting));
+  auto adapter = adapter_of(rig, peer_with(37));
+  ASSERT_NE(adapter, nullptr);
+  EXPECT_FALSE(closes_within(*adapter, 500ms)) << "the limit is 1500 ms";
+  EXPECT_FALSE(adapter->recycled());
+  // The runtime is streaming again: the run ends, nothing closes however long it lasts.
+  rig.h.fake().set_render_frame(not_ready_in_state(kStateStreaming));
+  EXPECT_FALSE(closes_within(*adapter, 1800ms));
+  EXPECT_FALSE(adapter->recycled());
+}
+
+TEST_P(RenderFactoryStreamState, AStateOtherThanReconnectingNeverMakesTheSenderAgain)
+{
+  Rig rig(config(/*reconnecting_limit=*/300ms));
+  ASSERT_TRUE(rig.ok);
+  rig.h.fake().set_render_frame(not_ready_in_state(kStatePaused));
+  auto adapter = adapter_of(rig, peer_with(38));
+  ASSERT_NE(adapter, nullptr);
+  // A paused stream, a receiver that is not there yet and a stream that takes frames are no
+  // reason to make a sender again, however long the runtime answers "no frame".
+  for (const int state : {kStatePaused, kStateWaiting, kStateStreaming}) {
+    rig.h.fake().set_render_frame(not_ready_in_state(state));
+    EXPECT_FALSE(closes_within(*adapter, 700ms)) << "state " << state;
+    EXPECT_FALSE(adapter->recycled()) << "state " << state;
+  }
+  // The state is read again after at most 200 ms; the detail names it from then on.
+  rig.h.fake().set_render_frame(not_ready_in_state(kStatePaused));
+  closes_within(*adapter, 400ms);
+  EXPECT_TRUE(contains(adapter->last_skip_detail(), "state=paused"))
+    << adapter->last_skip_detail();
+}
+
+TEST_P(RenderFactoryStreamState, ANotReadyAnswerInTheStateClosedClosesTheSender)
+{
+  Rig rig(config());
+  ASSERT_TRUE(rig.ok);
+  rig.h.fake().set_render_frame(not_ready_in_state(kStateClosed));
+  auto adapter = adapter_of(rig, peer_with(39));
+  ASSERT_NE(adapter, nullptr);
+  EXPECT_TRUE(closes_within(*adapter, 1s));
+  EXPECT_FALSE(adapter->recycled()) << "closed for good, not a sender that was asked for nothing";
+  EXPECT_TRUE(contains(adapter->last_skip_detail(), "producer stream is closed"))
+    << adapter->last_skip_detail();
+}
+
+TEST_P(RenderFactoryStreamState, ANotReadyAnswerWithoutTheStreamStateCallIsThePlainNotReady)
+{
+  Rig rig(config(/*reconnecting_limit=*/300ms));
+  ASSERT_TRUE(rig.ok);
+  const int before = rig.h.fake().count("render_sender_get_stream_state");
+  rig.h.fake().set_render_frame(not_ready_in_state(-1));
+  auto adapter = adapter_of(rig, peer_with(40));
+  ASSERT_NE(adapter, nullptr);
+  EXPECT_FALSE(closes_within(*adapter, 1s)) << "an idle viewer is not a wedged sender";
+  EXPECT_FALSE(adapter->recycled());
+  EXPECT_EQ(rig.h.fake().count("render_sender_get_stream_state") - before, 1)
+    << "a runtime without the call is asked once";
+  EXPECT_TRUE(contains(
+      adapter->last_skip_detail(),
+      "begin-frame pending (no render request from the viewer); consecutive="))
+    << adapter->last_skip_detail();
+  EXPECT_FALSE(contains(adapter->last_skip_detail(), "state="));
+}
+
+TEST_P(RenderFactoryStreamState, TheStreamStateIsAskedAtMostEveryTwoHundredMilliseconds)
+{
+  Rig rig(config());
+  ASSERT_TRUE(rig.ok);
+  rig.h.fake().set_render_frame(not_ready_in_state(kStateStreaming));
+  testing::internal::CaptureStderr();
+  auto adapter = adapter_of(rig, peer_with(41));
+  ASSERT_NE(adapter, nullptr);
+  const int asked_before = rig.h.fake().count("render_sender_get_stream_state");
+  const int polled_before = rig.h.fake().count("render_sender_try_begin_frame");
+  EXPECT_FALSE(closes_within(*adapter, 1s));
+  const std::string err = testing::internal::GetCapturedStderr();
+  const int asked = rig.h.fake().count("render_sender_get_stream_state") - asked_before;
+  const int polled = rig.h.fake().count("render_sender_try_begin_frame") - polled_before;
+  EXPECT_GE(polled, 50) << "the tick polls many times in a second";
+  EXPECT_GE(asked, 3);
+  EXPECT_LE(asked, 6) << "about 5 in a second, not once per poll";
+  // One line for the change from "not read" to the state, not one per call.
+  std::size_t lines = 0;
+  for (std::size_t at = err.find(" stream state: "); at != std::string::npos;
+    at = err.find(" stream state: ", at + 1))
+  {
+    ++lines;
+  }
+  EXPECT_EQ(lines, 1u) << err;
+}
+
+TEST_P(RenderFactoryStreamState, FramesThatKeepComingDoNotMakeTheStateBeAskedMoreOften)
+{
+  Rig rig(config());
+  ASSERT_TRUE(rig.ok);
+  RenderFrameScript frame;
+  frame.ready = true;
+  frame.stream_state = kStateStreaming;
+  rig.h.fake().set_render_frame(frame);
+  auto adapter = adapter_of(rig, peer_with(42));
+  ASSERT_NE(adapter, nullptr);
+  const int asked_before = rig.h.fake().count("render_sender_get_stream_state");
+  const int polled_before = rig.h.fake().count("render_sender_try_begin_frame");
+  const auto started = std::chrono::steady_clock::now();
+  // A frame, then a few polls that find none, forty times over: every no-frame poll that follows
+  // a frame would ask for the state if the clock of the calls restarted with the frame.
+  for (int round = 0; round < 40; ++round) {
+    rig.h.fake().set_render_frame(frame);
+    ASSERT_TRUE(shows_a_frame(*adapter)) << "round " << round;
+    rig.h.fake().set_render_frame(not_ready_in_state(kStateStreaming));
+    for (int tick = 0; tick < 5; ++tick) {
+      tick_frame(*adapter);
+      std::this_thread::sleep_for(2ms);
+    }
+  }
+  const double elapsed_ms = milliseconds_since(started);
+  const int asked = rig.h.fake().count("render_sender_get_stream_state") - asked_before;
+  const int polled = rig.h.fake().count("render_sender_try_begin_frame") - polled_before;
+  EXPECT_GE(polled, 80) << "polls that found a frame and polls that found none";
+  EXPECT_LE(asked, static_cast<int>(elapsed_ms / 200.0) + 1)
+    << "asked " << asked << " times in " << elapsed_ms << " ms";
+}
+
 TEST(RenderFactoryOutage, AFrameThatBeginsStartsTheClockAgain)
 {
   Rig rig(recycle_config());

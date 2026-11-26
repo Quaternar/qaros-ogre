@@ -955,6 +955,10 @@ struct RenderFrameCore
   RenderRecycleWatch recycle_watch;
   /// Set by the worker when it closed the sender for want of render requests.
   std::atomic<bool> recycled{false};
+  /// What the stream is doing, read by the worker when a poll finds no frame ready; the render
+  /// thread reads the last state for the skip detail.
+  StreamStateReader state_reader;
+  std::atomic<int> stream_state{StreamStateReader::kUnknown};
 
   /// The last holder of the state may be any thread, the render thread among them. The handle the
   /// trace kept for a frame the worker never finished is left to the runtime: destroying it here
@@ -1022,14 +1026,22 @@ constexpr const char * kFrameCallsStopped = "frame calls stopped: a frame call b
 /// The one line about a sender that the runtime asks for no frames and that is made again.
 void print_recycle_line(
   const std::string & peer_label, const RenderRecycleWatch & watch,
-  std::chrono::steady_clock::time_point now)
+  std::chrono::steady_clock::time_point now, bool by_stream_state)
 {
-  std::fprintf(
-    stderr,
-    "[qar-adapter] %s peer %s no render request for %lld s after the stream reconnected "
-    "(the runtime answers %d); the 3D sender is made again\n",
-    wall_clock_hms_ms().c_str(), peer_label.c_str(), watch.seconds_without_frame(now),
-    watch.last_code());
+  if (by_stream_state) {
+    std::fprintf(
+      stderr,
+      "[qar-adapter] %s peer %s no render request for %lld s after the stream reconnected "
+      "(the stream state says reconnecting); the 3D sender is made again\n",
+      wall_clock_hms_ms().c_str(), peer_label.c_str(), watch.seconds_without_frame(now));
+  } else {
+    std::fprintf(
+      stderr,
+      "[qar-adapter] %s peer %s no render request for %lld s after the stream reconnected "
+      "(the runtime answers %d); the 3D sender is made again\n",
+      wall_clock_hms_ms().c_str(), peer_label.c_str(), watch.seconds_without_frame(now),
+      watch.last_code());
+  }
   std::fflush(stderr);
 }
 
@@ -1045,6 +1057,30 @@ RenderRecycleWatch::Answer recycle_answer_of(const QarResult & r)
     return RenderRecycleWatch::Answer::kNotYet;
   }
   return RenderRecycleWatch::Answer::kError;
+}
+
+/// What a try-begin that succeeded without a frame means, by the stream state read after it: the
+/// receiver's connection is being re-established (counts like the answer 603), the receiver
+/// paused the stream (not yet), or nothing more is known (plain "not ready").
+RenderRecycleWatch::Answer not_ready_answer_of(int state)
+{
+  if (state == QAR_RENDER_SENDER_STREAM_STATE_RECONNECTING) {
+    return RenderRecycleWatch::Answer::kReconnecting;
+  }
+  if (state == QAR_RENDER_SENDER_STREAM_STATE_PAUSED) {
+    return RenderRecycleWatch::Answer::kNotYet;
+  }
+  return RenderRecycleWatch::Answer::kNotReady;
+}
+
+/// The skip detail of a poll that found no frame ready. "state=<word>" is the stream state when it
+/// is known; the panel reads that token, and "consecutive=" counts the polls in a row.
+std::string pending_detail(int state, std::uint64_t consecutive)
+{
+  const char * word = stream_state_word(state);
+  return std::string("begin-frame pending (no render request from the viewer); ") +
+         (*word != '\0' ? std::string("state=") + word + "; " : std::string()) +
+         "consecutive=" + std::to_string(consecutive);
 }
 
 /// Worker thread: ends a frame cycle that was begun and cannot be rendered. The only call that
@@ -1227,15 +1263,35 @@ void worker_poll(RenderFrameCore & c, bool from_prime)
   // A sender that the runtime asks for no frames is closed, and the producer makes a new one.
   {
     const std::chrono::steady_clock::time_point answered = std::chrono::steady_clock::now();
+    // A success without a frame says nothing about the cause: the stream state does.
+    int state = StreamStateReader::kUnknown;
+    if (began) {
+      c.state_reader.frame_began();
+    } else if (!qar_result_is_error(r)) {
+      state = c.state_reader.read(c.stream, c.peer_label, answered);
+      c.breaker->note("get_stream_state", answered);
+    }
+    c.stream_state.store(state);
     const RenderRecycleWatch::Answer answer = qar_result_is_error(r)
       ? recycle_answer_of(r)
-      : (began ? RenderRecycleWatch::Answer::kBegan : RenderRecycleWatch::Answer::kNotReady);
-    if (!c.closed.load() &&
-      c.recycle_watch.note(answer, static_cast<int>(r.code), answered))
-    {
-      print_recycle_line(c.peer_label, c.recycle_watch, answered);
+      : (began ? RenderRecycleWatch::Answer::kBegan : not_ready_answer_of(state));
+    const int code = state == QAR_RENDER_SENDER_STREAM_STATE_RECONNECTING
+      ? static_cast<int>(QAR_STATUS_MEDIA_STREAMING_STREAM_IS_RECONNECTING)
+      : static_cast<int>(r.code);
+    if (!c.closed.load() && c.recycle_watch.note(answer, code, answered)) {
+      print_recycle_line(
+        c.peer_label, c.recycle_watch, answered,
+        state == QAR_RENDER_SENDER_STREAM_STATE_RECONNECTING);
       c.recycled.store(true);
       c.closed.store(true);
+    }
+    // The stream is closed for good: it does not recover, the producer makes a new sender.
+    if (state == QAR_RENDER_SENDER_STREAM_STATE_CLOSED && !c.closed.load()) {
+      destroy_frame_info(info);
+      set_worker_detail(
+        c, "try_begin_frame: producer stream is closed (stream state closed)", true);
+      c.closed.store(true);
+      return;
     }
   }
   if (qar_result_is_error(r)) {
@@ -1247,8 +1303,8 @@ void worker_poll(RenderFrameCore & c, bool from_prime)
     } else if (qar_result_has_code(r, QAR_STATUS_MEDIA_STREAMING_STREAM_IS_PAUSED)) {
       set_worker_detail(c, "paused by the receiver (its display is not visible)", false);
     } else if (qar_result_has_code(r, QAR_STATUS_RENDERING_PRODUCER_STREAM_IS_CLOSED)) {
-      c.closed.store(true);
       set_worker_detail(c, "try_begin_frame: producer stream is closed", true);
+      c.closed.store(true);
     } else {
       set_worker_detail(c, result_text("try_begin_frame", r), true);
     }
@@ -1579,9 +1635,7 @@ bool QarCApiRenderSenderAdapter::begin_frame_on_worker(
   }
   // The begin-frame wait has not completed. In the steady state this is just the viewer pacing us
   // below our tick rate; the count tells it from a producer that is wedged.
-  last_skip_detail_ =
-    "begin-frame pending (no render request from the viewer); consecutive=" +
-    std::to_string(consecutive_pending_);
+  last_skip_detail_ = pending_detail(c.stream_state.load(), consecutive_pending_);
   return true;
 }
 
@@ -1966,6 +2020,55 @@ bool RenderRecycleWatch::note(
   return true;
 }
 
+const char * stream_state_word(int state)
+{
+  switch (state) {
+    case QAR_RENDER_SENDER_STREAM_STATE_CONNECTING: return "connecting";
+    case QAR_RENDER_SENDER_STREAM_STATE_WAITING_FOR_RECEIVER: return "waiting_for_receiver";
+    case QAR_RENDER_SENDER_STREAM_STATE_STREAMING: return "streaming";
+    case QAR_RENDER_SENDER_STREAM_STATE_PAUSED: return "paused";
+    case QAR_RENDER_SENDER_STREAM_STATE_RECONNECTING: return "reconnecting";
+    case QAR_RENDER_SENDER_STREAM_STATE_CLOSED: return "closed";
+    default: return "";
+  }
+}
+
+int StreamStateReader::read(
+  QarRenderSender * stream, const std::string & peer_label,
+  std::chrono::steady_clock::time_point now)
+{
+  if (unavailable_ || stream == nullptr) { return state_; }
+  if (have_read_ && now - read_at_ < kEvery) { return state_; }
+  have_read_ = true;
+  read_at_ = now;
+  QarRenderSenderStreamState value = QAR_RENDER_SENDER_STREAM_STATE_STREAMING;
+  const QarResult r = QAR_CALL(qar_render_sender_get_stream_state, stream, &value);
+  if (qar_result_has_code(r, QAR_STATUS_NOT_IMPLEMENTED)) {
+    // A runtime older than the call: the answers of try-begin stand alone.
+    unavailable_ = true;
+    state_ = kUnknown;
+    return state_;
+  }
+  if (qar_result_is_error(r) || *stream_state_word(static_cast<int>(value)) == '\0') {
+    state_ = kUnknown;
+    return state_;
+  }
+  state_ = static_cast<int>(value);
+  if (state_ != logged_) {
+    const int before = logged_;
+    logged_ = state_;
+    const unsigned n = ++changes_;
+    if (n <= 20 || (n % 100) == 0) {
+      std::fprintf(
+        stderr, "[qar-adapter] %s peer %s stream state: %s (was %s)\n",
+        wall_clock_hms_ms().c_str(), peer_label.c_str(), stream_state_word(state_),
+        before == kUnknown ? "not read" : stream_state_word(before));
+      std::fflush(stderr);
+    }
+  }
+  return state_;
+}
+
 bool FrameBreaker::blocked()
 {
   if (!tripped_.load() || probing_) {
@@ -2113,16 +2216,34 @@ bool QarCApiRenderSenderAdapter::begin_frame(qar_ogre_streaming::QarFrameInfo & 
                                       : "begin_frame: <- try_begin_frame (pending)"); }
     {
       const std::chrono::steady_clock::time_point answered = std::chrono::steady_clock::now();
+      const bool began_now = ready && info != nullptr;
+      // A success without a frame says nothing about the cause: the stream state does.
+      int state = StreamStateReader::kUnknown;
+      if (began_now) {
+        stream_state_.frame_began();
+      } else if (!qar_result_is_error(r)) {
+        state = stream_state_.read(stream_, peer_label_, answered);
+        note_frame_call("get_stream_state", answered);
+      }
       const RenderRecycleWatch::Answer answer = qar_result_is_error(r)
         ? recycle_answer_of(r)
-        : (ready && info != nullptr ? RenderRecycleWatch::Answer::kBegan
-                                    : RenderRecycleWatch::Answer::kNotReady);
-      if (!closed_.load() &&
-        recycle_watch_.note(answer, static_cast<int>(r.code), answered))
-      {
-        print_recycle_line(peer_label_, recycle_watch_, answered);
+        : (began_now ? RenderRecycleWatch::Answer::kBegan : not_ready_answer_of(state));
+      const int code = state == QAR_RENDER_SENDER_STREAM_STATE_RECONNECTING
+        ? static_cast<int>(QAR_STATUS_MEDIA_STREAMING_STREAM_IS_RECONNECTING)
+        : static_cast<int>(r.code);
+      if (!closed_.load() && recycle_watch_.note(answer, code, answered)) {
+        print_recycle_line(
+          peer_label_, recycle_watch_, answered,
+          state == QAR_RENDER_SENDER_STREAM_STATE_RECONNECTING);
         recycled_.store(true);
         closed_.store(true);
+      }
+      // The stream is closed for good: it does not recover, the producer makes a new sender.
+      if (state == QAR_RENDER_SENDER_STREAM_STATE_CLOSED && !closed_.load()) {
+        if (info != nullptr) { QAR_CALL(qar_render_frame_info_handle_destroy, info); }
+        closed_.store(true);
+        last_skip_detail_ = "try_begin_frame: producer stream is closed (stream state closed)";
+        return false;
       }
     }
     if (qar_result_is_error(r)) {
@@ -2164,12 +2285,11 @@ bool QarCApiRenderSenderAdapter::begin_frame(qar_ogre_streaming::QarFrameInfo & 
     // further `qar/media/video/renderRequested` arrives — the freeze signature.
     // Say how long we have been waiting so the two are told apart at a glance.
     ++consecutive_pending_;
-    last_skip_detail_ =
-      "begin-frame pending (no render request from the viewer); consecutive=" +
-      std::to_string(consecutive_pending_);
+    last_skip_detail_ = pending_detail(stream_state_.last(), consecutive_pending_);
     return true;  // not an error: no frame ready this tick (should_render=false)
   }
   consecutive_pending_ = 0;
+  stream_state_.frame_began();
 
   QarPose left_pose{};
   QarFov left_fov{};

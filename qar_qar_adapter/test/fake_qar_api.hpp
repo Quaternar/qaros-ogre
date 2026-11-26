@@ -85,6 +85,10 @@ struct RenderFrameScript
 {
   bool ready = false;   ///< A frame is ready: the call hands out frame info.
   int error_code = 0;   ///< Nonzero: the call fails with this status (803 wrapping 603 etc.).
+  /// What qar_render_sender_get_stream_state answers: a QarRenderSenderStreamState value, or -1
+  /// for a runtime older than the call (the status NOT_IMPLEMENTED, as an unloaded optional
+  /// symbol answers).
+  int stream_state = -1;
 };
 
 /// A gesture event of an app volume, as the fake delivers it.

@@ -373,6 +373,47 @@ private:
   int last_code_ = 0;
 };
 
+/// @brief The word the logs and the skip detail use for a stream state read by
+/// qar_render_sender_get_stream_state: "connecting", "waiting_for_receiver", "streaming",
+/// "paused", "reconnecting", "closed"; "" for StreamStateReader::kUnknown or a value this build
+/// does not know.
+const char * stream_state_word(int state);
+
+/// @brief Reads what the stream of a render sender is doing, for the moments when its try-begin
+/// answers "no frame yet": the runtime reports a pause, a reconnect and a missing receiver alike
+/// that way. One thread calls it. The call never blocks; it is made at most every kEvery, and the
+/// answer in between is the last one. A runtime without the call (NOT_IMPLEMENTED) is asked once.
+class StreamStateReader
+{
+public:
+  /// The state is not known: the call is missing, failed, or was never made.
+  static constexpr int kUnknown = -1;
+  /// The least time between two calls.
+  static constexpr std::chrono::milliseconds kEvery{200};
+
+  /// The state of @p stream as of @p now. A change of the state is logged once, with
+  /// @p peer_label; the log stops after 20 changes and then prints every 100th.
+  int read(
+    QarRenderSender * stream, const std::string & peer_label,
+    std::chrono::steady_clock::time_point now);
+  /// The state of the last read.
+  int last() const { return state_; }
+  /// A frame began: the state of the last read is stale. The clock of the calls keeps running, so
+  /// the next call still waits for kEvery.
+  void frame_began() { state_ = kUnknown; }
+  /// True when the runtime has no stream-state call.
+  bool unavailable() const { return unavailable_; }
+
+private:
+  int state_ = kUnknown;
+  bool have_read_ = false;
+  bool unavailable_ = false;
+  /// The state that was logged last, and how many changes were logged.
+  int logged_ = kUnknown;
+  unsigned changes_ = 0;
+  std::chrono::steady_clock::time_point read_at_{};
+};
+
 /// The state that the render thread and the worker thread of one sender share, and what only the
 /// worker uses. Defined in the .cpp.
 struct RenderFrameCore;
@@ -576,6 +617,9 @@ private:
   /// How many begin_frame() calls in a row have found the wait still pending. A
   /// handful is normal pacing; thousands is the producer wedged.
   std::uint64_t consecutive_pending_ = 0;
+  /// What the stream of the sender is doing, read when no frame is ready (the frame calls on the
+  /// render thread; the worker keeps its own in the shared state).
+  StreamStateReader stream_state_;
   /// Finds the first frame after a stall of the frames shown; see probe_after_stall().
   FrameStallDetector stall_detector_;
   /// The first eight hex digits of the peer id, the name the log lines of this stream carry.
